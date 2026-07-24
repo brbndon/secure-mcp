@@ -1,0 +1,43 @@
+{
+  "name": "secure-mcp",
+  "version": "1.0.0",
+  "description": "Local MCP server for structured, agent-first security audits of TypeScript/Next.js and Swift/SwiftUI codebases",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "secure-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "tsx --test src/knowledge/packs/registry.test.ts",
+    "smoke": "tsx scripts/smoke-test.ts",
+    "typecheck": "tsc --noEmit",
+    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm smoke"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "audit",
+    "typescript",
+    "nextjs",
+    "swift",
+    "model-context-protocol"
+  ],
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
