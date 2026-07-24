@@ -1,6 +1,9 @@
 /**
  * Structured knowledge-pack items for progressive, stack-aware guidance.
- * Prefer checkable items over essays; keep packs within ~15–25 items.
+ *
+ * Prefer checkable items over essays. Pack size is bounded by the multi-pack
+ * item budget (ABSOLUTE_MAX_ITEMS): a full recommendation can be five packs, so
+ * ~10–13 items per pack keeps a complete load inside one tool call.
  */
 
 import type { Severity } from "../../lib/types.js";
@@ -31,9 +34,13 @@ export interface PackItem {
   tags?: string[];
   /** Stacks this item is most relevant to (for filtering / routing hints). */
   stacks?: string[];
-  impact_if_unremediated?: string;
-  remediation?: string;
-  verification_suggestion?: string;
+  /**
+   * Required remediation narrative fields — they mirror the Finding contract so
+   * agents can lift pack items straight into a report without inventing copy.
+   */
+  impact_if_unremediated: string;
+  remediation: string;
+  verification_suggestion: string;
 }
 
 /** Metadata + items for one named knowledge pack. */
@@ -55,7 +62,8 @@ export interface PackItemSummary {
   title: string;
   category: string;
   severityHint: Severity;
-  remediation?: string;
+  /** First clause of the item remediation — enough to triage without full text. */
+  remediation: string;
 }
 
 export function toItemSummary(item: PackItem): PackItemSummary {
@@ -64,8 +72,6 @@ export function toItemSummary(item: PackItem): PackItemSummary {
     title: item.title,
     category: item.category,
     severityHint: item.severityHint,
-    ...(item.remediation
-      ? { remediation: item.remediation.split(";")[0]?.trim() ?? item.remediation }
-      : {}),
+    remediation: item.remediation.split(";")[0]?.trim() ?? item.remediation,
   };
 }

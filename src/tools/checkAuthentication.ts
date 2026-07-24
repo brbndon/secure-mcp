@@ -15,19 +15,33 @@ import {
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
-import type { Finding } from "../lib/types.js";
+import type { Finding, ProjectProfile, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
   createFindingIdFactory,
   ProjectRootInput,
 } from "../knowledge/findings-schema.js";
 import { NEXTJS_AUTH_FILE_HINTS } from "../knowledge/nextjs.js";
+import {
+  focusedProfileForStack,
+  packIdsWithCategories,
+  recommendPackIds,
+  type PackId,
+} from "../knowledge/packs/registry.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
 
 const AUTH_NAME_RE =
-  /auth|session|login|logout|signin|signout|password|credential|middleware|guard|permission|role|oauth|jwt|token|keychain|biometric|faceid|touchid|localauthentication/i;
+  /auth|session|login|logout|signin|signout|password|credential|middleware|guard|permission|role|oauth|jwt|token|keychain|biometric|faceid|touchid|localauthentication|securestore|secure-store|async-?storage|mmkv/i;
+
+/** Exported for tests: path looks like auth / session / mobile secure-storage code. */
+export function isAuthCandidatePath(relativePath: string): boolean {
+  if (AUTH_NAME_RE.test(relativePath)) return true;
+  return NEXTJS_AUTH_FILE_HINTS.some((h) =>
+    relativePath.toLowerCase().includes(h.toLowerCase()),
+  );
+}
 
 interface AuthPattern {
   id: string;
@@ -42,7 +56,59 @@ interface AuthPattern {
   stack?: Finding["stack"];
 }
 
-const AUTH_PATTERNS: AuthPattern[] = [
+/**
+ * Which pattern stacks apply when the caller forces a stack focus.
+ * JS stacks share generic TypeScript patterns; Swift stays separate.
+ */
+const PATTERN_STACKS_BY_FOCUS: Record<StackFocus, StackFocus[]> = {
+  common: ["common"],
+  typescript: ["common", "typescript"],
+  nextjs: ["common", "typescript", "nextjs"],
+  expo: ["common", "typescript", "expo"],
+  swift: ["common", "swift"],
+};
+
+/** Exported for tests: does a pattern apply under the requested stack focus? */
+export function authPatternAppliesToStack(
+  patternStack: Finding["stack"] | undefined,
+  focus?: StackFocus | "auto",
+): boolean {
+  if (!focus || focus === "auto") return true;
+  return PATTERN_STACKS_BY_FOCUS[focus].includes(patternStack ?? "common");
+}
+
+/**
+ * Exported for tests: profile informational findings follow the same forced-stack
+ * exclusivity as patterns and packs.
+ */
+export function shouldEmitProfileAuthFinding(
+  profileStack: Finding["stack"],
+  profileSignal: boolean,
+  focus?: StackFocus | "auto",
+): boolean {
+  return profileSignal && authPatternAppliesToStack(profileStack, focus);
+}
+
+/**
+ * Pack ids behind this tool's heuristics, derived from the routed packs for the
+ * detected (or forced) stacks and narrowed to authn/authz content. Keeps an
+ * Expo-only project from claiming web cookie/CSRF guidance it never used.
+ */
+export function authPackIdsForProfile(
+  profile: Pick<ProjectProfile, "hasExpo" | "hasMacOS" | "hasNextConfig" | "hasSwiftFiles" | "likelyStacks">,
+  stack?: StackFocus | "auto",
+): PackId[] {
+  const forced = stack && stack !== "auto" ? stack : undefined;
+  const stacks = forced ? [forced] : profile.likelyStacks;
+  const routed = recommendPackIds(
+    stacks,
+    forced ? focusedProfileForStack(forced, profile) : profile,
+  );
+  return packIdsWithCategories(routed, ["authentication", "authorization"]);
+}
+
+/** Exported for tests; heuristics only — every hit needs manual confirmation. */
+export const AUTH_PATTERNS: AuthPattern[] = [
   {
     id: "AUTH-HARDCODED-JWT-SECRET",
     title: "Hardcoded JWT / signing secret",
@@ -110,6 +176,57 @@ const AUTH_PATTERNS: AuthPattern[] = [
     stack: "swift",
   },
   {
+    id: "AUTH-RN-INSECURE-TOKEN-STORE",
+    title: "Token-like value in AsyncStorage / MMKV",
+    regex:
+      /(AsyncStorage|MMKV|createMMKV|useMMKVString)[\s\S]{0,120}(token|refreshToken|refresh_token|password|session|credential|jwt)/gi,
+    severity: "high",
+    confidence: "medium",
+    description:
+      "Session material appears to be written to AsyncStorage or MMKV, which are not encrypted stores by default (see expo-rn pack item EXPO-SECURE-STORE).",
+    remediation:
+      "Move tokens to expo-secure-store (or a Keychain/Keystore-backed wrapper); keep AsyncStorage/MMKV for non-sensitive preferences.",
+    impact_if_unremediated:
+      "Tokens in unencrypted device storage are easier to recover from a compromised or backed-up device.",
+    cwe: "CWE-922",
+    stack: "expo",
+  },
+  {
+    id: "AUTH-EXPO-PUBLIC-CREDENTIAL",
+    title: "Credential-like EXPO_PUBLIC_ variable",
+    // Match credential suffixes after EXPO_PUBLIC_. Bare KEY is omitted so intentional
+    // public client keys (API_KEY, MAPS_API_KEY, PUBLISHABLE_KEY) do not fire; also
+    // exclude publishable/anon-shaped names that end in TOKEN/SECRET/etc.
+    regex:
+      /EXPO_PUBLIC_(?!.*(?:PUBLISHABLE|ANON))[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_KEY)\b/g,
+    severity: "critical",
+    confidence: "medium",
+    description:
+      "EXPO_PUBLIC_* values are embedded in the shipped JS bundle, so credential-shaped names there are effectively public (see expo-rn pack item EXPO-PUBLIC-ENV).",
+    remediation:
+      "Rename to a server-only variable, proxy the call through a backend, and rotate any key that shipped with a public prefix.",
+    impact_if_unremediated:
+      "Any user of the app can read the value from the bundle, so the credential must be treated as disclosed.",
+    cwe: "CWE-200",
+    stack: "expo",
+  },
+  {
+    id: "AUTH-RN-SECURESTORE-WEAK-ACCESS",
+    title: "SecureStore write without access control",
+    // Only flag writes whose args omit keychainAccessible / requireAuthentication.
+    regex:
+      /SecureStore\.setItemAsync\s*\((?:(?!keychainAccessible|requireAuthentication)[^)])*\)/g,
+    severity: "info",
+    confidence: "low",
+    description:
+      "SecureStore write detected. Confirm keychainAccessible / requireAuthentication options match the sensitivity of the stored credential.",
+    remediation:
+      "Set keychainAccessible (e.g. WHEN_UNLOCKED_THIS_DEVICE_ONLY) and consider requireAuthentication for high-value secrets.",
+    impact_if_unremediated:
+      "Default accessibility may keep credentials reachable in states the product does not intend.",
+    stack: "expo",
+  },
+  {
     id: "AUTH-HTTP-BASIC-OR-BEARER-HARDCODE",
     title: "Hardcoded Authorization header",
     regex: /Authorization['"]?\s*:\s*['"]?(Bearer|Basic)\s+[A-Za-z0-9._\-+/=]{8,}/gi,
@@ -144,6 +261,7 @@ WHAT THIS TOOL CHECKS (heuristics)
 - Disabled TLS certificate verification
 - Next.js middleware-centric auth patterns needing defense in depth
 - Swift UserDefaults usage near token/password terms
+- Expo / React Native token storage (AsyncStorage / MMKV vs SecureStore) and credential-shaped EXPO_PUBLIC_ env
 - Presence of auth helpers that still need object-level authorization review
 
 Args:
@@ -194,12 +312,7 @@ export function registerCheckAuthentication(server: McpServer): void {
           ]),
         });
 
-        const candidates = files.filter((f) => {
-          if (AUTH_NAME_RE.test(f.relativePath)) return true;
-          return NEXTJS_AUTH_FILE_HINTS.some((h) =>
-            f.relativePath.toLowerCase().includes(h.toLowerCase()),
-          );
-        });
+        const candidates = files.filter((f) => isAuthCandidatePath(f.relativePath));
 
         const always = files.filter((f) =>
           /middleware\.(ts|js)$|auth\.(ts|js)$|Package\.swift$|Info\.plist$/i.test(
@@ -221,14 +334,7 @@ export function registerCheckAuthentication(server: McpServer): void {
           filesReviewed.push(file.relativePath);
 
           for (const pattern of AUTH_PATTERNS) {
-            if (params.stack === "swift" && pattern.stack === "typescript") continue;
-            if (params.stack === "swift" && pattern.stack === "nextjs") continue;
-            if (
-              (params.stack === "nextjs" || params.stack === "typescript") &&
-              pattern.stack === "swift"
-            ) {
-              continue;
-            }
+            if (!authPatternAppliesToStack(pattern.stack, params.stack)) continue;
 
             pattern.regex.lastIndex = 0;
             let match: RegExpExecArray | null;
@@ -261,7 +367,9 @@ export function registerCheckAuthentication(server: McpServer): void {
           }
         }
 
-        if (profile.hasNextConfig || profile.likelyStacks.includes("nextjs")) {
+        const nextProfileSignal =
+          profile.hasNextConfig || profile.likelyStacks.includes("nextjs");
+        if (shouldEmitProfileAuthFinding("nextjs", nextProfileSignal, params.stack)) {
           const hasMiddleware = files.some((f) => /middleware\.(ts|js)$/.test(f.relativePath));
           if (hasMiddleware) {
             findings.push(
@@ -288,7 +396,32 @@ export function registerCheckAuthentication(server: McpServer): void {
           }
         }
 
-        if (profile.hasSwiftFiles) {
+        if (shouldEmitProfileAuthFinding("expo", profile.hasExpo, params.stack)) {
+          findings.push(
+            buildFinding({
+              id: nextId(),
+              title: "Review mobile token storage and auth redirects",
+              description:
+                "Expo / React Native signals detected. Confirm session tokens live in SecureStore (not AsyncStorage/MMKV), that AuthSession redirect URIs are exact, and that no credential ships via EXPO_PUBLIC_ env.",
+              severity: "info",
+              confidence: "low",
+              category: "authentication",
+              stack: "expo",
+              evidence: "Expo / React Native signals present in project profile",
+              impact_if_unremediated:
+                "Client-side token storage or loose auth redirects can expose sessions on the device or in logs.",
+              remediation:
+                "Audit storage helpers for token keys, pin AuthSession redirect URIs, and keep credentials out of EXPO_PUBLIC_ variables.",
+              residual_risk:
+                "OTA updates and native modules may reintroduce insecure storage paths after remediation.",
+              verification_suggestion:
+                "Grep AsyncStorage/MMKV for token keys and confirm SecureStore usage at login/refresh paths.",
+              tags: ["expo", "react-native", "securestore", "remediation"],
+            }),
+          );
+        }
+
+        if (shouldEmitProfileAuthFinding("swift", profile.hasSwiftFiles, params.stack)) {
           findings.push(
             buildFinding({
               id: nextId(),
@@ -311,14 +444,7 @@ export function registerCheckAuthentication(server: McpServer): void {
           );
         }
 
-        const applied_pack_ids = [
-          "core",
-          "auth-web",
-          ...(profile.likelyStacks.includes("nextjs") ? (["web-next"] as const) : []),
-          ...(profile.likelyStacks.includes("expo") ? (["expo-rn"] as const) : []),
-          ...(profile.hasSwiftFiles ? (["swift-ios"] as const) : []),
-          ...(profile.hasMacOS ? (["apple-desktop"] as const) : []),
-        ];
+        const applied_pack_ids = authPackIdsForProfile(profile, params.stack);
 
         const data = {
           ok: true as const,
@@ -331,7 +457,7 @@ export function registerCheckAuthentication(server: McpServer): void {
             "Defensive review only: identify → classify → remediate.",
             "Heuristic candidates need manual confirmation of data flow and authorization logic.",
             "Prioritize critical/high severity with high confidence for remediation first.",
-            "Pack ids are for traceability; full checklists load via secure_mcp_get_knowledge_pack.",
+            "applied_pack_ids follow the routed packs for the detected stacks (authn/authz content only); full checklists load via secure_mcp_get_knowledge_pack.",
           ],
         };
 

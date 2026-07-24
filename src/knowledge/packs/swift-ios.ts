@@ -11,7 +11,7 @@ export const swiftIosPack: KnowledgePack = {
     "iOS/SwiftUI controls: Keychain, biometrics, ATS, deep links, WKWebView bridges, pasteboard.",
   stackTags: ["swift", "ios"],
   categories: ["secrets", "authentication", "injection-risk", "configuration", "privacy", "cryptography"],
-  estimatedTokens: 1200,
+  estimatedTokens: 1400,
   items: [
     {
       id: "SWIFT-KEYCHAIN",
@@ -160,8 +160,44 @@ export const swiftIosPack: KnowledgePack = {
       cwe: "CWE-319",
       tags: ["tls", "http"],
       stacks: ["swift"],
+      impact_if_unremediated:
+        "Requests to cleartext endpoints may expose credentials or PII on the network path.",
       remediation: "Replace http:// API endpoints with https://; document any intentional exceptions.",
       verification_suggestion: "Grep http:// in networking code and configs.",
+    },
+    {
+      id: "SWIFT-FILE-PROTECTION",
+      title: "Data protection for sensitive files",
+      description:
+        "Sensitive caches, databases, and exports should use appropriate data-protection classes and be excluded from backups when they hold session material.",
+      category: "secrets",
+      severityHint: "medium",
+      cwe: "CWE-311",
+      tags: ["file-protection", "backup"],
+      stacks: ["swift", "ios"],
+      impact_if_unremediated:
+        "Session or personal data may be readable from device backups or while the device is locked.",
+      remediation:
+        "Set NSFileProtection attributes for sensitive files; mark credential caches as excluded from backup.",
+      verification_suggestion:
+        "Review file writes in Documents/Caches for protection attributes and backup flags.",
+    },
+    {
+      id: "SWIFT-EXTENSION-SHARING",
+      title: "App group and extension data sharing",
+      description:
+        "Widgets, share extensions, and app groups share containers and Keychain items; scope what extensions can read.",
+      category: "secrets",
+      severityHint: "medium",
+      cwe: "CWE-922",
+      tags: ["app-groups", "extensions"],
+      stacks: ["swift", "ios"],
+      impact_if_unremediated:
+        "A less-hardened extension becomes a path to credentials the main app protects.",
+      remediation:
+        "Share only the minimum in app-group containers; keep high-value tokens out of extension-readable Keychain groups.",
+      verification_suggestion:
+        "List app-group and keychain-access-group entitlements per target and confirm each is needed.",
     },
   ],
 };

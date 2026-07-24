@@ -26,19 +26,22 @@ Application security engineer using secure-mcp for structured discovery, then re
 ## Progressive knowledge rule
 
 **Do not load knowledge packs until after Phase 1 stack detection.**  
-Use architecture `pack_batches` (preferred) or `recommended_packs`. Each `get_knowledge_pack` call accepts **at most 6** pack ids — load `pack_batches[0]` first with `detail=summary`; load later batches only if needed. Never request all packs. Category tools return findings (heuristics server-side), not textbooks.
+Use architecture `pack_batches` (preferred) or `recommended_packs`. Each `get_knowledge_pack` call accepts **at most 6** pack ids — load `pack_batches[0]` first with `detail=summary`; load later batches only if needed. Never request all packs. Multi-pack responses **fair-sample** items (round-robin) so stack packs are not starved under `max_items` (default 24). Category tools return findings (heuristics server-side), not textbooks.
 
 ## Pack routing (typical)
 
+Order matches runtime priority (`core` → `secrets` → stack packs):
+
 | Detected stack | Packs |
 |----------------|-------|
-| Next.js | `core`, `web-next`, `auth-web`, `web-api`, `secrets` |
-| Expo / React Native | `core`, `expo-rn`, `secrets` |
-| iOS Swift | `core`, `swift-ios`, `secrets` |
-| macOS Swift | `core`, `swift-ios`, `apple-desktop`, `secrets` |
+| Next.js | `core`, `secrets`, `web-next`, `auth-web`, `web-api` |
+| Expo / React Native | `core`, `secrets`, `expo-rn` |
+| iOS Swift | `core`, `secrets`, `swift-ios` |
+| macOS Swift | `core`, `secrets`, `swift-ios`, `apple-desktop` |
 | Unknown / minimal | `core`, `threat-model` |
 
-Mixed monorepos: union of detected stacks only.
+Mixed monorepos (`stack=auto`): union of detected stacks only.  
+Forced `stack` (e.g. `swift`): exclusive focus — packs for that stack only (does not re-OR other profile signals).
 
 ## Mandatory multi-phase workflow
 

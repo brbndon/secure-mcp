@@ -56,7 +56,7 @@ pnpm smoke
 | `expo-rn` | Expo / React Native |
 | `secrets` | Rotation, env, client-bundle |
 
-Aim ~15–25 checklist items per pack. Do not auto-load markdown refs from tools. See `src/knowledge/ATTRIBUTION.md` for inspiration notes (not for tool payloads).
+Aim ~10–13 checklist items per pack (a full five-pack recommendation must fit `ABSOLUTE_MAX_ITEMS`), and give every item `impact_if_unremediated`, `remediation`, and `verification_suggestion` — they are required `PackItem` fields. Keep `pack.categories` in sync with the categories its items use, and only claim a `stackTags` stack the router actually routes to that pack. Do not auto-load markdown refs from tools. See `src/knowledge/ATTRIBUTION.md` for inspiration notes (not for tool payloads).
 
 ## Rules of the road
 
@@ -68,7 +68,7 @@ Aim ~15–25 checklist items per pack. Do not auto-load markdown refs from tools
 6. **Build must pass:** `pnpm build` after meaningful edits.
 7. **Update docs** when behavior or tools change (README, docs/*, skills/*).
 8. **Keep defensive framing** in every new description string.
-9. **Context discipline:** architecture returns `recommended_packs` + `pack_batches` (≤6 ids/call); full checklists only via `get_knowledge_pack` (no `available_packs` unless `include_index`).
+9. **Context discipline:** architecture returns `recommended_packs` + `pack_batches` (≤6 ids/call); full checklists only via `get_knowledge_pack` (no `available_packs` unless `include_index`). Multi-pack item selection is **round-robin** (`filterPackItems`); defaults `DEFAULT_MAX_ITEMS=24`, `ABSOLUTE_MAX_ITEMS=60`.
 
 ## Adding a tool
 
@@ -86,13 +86,15 @@ Aim ~15–25 checklist items per pack. Do not auto-load markdown refs from tools
 1. Add or edit `src/knowledge/packs/<id>.ts` with `KnowledgePack` shape.
 2. Register in `packs/registry.ts` (`PACK_BY_ID` + `PACK_IDS`).
 3. Update `recommendPackPlan` / `recommendPackIds` if stack routing changes; keep `pack_batches` ≤ `MAX_PACKS_PER_REQUEST` (6).
-4. Keep item count and copy lean; prefer checkable remediation over essays.
+4. Keep item count and copy lean; prefer checkable remediation over essays. Multi-pack loads fair-sample via `filterPackItems` — do not reintroduce sequential drain that starves stack packs.
 5. Re-export from `common.ts` / `nextjs.ts` / `swift.ts` if scanners still need checklist aliases.
+6. When changing sampling or caps, extend `registry.test.ts` multi-pack coverage asserts and smoke.
 
 ## Testing
 
-- `pnpm build` — TypeScript compile
-- `pnpm smoke` — client connect + tool calls against `fixtures/tiny-app` (+ pack / expo checks)
+- `pnpm verify` — typecheck + unit tests + build + smoke
+- `pnpm test` — pack registry, stack profiling, and auth-heuristic unit tests
+- `pnpm smoke` — client connect + tool calls against `fixtures/` (Next, Expo, non-Expo `app.json`)
 - Manual: MCP Inspector with license env set
 
 ## Style

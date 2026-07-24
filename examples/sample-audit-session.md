@@ -24,15 +24,16 @@ Identify potential weaknesses → classify → recommend remediation. **No explo
 
 **Tools:** `secure_mcp_analyze_architecture`, `secure_mcp_get_knowledge_pack`, optional `secure_mcp_build_remediation_threat_model`
 
-Architecture returns `recommended_packs` and `pack_batches` (e.g. one batch: `core`, `secrets`, `web-next`, `auth-web`, `web-api`) — not a large checklist dump. Load batch 0 first (max 6 pack ids per call).
+Architecture returns `recommended_packs` and `pack_batches` (e.g. one batch in priority order: `core`, `secrets`, `web-next`, `auth-web`, `web-api`) — not a large checklist dump. Load batch 0 first (max 6 pack ids per call). Default summary fair-samples items across packs so Next/auth/api guidance is not starved by core/secrets.
 
 ```json
 {
   "pack_ids": ["core", "secrets", "web-next", "auth-web", "web-api"],
-  "detail": "summary",
-  "max_items": 20
+  "detail": "summary"
 }
 ```
+
+Response includes `items_per_pack` (coverage per id). Raise `max_items` (up to 60) or load one pack with `detail=full` when drafting remediations.
 
 Threat model (optional):
 

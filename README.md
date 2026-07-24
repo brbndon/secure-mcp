@@ -136,7 +136,7 @@ with `SECURE_MCP_LICENSE_KEY` in the process environment.
 
 1. `secure_mcp_list_project_structure` — inventory (no knowledge packs yet)  
 2. `secure_mcp_analyze_architecture` — stacks, trust boundaries, `recommended_packs`, `pack_batches`  
-3. `secure_mcp_get_knowledge_pack` — load `pack_batches[0]` first (`detail=summary`; max 6 pack ids per call)  
+3. `secure_mcp_get_knowledge_pack` — load `pack_batches[0]` first (`detail=summary`; max 6 pack ids per call; items fair-sampled across packs, default max 24)  
 4. Category tools: authentication, injection-risks, secrets (+ optional threat model)  
 5. Confirm data flows in code; no exploit generation  
 6. `secure_mcp_produce_findings` — remediation-focused report  
@@ -163,6 +163,7 @@ examples/           # sample remediation-focused session
 scripts/smoke-test.ts
 fixtures/tiny-app/  # intentional issues for smoke tests
 fixtures/tiny-expo/ # minimal Expo signals for pack routing
+fixtures/rn-lib-no-expo/ # react-native dep + non-Expo app.json (detection guard)
 ```
 
 ## Configuration (optional env)

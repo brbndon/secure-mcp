@@ -38,8 +38,10 @@ export type { KnowledgePack, PackId, PackItem };
  * mixed monorepos may need pack_batches (sequential calls).
  */
 export const MAX_PACKS_PER_REQUEST = 6;
-export const DEFAULT_MAX_ITEMS = 20;
-export const ABSOLUTE_MAX_ITEMS = 40;
+/** Default item budget for get_knowledge_pack (~4 items × 6 packs under fair sampling). */
+export const DEFAULT_MAX_ITEMS = 24;
+/** Hard cap — large enough for a full Next.js 5-pack load (~49 items). */
+export const ABSOLUTE_MAX_ITEMS = 60;
 
 /** Priority order when building recommendations (lower index = load first). */
 const PACK_PRIORITY: readonly PackId[] = [
@@ -187,28 +189,135 @@ export function recommendPackPlan(
   };
 }
 
+/**
+ * Select checklist items from one or more packs with a hard maxItems budget.
+ *
+ * Uses round-robin across packs (request order) so multi-pack loads do not
+ * starve later stack packs when core/secrets are listed first. Within each
+ * pack, original item order is preserved. Global de-dupe is by item.id.
+ */
 export function filterPackItems(
   packs: KnowledgePack[],
   options: { categories?: string[]; maxItems: number },
 ): PackItem[] {
+  if (options.maxItems <= 0 || packs.length === 0) return [];
+
   const categorySet =
     options.categories && options.categories.length > 0
       ? new Set(options.categories.map((c) => c.toLowerCase()))
       : null;
 
+  const queues = packs.map((pack) =>
+    pack.items.filter(
+      (item) => !categorySet || categorySet.has(item.category.toLowerCase()),
+    ),
+  );
+  const heads = queues.map(() => 0);
   const out: PackItem[] = [];
   const seen = new Set<string>();
 
+  let madeProgress = true;
+  while (out.length < options.maxItems && madeProgress) {
+    madeProgress = false;
+    for (let i = 0; i < queues.length; i++) {
+      if (out.length >= options.maxItems) break;
+      const queue = queues[i];
+      while (heads[i] < queue.length) {
+        const item = queue[heads[i]];
+        heads[i] += 1;
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        out.push(item);
+        madeProgress = true;
+        break; // one new item per pack per round
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Narrow pack ids to those that actually carry items in the given categories.
+ * Category tools use this so applied_pack_ids reflects the packs behind their
+ * heuristics (e.g. an Expo-only project should not claim auth-web).
+ */
+export function packIdsWithCategories(
+  ids: readonly PackId[],
+  categories: readonly string[],
+): PackId[] {
+  const wanted = new Set(categories.map((c) => c.toLowerCase()));
+  return ids.filter((id) =>
+    PACK_BY_ID[id].items.some((item) => wanted.has(item.category.toLowerCase())),
+  );
+}
+
+/**
+ * Unique items a request could return before the maxItems budget is applied.
+ * Lets callers distinguish "cut by max_items" from "narrowed by categories".
+ */
+export function countEligiblePackItems(
+  packs: KnowledgePack[],
+  categories?: string[],
+): number {
+  const categorySet =
+    categories && categories.length > 0
+      ? new Set(categories.map((c) => c.toLowerCase()))
+      : null;
+  const ids = new Set<string>();
   for (const pack of packs) {
     for (const item of pack.items) {
       if (categorySet && !categorySet.has(item.category.toLowerCase())) continue;
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      out.push(item);
-      if (out.length >= options.maxItems) return out;
+      ids.add(item.id);
     }
   }
-  return out;
+  return ids.size;
+}
+
+/**
+ * Count how many returned items belong to each pack (by item id membership).
+ * Used so agents can see fair multi-pack coverage (or truncation).
+ */
+export function countItemsPerPack(
+  items: ReadonlyArray<{ id: string }>,
+  packIds: readonly PackId[],
+): Record<PackId, number> {
+  const counts = {} as Record<PackId, number>;
+  for (const id of packIds) counts[id] = 0;
+
+  const idToPacks = new Map<string, PackId[]>();
+  for (const packId of packIds) {
+    for (const item of PACK_BY_ID[packId].items) {
+      const list = idToPacks.get(item.id) ?? [];
+      list.push(packId);
+      idToPacks.set(item.id, list);
+    }
+  }
+
+  for (const item of items) {
+    const owners = idToPacks.get(item.id);
+    if (!owners) continue;
+    for (const packId of owners) {
+      counts[packId] = (counts[packId] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+/**
+ * Profile flags used only for the given stack focus (exclusive).
+ * When architecture forces a stack, do not re-OR unrelated profile signals.
+ */
+export function focusedProfileForStack(
+  stack: StackFocus,
+  profile?: Pick<ProjectProfile, "hasExpo" | "hasMacOS" | "hasNextConfig" | "hasSwiftFiles">,
+): Pick<ProjectProfile, "hasExpo" | "hasMacOS" | "hasNextConfig" | "hasSwiftFiles"> {
+  return {
+    hasExpo: stack === "expo",
+    hasMacOS: stack === "swift" ? profile?.hasMacOS === true : false,
+    hasNextConfig: stack === "nextjs",
+    hasSwiftFiles: stack === "swift",
+  };
 }
 
 /** Merge checklist-shaped items from packs (server-side use by category tools). */

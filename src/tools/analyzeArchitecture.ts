@@ -17,6 +17,7 @@ import {
 import { ProjectRootInput } from "../knowledge/findings-schema.js";
 import {
   checklistFromPackIds,
+  focusedProfileForStack,
   recommendPackPlan,
 } from "../knowledge/packs/registry.js";
 
@@ -139,14 +140,14 @@ PURPOSE (defensive only)
 MANDATORY AGENT WORKFLOW
 1. Prefer secure_mcp_list_project_structure first.
 2. Call this tool and retain stacks, surface, trust_boundaries, recommended_packs, and pack_batches.
-3. Call secure_mcp_get_knowledge_pack with pack_batches[0] (detail=summary first). If pack_batches has more entries, load them in later calls only as needed.
+3. Call secure_mcp_get_knowledge_pack with pack_batches[0] (detail=summary first). Multi-pack responses fair-sample items so stack packs are included. If pack_batches has more entries, load them in later calls only as needed.
 4. Use next_tools: authentication, injection-risks, secrets, remediation threat model.
 5. Trace data flows for high-value components before writing findings.
 6. Continue until major classes relevant to the stack are examined with evidence; then produce_findings.
 
 Args:
   - project_root (string): Repository root
-  - stack (enum): auto or a specific focus
+  - stack (enum): auto = union of detected stacks; a specific focus (nextjs|expo|swift|…) exclusively scopes recommended packs (does not re-OR other profile signals)
   - max_files / response_format: standard options
 
 Returns:
@@ -182,12 +183,13 @@ Returns:
           }
         }
 
-        const stacks =
-          params.stack && params.stack !== "auto"
-            ? [params.stack]
-            : profile.likelyStacks;
-
-        const packPlan = recommendPackPlan(stacks, profile);
+        const forcedStack =
+          params.stack && params.stack !== "auto" ? params.stack : undefined;
+        const stacks = forcedStack ? [forcedStack] : profile.likelyStacks;
+        // auto: union of profile detection. Forced stack: exclusive focus (no unrelated flags).
+        const packPlan = forcedStack
+          ? recommendPackPlan(stacks, focusedProfileForStack(forcedStack, profile))
+          : recommendPackPlan(stacks, profile);
         const { recommended_packs, pack_batches } = packPlan;
 
         // Tiny secondary seed only — full checklists come from get_knowledge_pack

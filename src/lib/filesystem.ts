@@ -299,6 +299,57 @@ export async function listTopLevel(projectRoot: string): Promise<string[]> {
     .sort((a, b) => a.localeCompare(b));
 }
 
+/** Signals used to decide whether a project really is an Expo / React Native app. */
+export interface ExpoSignalInput {
+  /** Merged dependency + devDependency names from package.json. */
+  dependencyNames: string[];
+  /** Raw app.json content when present. */
+  appJsonContent?: string | null;
+  /** Raw app.config.* content when present. */
+  appConfigContent?: string | null;
+  /** eas.json present at the project root. */
+  hasEasConfig: boolean;
+  /** metro.config.* present at the project root. */
+  hasMetroConfig: boolean;
+  /** react-native.config.* present at the project root. */
+  hasReactNativeConfig: boolean;
+  /** Both android/ and ios/ native project directories present. */
+  hasNativeProjectDirs: boolean;
+}
+
+/**
+ * Decide whether Expo / React Native guidance (expo-rn pack) applies.
+ *
+ * Deliberately narrow: a bare `app.json` (many tools use that name) or a stray
+ * `react-native` dependency in a web/library package must not route a project to
+ * the expo-rn pack. React Native without Expo still qualifies, but only with
+ * corroborating app evidence (metro/RN config or native project dirs).
+ */
+export function looksLikeExpoOrReactNativeApp(input: ExpoSignalInput): boolean {
+  const deps = new Set(input.dependencyNames);
+  const hasExpoDependency =
+    deps.has("expo") ||
+    input.dependencyNames.some((d) => d.startsWith("expo-") || d.startsWith("@expo/"));
+  if (hasExpoDependency || input.hasEasConfig) return true;
+
+  // app.json only counts when it carries an Expo config block.
+  if (input.appJsonContent && /"expo"\s*:\s*\{/.test(input.appJsonContent)) return true;
+  // app.config.* only counts with a real Expo shape (type, import, or expo object).
+  if (
+    input.appConfigContent &&
+    /\bExpoConfig\b|(?:from|import)\s+["']expo(?:\/[^"']*)?["']|["']expo["']\s*:|\bexpo\s*:\s*\{/.test(
+      input.appConfigContent,
+    )
+  ) {
+    return true;
+  }
+
+  const hasReactNativeDependency = deps.has("react-native");
+  const hasAppEvidence =
+    input.hasMetroConfig || input.hasReactNativeConfig || input.hasNativeProjectDirs;
+  return hasReactNativeDependency && hasAppEvidence;
+}
+
 /** Lightweight project fingerprint used by tools. */
 export async function profileProject(projectRoot: string): Promise<ProjectProfile> {
   const root = await normalizeProjectRoot(projectRoot);
@@ -325,12 +376,6 @@ export async function profileProject(projectRoot: string): Promise<ProjectProfil
     topLevelEntries.some((e) => e.endsWith(".xcodeproj/")) ||
     topLevelEntries.some((e) => e.endsWith(".xcworkspace/"));
 
-  const hasExpoConfig =
-    (await exists("app.json")) ||
-    (await exists("app.config.js")) ||
-    (await exists("app.config.ts")) ||
-    (await exists("app.config.mjs"));
-
   // Sample walk for language presence (cheap caps)
   const { files } = await walkProject(root, {
     maxFiles: 80,
@@ -341,7 +386,7 @@ export async function profileProject(projectRoot: string): Promise<ProjectProfil
   const hasTypeScriptFiles =
     files.some((f) => f.ext === ".ts" || f.ext === ".tsx") || hasTsConfig || hasPackageJson;
 
-  let hasExpo = false;
+  let dependencyNames: string[] = [];
   if (hasPackageJson) {
     const pkgFile = await readProjectFileIfExists(root, "package.json", 64 * 1024);
     if (pkgFile) {
@@ -350,28 +395,40 @@ export async function profileProject(projectRoot: string): Promise<ProjectProfil
           dependencies?: Record<string, string>;
           devDependencies?: Record<string, string>;
         };
-        const deps = {
-          ...(pkg.dependencies ?? {}),
-          ...(pkg.devDependencies ?? {}),
-        };
-        hasExpo =
-          "expo" in deps ||
-          "react-native" in deps ||
-          Object.keys(deps).some((k) => k.startsWith("expo-"));
+        dependencyNames = [
+          ...Object.keys(pkg.dependencies ?? {}),
+          ...Object.keys(pkg.devDependencies ?? {}),
+        ];
       } catch {
         // ignore invalid package.json
       }
     }
   }
-  if (!hasExpo && hasExpoConfig) {
-    // app.json / app.config without package.json signals still suggest Expo/RN-ish apps
-    const appJson = await readProjectFileIfExists(root, "app.json", 32 * 1024);
-    if (appJson && /"expo"\s*:/.test(appJson.content)) {
-      hasExpo = true;
-    } else if (hasExpoConfig) {
-      hasExpo = true;
+
+  const appJson = await readProjectFileIfExists(root, "app.json", 32 * 1024);
+  let appConfigContent: string | null = null;
+  for (const name of ["app.config.js", "app.config.ts", "app.config.mjs", "app.config.cjs"]) {
+    const file = await readProjectFileIfExists(root, name, 32 * 1024);
+    if (file) {
+      appConfigContent = file.content;
+      break;
     }
   }
+
+  const hasExpo = looksLikeExpoOrReactNativeApp({
+    dependencyNames,
+    appJsonContent: appJson?.content ?? null,
+    appConfigContent,
+    hasEasConfig: await exists("eas.json"),
+    hasMetroConfig:
+      (await exists("metro.config.js")) ||
+      (await exists("metro.config.cjs")) ||
+      (await exists("metro.config.ts")),
+    hasReactNativeConfig:
+      (await exists("react-native.config.js")) || (await exists("react-native.config.ts")),
+    hasNativeProjectDirs:
+      topLevelEntries.includes("android/") && topLevelEntries.includes("ios/"),
+  });
 
   // Conservative macOS detection: AppKit / Mac Catalyst / macosx deployment signals
   let hasMacOS = false;

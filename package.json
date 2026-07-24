@@ -12,7 +12,7 @@
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/knowledge/packs/registry.test.ts",
+    "test": "tsx --test src/knowledge/packs/registry.test.ts src/lib/filesystem.test.ts src/tools/checkAuthentication.test.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "typecheck": "tsc --noEmit",
     "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm smoke"

@@ -82,7 +82,7 @@ Category tools emit findings; `secure_mcp_produce_findings` normalises them for 
 
 ## Progressive knowledge packs
 
-Agents should **not** load every stack checklist into context. Architecture returns `recommended_packs` and `pack_batches` (chunks of ≤6 ids for `secure_mcp_get_knowledge_pack`). Load `pack_batches[0]` first with `detail=summary`; load later batches only if needed. Pack responses omit the global catalog unless `include_index=true`.
+Agents should **not** load every stack checklist into context. Architecture returns `recommended_packs` and `pack_batches` (chunks of ≤6 ids for `secure_mcp_get_knowledge_pack`). Load `pack_batches[0]` first with `detail=summary`; load later batches only if needed. Multi-pack responses fair-sample checklist items (round-robin; default max 24, hard max 60) so core/secrets priority order does not zero out stack packs. Pack responses omit the global catalog unless `include_index=true`.
 
 | Pack id | Content |
 |---------|---------|
@@ -96,7 +96,11 @@ Agents should **not** load every stack checklist into context. Architecture retu
 | `expo-rn` | SecureStore, Expo config secrets, deep links, OTA |
 | `secrets` | Rotation, env hygiene, client-bundle exposure |
 
-Registry + routing: `src/knowledge/packs/registry.ts`.  
+Every pack item carries the full remediation narrative (`impact_if_unremediated`, `remediation`, `verification_suggestion`) so agents can lift items into findings without inventing copy. Packs hold ~10–13 items each: substantial, but small enough that a complete five-pack recommendation still fits the 60-item budget in one call. `truncated_by_max_items` compares the returned items against the **category-filtered** stream, so narrow `categories` filters are not reported as truncation.
+
+Stack detection is deliberately conservative (`looksLikeExpoOrReactNativeApp` in `src/lib/filesystem.ts`): Expo/React Native routing needs an Expo dependency, an `expo` block in `app.json`/`app.config.*`, `eas.json`, or a `react-native` dependency plus app evidence (metro/RN config or `android/` + `ios/`). A bare `app.json` or a stray `react-native` dependency in a web/library package does not route to `expo-rn`. Profiling is root-scoped: Expo apps under `apps/` or `packages/` in a monorepo are invisible until `project_root` points at that package (or you force `stack: "expo"`).
+
+Registry + routing + fair sampling: `src/knowledge/packs/registry.ts` (`recommendPackPlan`, `filterPackItems`).  
 Scan heuristics remain in `common.ts` / `nextjs.ts` / `swift.ts` (used server-side by category tools without dumping full packs).
 
 Heuristics are intentionally imperfect. Confidence fields tell agents to verify before confirming.

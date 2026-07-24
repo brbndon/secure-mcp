@@ -17,8 +17,8 @@ secure_mcp_<action>_<resource>
 | Tool | Role |
 |------|------|
 | `secure_mcp_list_project_structure` | Inventory for review scoping |
-| `secure_mcp_analyze_architecture` | Architecture / control placement + `recommended_packs` |
-| `secure_mcp_get_knowledge_pack` | On-demand capped knowledge packs |
+| `secure_mcp_analyze_architecture` | Architecture / control placement + `recommended_packs` / `pack_batches` |
+| `secure_mcp_get_knowledge_pack` | On-demand capped knowledge packs (fair multi-pack sampling) |
 | `secure_mcp_check_authentication` | Authn/authz weaknesses → remediation |
 | `secure_mcp_analyze_injection_risks` | Injection-class risks → remediation |
 | `secure_mcp_review_secrets` | Secret hygiene → rotate & remediate |
@@ -59,7 +59,11 @@ Most tools accept:
 
 `secure_mcp_produce_findings` accepts a `findings` array rather than scanning disk.
 
-`secure_mcp_get_knowledge_pack` does **not** require `project_root` (packs are server-bundled). Inputs: `pack_ids` (required, max **6**), optional `categories`, `max_items` (default 20), `detail` (`summary` default \| `full`), `include_index` (default **false** — omit `available_packs` catalog). Prefer architecture `pack_batches` when recommendations span multiple calls.
+`secure_mcp_get_knowledge_pack` does **not** require `project_root` (packs are server-bundled). Inputs: `pack_ids` (required, max **6**), optional `categories`, `max_items` (default **24**, hard max **60**), `detail` (`summary` default \| `full`), `include_index` (default **false** — omit `available_packs` catalog). Items are **round-robin fair-sampled** across `pack_ids` so stack packs are not starved; response includes `items_per_pack`. `truncated_by_max_items` is true only when `max_items` cut the category-filtered stream (a narrow `categories` filter alone is not truncation). Prefer architecture `pack_batches` when recommendations span multiple calls.
+
+`secure_mcp_analyze_architecture` with `stack=auto` unions detected stacks; a concrete `stack` value exclusively focuses pack routing (does not re-OR unrelated profile flags).
+
+`secure_mcp_check_authentication` derives `applied_pack_ids` from the routed packs for the detected (or forced) stacks, narrowed to packs with authn/authz items — so an Expo-only project reports `core` + `expo-rn`, not `auth-web`. Its Expo/React Native heuristics cover token writes to AsyncStorage/MMKV, credential-shaped `EXPO_PUBLIC_` names, and SecureStore access-control review.
 
 ## Finding schema (required structure)
 

@@ -38,7 +38,7 @@ Phase 5  produce_findings                → remediation report
 Phase 6  Human-facing narrative          → executive summary + fix plan
 ```
 
-**Progressive load rule:** do not call `secure_mcp_get_knowledge_pack` until after Phase 1 stack detection. Prefer `pack_batches` from architecture (max 6 pack ids per call). Start with `pack_batches[0]` and `detail=summary`; use `full` only when drafting remediations. Do not set `include_index` unless you need the pack catalog.
+**Progressive load rule:** do not call `secure_mcp_get_knowledge_pack` until after Phase 1 stack detection. Prefer `pack_batches` from architecture (max 6 pack ids per call). Start with `pack_batches[0]` and `detail=summary` (default `max_items` 24 fair-samples across packs so stack checklists appear, not only core/secrets). Use `full` or a higher `max_items` (hard max 60) when drafting remediations or when `truncated_by_max_items` is true (that flag counts only items the budget cut, not items a `categories` filter excluded). Do not set `include_index` unless you need the pack catalog. Architecture `stack=auto` unions detections; an explicit `stack` focus exclusively scopes packs.
 
 Tools remain independently useful if the user only asks about one category (e.g. secrets only)—still stay defensive and remediation-oriented.
 

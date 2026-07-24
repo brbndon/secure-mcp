@@ -11,6 +11,8 @@ import {
   DEFAULT_MAX_ITEMS,
   MAX_PACKS_PER_REQUEST,
   PACK_IDS,
+  countEligiblePackItems,
+  countItemsPerPack,
   filterPackItems,
   getPack,
   isPackId,
@@ -42,13 +44,13 @@ const InputSchema = z
       .max(ABSOLUTE_MAX_ITEMS)
       .default(DEFAULT_MAX_ITEMS)
       .describe(
-        `Cap on returned checklist items across all requested packs (default ${DEFAULT_MAX_ITEMS}, hard max ${ABSOLUTE_MAX_ITEMS}).`,
+        `Cap on returned checklist items across all requested packs (default ${DEFAULT_MAX_ITEMS}, hard max ${ABSOLUTE_MAX_ITEMS}). Items are fair-sampled (round-robin) so stack packs are not starved.`,
       ),
     detail: z
       .enum(["summary", "full"])
       .default("summary")
       .describe(
-        "summary (default, low-token): id, title, category, severityHint, one-line remediation. full: complete pack items.",
+        "summary (default, low-token): id, title, category, severityHint, one-line remediation. full: complete pack items. Prefer one pack or categories when detail=full on large multi-pack loads.",
       ),
     include_index: z
       .boolean()
@@ -75,6 +77,7 @@ export function registerGetKnowledgePack(server: McpServer): void {
 PURPOSE (defensive only)
 - Progressive disclosure: load only packs recommended after architecture / stack detection.
 - Keep agent context small — prefer detail=summary first; use full when drafting remediations.
+- Multi-pack loads fair-sample items (round-robin) so core/secrets do not crowd out stack packs under max_items.
 - Packs are structured checklists (not essays). They guide classification and remediation planning.
 - Never frame pack content as offensive targeting guidance.
 
@@ -83,17 +86,18 @@ WHEN TO CALL
 2. Prefer pack_batches[0] from architecture (then later batches if needed). Max ${MAX_PACKS_PER_REQUEST} pack_ids per call.
 3. Do not request every pack. Category scanners already use heuristics server-side; call this when you need checklist text.
 4. Set include_index=true only if you need the global pack catalog (rare).
+5. For detail=full on many packs, prefer one pack_id or categories, or raise max_items (hard max ${ABSOLUTE_MAX_ITEMS}).
 
 Args:
   - pack_ids (string[]): Required. Known: ${PACK_IDS.join(", ")}
   - categories (string[]): Optional filter
-  - max_items (number): Default ${DEFAULT_MAX_ITEMS}, max ${ABSOLUTE_MAX_ITEMS}
+  - max_items (number): Default ${DEFAULT_MAX_ITEMS}, max ${ABSOLUTE_MAX_ITEMS} (fair-sampled across packs)
   - detail: summary (default) | full
   - include_index (boolean): default false — omit available_packs catalog
   - response_format: json | markdown
 
 Returns:
-  applied_pack_ids, items (summary or full), optional available_packs if include_index, and notes.`,
+  applied_pack_ids, items (summary or full), items_per_pack coverage counts, optional available_packs if include_index, and notes.`,
       inputSchema: InputSchema,
       annotations: {
         readOnlyHint: true,
@@ -129,6 +133,11 @@ Returns:
             : filtered.map((item) => toItemSummary(item));
 
         const includeIndex = params.include_index === true;
+        // Compare against the eligible (category-filtered) stream so a narrow
+        // category filter is not reported as max_items truncation.
+        const eligible = countEligiblePackItems(packs, params.categories);
+        const truncated = eligible > filtered.length;
+        const items_per_pack = countItemsPerPack(filtered, packIds);
 
         const data = {
           ok: true as const,
@@ -137,8 +146,8 @@ Returns:
           detail,
           max_items: maxItems,
           item_count: items.length,
-          truncated_by_max_items:
-            packs.reduce((n, p) => n + p.items.length, 0) > items.length,
+          truncated_by_max_items: truncated,
+          items_per_pack,
           items,
           ...(includeIndex
             ? {
@@ -153,7 +162,10 @@ Returns:
             : {}),
           notes: [
             "Do not request all packs — load only recommended_packs / pack_batches for the detected stacks.",
-            "Prefer detail=summary unless you need full remediation/verification text.",
+            "Items are fair-sampled (round-robin) across pack_ids so stack packs are not starved under max_items.",
+            truncated
+              ? `truncated_by_max_items: raise max_items (up to ${ABSOLUTE_MAX_ITEMS}), filter categories, or load packs individually for full text.`
+              : "Prefer detail=summary unless you need full remediation/verification text.",
             "Defensive checklists only; confirm findings in real source files before reporting.",
           ],
         };

@@ -9,9 +9,11 @@ export const webApiPack: KnowledgePack = {
   title: "Web API hardening",
   description:
     "General API route/handler controls: authz per method, input validation, CORS, rate limits, error hygiene.",
-  stackTags: ["typescript", "nextjs", "expo"],
-  categories: ["authorization", "injection-risk", "configuration", "authentication"],
-  estimatedTokens: 1000,
+  // Server-side handler guidance only: routing never sends Expo-only projects
+  // here (their backend lives elsewhere), so the tags must not claim expo.
+  stackTags: ["typescript", "nextjs"],
+  categories: ["authorization", "injection-risk", "configuration", "authentication", "privacy"],
+  estimatedTokens: 1200,
   items: [
     {
       id: "API-AUTHZ-PER-METHOD",
@@ -23,6 +25,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-285",
       tags: ["api", "authz"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "An unguarded method can expose or mutate data the guarded methods protect.",
       remediation: "Apply shared auth helpers in each exported method; fail closed on missing session.",
       verification_suggestion: "Open each handler method and confirm a session/role check.",
     },
@@ -36,6 +40,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-20",
       tags: ["validation"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Unvalidated input reaches queries, file paths, and business rules with unpredictable types.",
       remediation: "Use Zod (or equivalent) at the handler boundary; reject unknown fields when appropriate.",
       verification_suggestion: "Confirm handlers reject malformed payloads with 400-class responses.",
     },
@@ -49,6 +55,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-942",
       tags: ["cors"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Untrusted sites may read authenticated responses on behalf of a logged-in user.",
       remediation: "Configure an origin allowlist; never combine wildcard origins with cookies.",
       verification_suggestion: "Inspect CORS middleware/config for wildcard + credentials combinations.",
     },
@@ -62,6 +70,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-770",
       tags: ["rate-limit"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Credential guessing and costly queries can run unchecked against production.",
       remediation: "Add per-IP and per-account limits on auth and costly routes.",
       verification_suggestion: "Confirm rate-limit middleware or edge rules cover auth endpoints.",
     },
@@ -75,6 +85,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-209",
       tags: ["errors"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Error bodies disclose schema, dependency versions, and server layout to any caller.",
       remediation: "Map exceptions to stable error codes; keep diagnostics in server logs with redaction.",
       verification_suggestion: "Trigger failure paths and inspect client-visible error bodies.",
     },
@@ -87,6 +99,8 @@ export const webApiPack: KnowledgePack = {
       severityHint: "medium",
       tags: ["idempotency"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Retries and double submits can duplicate charges, records, or outbound messages.",
       remediation: "Accept idempotency keys for critical POSTs; enforce uniqueness in storage.",
       verification_suggestion: "Review create/payment handlers for duplicate-submit protection.",
     },
@@ -99,6 +113,8 @@ export const webApiPack: KnowledgePack = {
       severityHint: "low",
       tags: ["content-type"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Parser confusion can bypass CSRF assumptions or produce unexpected body handling.",
       remediation: "Require application/json (or documented types) before parsing bodies.",
       verification_suggestion: "Send wrong Content-Type and confirm rejection.",
     },
@@ -112,6 +128,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-770",
       tags: ["pagination"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "A single request can exhaust database or memory capacity and degrade availability.",
       remediation: "Clamp limit parameters; set hard maxima independent of client input.",
       verification_suggestion: "Confirm list endpoints ignore or clamp oversized limit values.",
     },
@@ -125,6 +143,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-345",
       tags: ["webhooks"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Anyone who learns the URL can drive billing, provisioning, or state changes.",
       remediation: "Validate provider signatures with raw body; reject stale timestamps.",
       verification_suggestion: "Review webhook routes for signature verification before side effects.",
     },
@@ -138,6 +158,8 @@ export const webApiPack: KnowledgePack = {
       cwe: "CWE-319",
       tags: ["tls"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Credentials sent in cleartext may be observed on the network path.",
       remediation: "Enforce HTTPS at the edge; set Secure cookies; fail closed without TLS in prod.",
       verification_suggestion: "Confirm production redirects HTTP→HTTPS and Secure cookie flags.",
     },

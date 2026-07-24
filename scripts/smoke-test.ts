@@ -15,6 +15,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const fixture = path.join(root, "fixtures", "tiny-app");
 const expoFixture = path.join(root, "fixtures", "tiny-expo");
+/** React-native library with a non-Expo app.json — must not route to expo-rn. */
+const rnLibFixture = path.join(root, "fixtures", "rn-lib-no-expo");
 const serverEntry = path.join(root, "src", "index.ts");
 
 const REQUIRED_TOOLS = [
@@ -127,14 +129,16 @@ async function main(): Promise<void> {
       arguments: {
         pack_ids: batches[0],
         detail: "summary",
-        max_items: 10,
         response_format: "json",
       },
     });
     assert(!packSummary.isError, `get_knowledge_pack summary failed: ${JSON.stringify(packSummary)}`);
     const packSum = parseJsonPayload(packSummary);
     assert(packSum.detail === "summary", "Expected detail=summary");
-    assert(Array.isArray(packSum.items) && (packSum.items as unknown[]).length <= 10, "max_items not applied");
+    assert(
+      Array.isArray(packSum.items) && (packSum.items as unknown[]).length > 0,
+      "Expected summary items",
+    );
     assert(
       Array.isArray(packSum.applied_pack_ids) &&
         (packSum.applied_pack_ids as string[]).includes("core"),
@@ -144,7 +148,22 @@ async function main(): Promise<void> {
       !("available_packs" in packSum),
       "available_packs should be omitted by default (include_index=false)",
     );
-    console.log("[smoke] get_knowledge_pack summary OK (no index by default)");
+    const itemsPerPack = packSum.items_per_pack as Record<string, number> | undefined;
+    assert(
+      itemsPerPack && typeof itemsPerPack === "object",
+      "Expected items_per_pack coverage map",
+    );
+    for (const id of packSum.applied_pack_ids as string[]) {
+      assert(
+        (itemsPerPack[id] ?? 0) >= 1,
+        `expected ≥1 item from applied pack ${id}, got ${itemsPerPack[id] ?? 0}`,
+      );
+    }
+    assert(
+      (itemsPerPack["web-next"] ?? 0) >= 1,
+      `tiny-app multi-pack summary should include web-next items: ${JSON.stringify(itemsPerPack)}`,
+    );
+    console.log("[smoke] get_knowledge_pack summary OK (fair multi-pack + no index by default)");
 
     const packFull = await client.callTool({
       name: "secure_mcp_get_knowledge_pack",
@@ -202,6 +221,125 @@ async function main(): Promise<void> {
     assert(!expoPacks.includes("swift-ios"), `expo fixture should not force swift: ${expoPacks.join(",")}`);
     assert(!expoPacks.includes("web-next"), `expo fixture should not force web-next: ${expoPacks.join(",")}`);
     console.log("[smoke] expo recommended_packs routing OK");
+
+    const expoPackLoad = await client.callTool({
+      name: "secure_mcp_get_knowledge_pack",
+      arguments: {
+        pack_ids: expoPacks.slice(0, 6),
+        detail: "summary",
+        response_format: "json",
+      },
+    });
+    assert(!expoPackLoad.isError, `expo get_knowledge_pack failed: ${JSON.stringify(expoPackLoad)}`);
+    const expoPackData = parseJsonPayload(expoPackLoad);
+    const expoPerPack = expoPackData.items_per_pack as Record<string, number>;
+    assert(
+      (expoPerPack?.["expo-rn"] ?? 0) >= 1,
+      `expo multi-pack summary should include expo-rn items: ${JSON.stringify(expoPerPack)}`,
+    );
+    console.log("[smoke] expo multi-pack content coverage OK");
+
+    const rnLibArch = await client.callTool({
+      name: "secure_mcp_analyze_architecture",
+      arguments: { project_root: rnLibFixture, response_format: "json" },
+    });
+    assert(!rnLibArch.isError, `rn-lib architecture failed: ${JSON.stringify(rnLibArch)}`);
+    const rnLibData = parseJsonPayload(rnLibArch);
+    const rnLibDetection = rnLibData.detection as Record<string, unknown>;
+    assert(
+      rnLibDetection?.hasExpo === false,
+      `bare app.json + react-native dep must not set hasExpo: ${JSON.stringify(rnLibDetection)}`,
+    );
+    const rnLibPacks = rnLibData.recommended_packs as string[];
+    assert(
+      !rnLibPacks.includes("expo-rn"),
+      `rn library fixture should not recommend expo-rn: ${rnLibPacks.join(",")}`,
+    );
+    console.log("[smoke] Expo detection false-positive guard OK");
+
+    const expoAuth = await client.callTool({
+      name: "secure_mcp_check_authentication",
+      arguments: { project_root: expoFixture, response_format: "json" },
+    });
+    assert(!expoAuth.isError, `expo check_authentication failed: ${JSON.stringify(expoAuth)}`);
+    const expoAuthData = parseJsonPayload(expoAuth);
+    const expoAuthPacks = expoAuthData.applied_pack_ids as string[];
+    assert(
+      expoAuthPacks.includes("expo-rn"),
+      `expo auth review should apply expo-rn: ${expoAuthPacks.join(",")}`,
+    );
+    assert(
+      !expoAuthPacks.includes("auth-web"),
+      `expo auth review should not claim auth-web: ${expoAuthPacks.join(",")}`,
+    );
+    console.log("[smoke] check_authentication Expo pack routing OK");
+
+    const rnLibAuth = await client.callTool({
+      name: "secure_mcp_check_authentication",
+      arguments: { project_root: rnLibFixture, response_format: "json" },
+    });
+    assert(!rnLibAuth.isError, `rn-lib check_authentication failed: ${JSON.stringify(rnLibAuth)}`);
+    const rnLibAuthData = parseJsonPayload(rnLibAuth);
+    const rnLibAuthPacks = rnLibAuthData.applied_pack_ids as string[];
+    assert(
+      !rnLibAuthPacks.includes("expo-rn"),
+      `rn-lib auth review should not apply expo-rn: ${rnLibAuthPacks.join(",")}`,
+    );
+    const rnLibAuthFindings = (rnLibAuthData.findings as Array<Record<string, unknown>>) ?? [];
+    assert(
+      !rnLibAuthFindings.some(
+        (f) =>
+          f.stack === "expo" ||
+          String(f.title ?? "")
+            .toLowerCase()
+            .includes("mobile token storage"),
+      ),
+      `rn-lib auth review should not emit Expo findings: ${JSON.stringify(rnLibAuthFindings)}`,
+    );
+    console.log("[smoke] check_authentication rn-lib-no-expo routing OK");
+
+    const packCategoryFilter = await client.callTool({
+      name: "secure_mcp_get_knowledge_pack",
+      arguments: {
+        pack_ids: batches[0],
+        categories: ["authentication"],
+        detail: "summary",
+        response_format: "json",
+      },
+    });
+    assert(
+      !packCategoryFilter.isError,
+      `get_knowledge_pack category filter failed: ${JSON.stringify(packCategoryFilter)}`,
+    );
+    const categoryData = parseJsonPayload(packCategoryFilter);
+    const categoryItems = categoryData.items as Array<Record<string, unknown>>;
+    assert(categoryItems.length > 0, "Expected authentication items");
+    assert(
+      categoryItems.every((item) => String(item.category).toLowerCase() === "authentication"),
+      "Category filter leaked other categories",
+    );
+    assert(
+      categoryData.truncated_by_max_items === false,
+      `category filter must not report max_items truncation: ${JSON.stringify(categoryData.truncated_by_max_items)}`,
+    );
+    console.log("[smoke] get_knowledge_pack category filter truncation flag OK");
+
+    const packTruncated = await client.callTool({
+      name: "secure_mcp_get_knowledge_pack",
+      arguments: {
+        pack_ids: ["core"],
+        max_items: 2,
+        detail: "summary",
+        response_format: "json",
+      },
+    });
+    assert(!packTruncated.isError, `get_knowledge_pack truncation failed: ${JSON.stringify(packTruncated)}`);
+    const truncatedData = parseJsonPayload(packTruncated);
+    assert(
+      truncatedData.truncated_by_max_items === true,
+      "max_items below available items should report truncation",
+    );
+    console.log("[smoke] get_knowledge_pack truncation flag OK");
 
     const secrets = await client.callTool({
       name: "secure_mcp_review_secrets",

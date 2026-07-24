@@ -1,0 +1,10 @@
+{
+  "name": "rn-lib-no-expo-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "react": "18.3.1",
+    "react-native": "0.76.0",
+    "react-native-web": "0.19.12"
+  }
+}

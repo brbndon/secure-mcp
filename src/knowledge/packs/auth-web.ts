@@ -11,7 +11,7 @@ export const authWebPack: KnowledgePack = {
     "Browser session cookies, CSRF, OAuth callbacks, and common web authn/authz hardening checks.",
   stackTags: ["nextjs", "typescript"],
   categories: ["authentication", "authorization"],
-  estimatedTokens: 1000,
+  estimatedTokens: 1200,
   items: [
     {
       id: "AUTHWEB-COOKIE-FLAGS",
@@ -23,6 +23,8 @@ export const authWebPack: KnowledgePack = {
       cwe: "CWE-614",
       tags: ["cookies", "session"],
       stacks: ["nextjs", "typescript"],
+      impact_if_unremediated:
+        "Session cookies may be readable by scripts or sent over cleartext connections.",
       remediation: "Set HttpOnly + Secure + appropriate SameSite on session cookies in production.",
       verification_suggestion: "Inspect Set-Cookie headers in a production-like response.",
     },
@@ -52,6 +54,8 @@ export const authWebPack: KnowledgePack = {
       cwe: "CWE-384",
       tags: ["session"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Sessions cannot be revoked promptly, so compromised or stale sessions stay valid.",
       remediation: "Store session state server-side or use short-lived signed tokens with rotation.",
       verification_suggestion: "Confirm logout/revocation invalidates server session or token family.",
     },
@@ -65,6 +69,8 @@ export const authWebPack: KnowledgePack = {
       cwe: "CWE-601",
       tags: ["oauth"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Auth codes or tokens may be bound to the wrong session or delivered to an untrusted host.",
       remediation: "Enforce state checks and an exact redirect_uri allowlist; reject open redirects.",
       verification_suggestion: "Review auth callback handlers for state and redirect_uri validation.",
     },
@@ -78,6 +84,8 @@ export const authWebPack: KnowledgePack = {
       cwe: "CWE-916",
       tags: ["passwords"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "A database disclosure would expose reusable account passwords directly.",
       remediation: "Use argon2id or bcrypt with adequate cost; migrate legacy hashes on login.",
       verification_suggestion: "Confirm password write path uses a modern KDF only.",
     },
@@ -91,6 +99,8 @@ export const authWebPack: KnowledgePack = {
       cwe: "CWE-640",
       tags: ["reset"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Long-lived or replayable reset links become an account-takeover path.",
       remediation: "Hash tokens at rest; expire quickly; use generic success messages.",
       verification_suggestion: "Review reset flow for TTL, single-use, and response wording.",
     },
@@ -104,6 +114,8 @@ export const authWebPack: KnowledgePack = {
       cwe: "CWE-285",
       tags: ["rbac"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Ordinary accounts may reach administrative data or actions.",
       remediation: "Centralize requireRole helpers; never trust client role claims alone.",
       verification_suggestion: "List admin routes and confirm requireRole (or equivalent) on each.",
     },
@@ -116,6 +128,8 @@ export const authWebPack: KnowledgePack = {
       severityHint: "medium",
       tags: ["logout"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Sessions remain usable after the user believes they signed out, including on shared devices.",
       remediation: "Destroy server session; clear cookies; revoke refresh tokens on logout.",
       verification_suggestion: "After logout, confirm session cookie and refresh token no longer work.",
     },
@@ -128,6 +142,8 @@ export const authWebPack: KnowledgePack = {
       severityHint: "medium",
       tags: ["mfa", "step-up"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "A single hijacked session can complete permanent account-takeover changes.",
       remediation: "Require re-auth or MFA challenge before sensitive account changes.",
       verification_suggestion: "Confirm sensitive account mutations check auth age or MFA.",
     },
@@ -141,6 +157,8 @@ export const authWebPack: KnowledgePack = {
       cwe: "CWE-347",
       tags: ["jwt"],
       stacks: ["typescript"],
+      impact_if_unremediated:
+        "Weak verification lets forged or foreign-issued tokens pass as valid sessions.",
       remediation: "Pin allowed algorithms; load secrets from env; validate exp/aud/iss.",
       verification_suggestion: "Inspect JWT verify options for algorithm allowlist and claim checks.",
     },
