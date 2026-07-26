@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>API_KEY</key>
+  <string>AIzaSyDummyFirebaseClientKey000</string>
+  <key>GOOGLE_APP_ID</key>
+  <string>1:1234567890:ios:abcdef</string>
+</dict>
+</plist>

@@ -66,7 +66,9 @@ Auth, injection-risk, and secrets tools are independent. When the client support
 |----------------|--------|--------|
 | Mapper | structure + architecture | Control placement notes |
 | Auth specialist | auth findings + auth files | Session checks, ownership (IDOR remediation) |
-| Mobile specialist | swift findings | Keychain, ATS, WebView least privilege |
+| Mobile specialist | swift findings | Keychain accessibility, ATS exceptions, WKWebView bridges, deep links, pasteboard, TLS trust delegates |
+
+Auth owns Swift storage/accessibility sinks (UserDefaults, Keychain Always, app-group suite); secrets owns pasteboard/print/hardcoded. Prefer `secure_mcp_produce_findings` after both tools so overlapping titles at the same file:line can be merged manually if an older run still double-reported.
 | Reporter | all findings | produce_findings + remediation narrative |
 
 Pass **structured JSON** between sub-agents—not only prose. Never assign an “exploit writer” role.

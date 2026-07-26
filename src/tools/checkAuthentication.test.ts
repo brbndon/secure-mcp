@@ -11,8 +11,10 @@ import {
   authPatternAppliesToStack,
   isAuthCandidatePath,
   shouldEmitProfileAuthFinding,
+  shouldScanSwiftAuthFile,
 } from "./checkAuthentication.js";
 import type { StackFocus } from "../lib/types.js";
+import { redactedEvidence } from "../lib/redact.js";
 
 function patternById(id: string) {
   const pattern = AUTH_PATTERNS.find((p) => p.id === id);
@@ -132,6 +134,40 @@ describe("isAuthCandidatePath", () => {
     assert.ok(!isAuthCandidatePath("src/lib/storage.ts"));
     assert.ok(!isAuthCandidatePath("src/utils/localStorageHelper.ts"));
     assert.ok(!isAuthCandidatePath("packages/ui/src/hooks/useLocalStorage.ts"));
+  });
+});
+
+describe("shouldScanSwiftAuthFile", () => {
+  it("scans all Swift files when stack is forced to swift", () => {
+    assert.equal(
+      shouldScanSwiftAuthFile("Sources/DemoApp/InsecureBits.swift", ".swift", "swift"),
+      true,
+    );
+    assert.equal(shouldScanSwiftAuthFile("Sources/DemoApp/SafeBits.swift", ".swift", "swift"), true);
+  });
+
+  it("uses path keywords under auto", () => {
+    assert.equal(
+      shouldScanSwiftAuthFile("Sources/DemoApp/Helpers.swift", ".swift", "auto"),
+      false,
+    );
+    assert.equal(
+      shouldScanSwiftAuthFile("Sources/Network/TrustDelegate.swift", ".swift", "auto"),
+      true,
+    );
+    // "InsecureBits" matches the `secur` keyword substring — intentional path signal.
+    assert.equal(
+      shouldScanSwiftAuthFile("Sources/DemoApp/InsecureBits.swift", ".swift", "auto"),
+      true,
+    );
+  });
+});
+
+describe("redactedEvidence", () => {
+  it("masks credential-shaped snippets", () => {
+    const masked = redactedEvidence('let password = "hunter2-secret"');
+    assert.ok(!masked.includes("hunter2-secret"));
+    assert.ok(masked.includes("****") || masked.includes("…"));
   });
 });
 

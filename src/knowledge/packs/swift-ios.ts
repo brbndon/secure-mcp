@@ -11,7 +11,7 @@ export const swiftIosPack: KnowledgePack = {
     "iOS/SwiftUI controls: Keychain, biometrics, ATS, deep links, WKWebView bridges, pasteboard.",
   stackTags: ["swift", "ios"],
   categories: ["secrets", "authentication", "injection-risk", "configuration", "privacy", "cryptography"],
-  estimatedTokens: 1400,
+  estimatedTokens: 1550,
   items: [
     {
       id: "SWIFT-KEYCHAIN",
@@ -33,7 +33,7 @@ export const swiftIosPack: KnowledgePack = {
       id: "SWIFT-ATS",
       title: "App Transport Security exceptions",
       description:
-        "NSAllowsArbitraryLoads and broad domain exceptions in Info.plist weaken TLS. Prefer HTTPS with modern TLS only.",
+        "NSAllowsArbitraryLoads, NSExceptionAllowsInsecureHTTPLoads, NSAllowsLocalNetworking, and NSAllowsArbitraryLoadsInWebContent weaken TLS. Prefer HTTPS with modern TLS only.",
       category: "configuration",
       severityHint: "high",
       cwe: "CWE-319",
@@ -42,8 +42,9 @@ export const swiftIosPack: KnowledgePack = {
       impact_if_unremediated:
         "Cleartext or weakly protected network traffic may expose credentials or PII in transit.",
       remediation:
-        "Disable arbitrary loads; use HTTPS endpoints; limit any ATS exceptions to documented temporary needs.",
-      verification_suggestion: "Inspect Info.plist ATS keys for arbitrary loads and broad exceptions.",
+        "Disable arbitrary loads and insecure HTTP exceptions; use HTTPS endpoints; limit any ATS exceptions to documented temporary needs.",
+      verification_suggestion:
+        "Inspect Info.plist ATS keys for arbitrary loads, insecure HTTP exceptions, and WebContent overrides.",
     },
     {
       id: "SWIFT-KEYCHAIN-ACCESS",
@@ -95,7 +96,7 @@ export const swiftIosPack: KnowledgePack = {
       id: "SWIFT-WEBVIEW",
       title: "WKWebView bridge safety",
       description:
-        "JavaScript bridges (WKScriptMessageHandler) must allowlist message types and never expose raw Keychain or filesystem access to web content.",
+        "JavaScript bridges (WKScriptMessageHandler) must allowlist message types and never expose raw Keychain or filesystem access to web content. Avoid interpolating untrusted input into evaluateJavaScript.",
       category: "injection-risk",
       severityHint: "high",
       cwe: "CWE-749",
@@ -103,8 +104,10 @@ export const swiftIosPack: KnowledgePack = {
       stacks: ["swift"],
       impact_if_unremediated:
         "Over-privileged bridges can let web content reach native secrets or APIs.",
-      remediation: "Restrict message handlers; validate payloads; never pass secrets to JavaScript.",
-      verification_suggestion: "List WKScriptMessageHandler names and confirm least privilege.",
+      remediation:
+        "Restrict message handlers; validate payloads; never pass secrets to JavaScript; do not build evaluateJavaScript strings from untrusted input.",
+      verification_suggestion:
+        "List WKScriptMessageHandler names and evaluateJavaScript call sites; confirm least privilege and no string interpolation of untrusted data.",
     },
     {
       id: "SWIFT-LOGGING",
@@ -186,7 +189,7 @@ export const swiftIosPack: KnowledgePack = {
       id: "SWIFT-EXTENSION-SHARING",
       title: "App group and extension data sharing",
       description:
-        "Widgets, share extensions, and app groups share containers and Keychain items; scope what extensions can read.",
+        "Widgets, share extensions, and app groups share containers and Keychain items; scope what extensions can read. Do not put tokens in UserDefaults(suiteName:).",
       category: "secrets",
       severityHint: "medium",
       cwe: "CWE-922",
@@ -195,9 +198,26 @@ export const swiftIosPack: KnowledgePack = {
       impact_if_unremediated:
         "A less-hardened extension becomes a path to credentials the main app protects.",
       remediation:
-        "Share only the minimum in app-group containers; keep high-value tokens out of extension-readable Keychain groups.",
+        "Share only the minimum in app-group containers; keep high-value tokens out of extension-readable Keychain groups and app-group UserDefaults.",
       verification_suggestion:
-        "List app-group and keychain-access-group entitlements per target and confirm each is needed.",
+        "List app-group and keychain-access-group entitlements per target; grep UserDefaults(suiteName:) near token keys.",
+    },
+    {
+      id: "SWIFT-TLS-TRUST",
+      title: "URLSession server-trust challenges",
+      description:
+        "Custom URLSessionDelegate trust handling must not unconditionally accept serverTrust challenges. Prefer default URLSession trust evaluation or explicit SecTrustEvaluate with pinned policies.",
+      category: "authentication",
+      severityHint: "high",
+      cwe: "CWE-295",
+      tags: ["tls", "urlsession"],
+      stacks: ["swift"],
+      impact_if_unremediated:
+        "Disabled trust validation allows interception of credentials and session traffic.",
+      remediation:
+        "Remove unconditional .useCredential responses to serverTrust challenges; use system trust evaluation or documented pinning with failure closed.",
+      verification_suggestion:
+        "Search URLSessionDelegate challenge handlers for .useCredential on serverTrust without evaluation.",
     },
   ],
 };

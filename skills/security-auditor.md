@@ -40,7 +40,9 @@ Order matches runtime priority (`core` → `secrets` → stack packs):
 | macOS Swift | `core`, `secrets`, `swift-ios`, `apple-desktop` |
 | Unknown / minimal | `core`, `threat-model` |
 
-Mixed monorepos (`stack=auto`): union of detected stacks only.  
+Swift category tools (with `stack: "swift"` or auto-detected Swift): auth → Keychain accessibility / trust delegates / UserDefaults / app-group suite; injection → WKWebView bridges, deep links, process shell, ATS, weak hashes; secrets → pasteboard, prints, hardcoded secrets, Firebase plist presence (storage sinks are auth-only to avoid duplicate findings). Forced `stack: "swift"` scans all `.swift` files for auth (budget-capped).
+
+Mixed monorepos (`stack=auto`): union of detected stacks only.
 Forced `stack` (e.g. `swift`): exclusive focus — packs for that stack only (does not re-OR other profile signals).
 
 ## Mandatory multi-phase workflow

@@ -15,6 +15,7 @@ import {
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
+import { redactedEvidence } from "../lib/redact.js";
 import type { Finding, ProjectProfile, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
@@ -28,12 +29,16 @@ import {
   recommendPackIds,
   type PackId,
 } from "../knowledge/packs/registry.js";
+import { SWIFT_AUTH_PATTERNS } from "../knowledge/swift.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
 
 const AUTH_NAME_RE =
-  /auth|session|login|logout|signin|signout|password|credential|middleware|guard|permission|role|oauth|jwt|token|keychain|biometric|faceid|touchid|localauthentication|securestore|secure-store|async-?storage|mmkv/i;
+  /auth|session|login|logout|signin|signout|password|credential|middleware|guard|permission|role|oauth|jwt|token|keychain|biometric|faceid|touchid|localauthentication|securestore|secure-store|async-?storage|mmkv|webview|urlsession|network|pasteboard|deeplink|openurl|transport|secur/i;
+
+const SWIFT_AUTH_PATH_RE =
+  /keychain|session|auth|token|network|url|trust|webview|pasteboard|storage|secur|credential|challenge|delegate|bridge/i;
 
 /** Exported for tests: path looks like auth / session / mobile secure-storage code. */
 export function isAuthCandidatePath(relativePath: string): boolean {
@@ -41,6 +46,21 @@ export function isAuthCandidatePath(relativePath: string): boolean {
   return NEXTJS_AUTH_FILE_HINTS.some((h) =>
     relativePath.toLowerCase().includes(h.toLowerCase()),
   );
+}
+
+/**
+ * Whether a Swift file should be scanned for auth sinks.
+ * Forced `stack=swift` scans all `.swift` files (capped by the tool budget);
+ * auto-detect still prefers path keywords so monorepos stay within limits.
+ */
+export function shouldScanSwiftAuthFile(
+  relativePath: string,
+  ext: string,
+  stack: StackFocus | "auto",
+): boolean {
+  if (ext !== ".swift") return false;
+  if (stack === "swift") return true;
+  return SWIFT_AUTH_PATH_RE.test(relativePath);
 }
 
 interface AuthPattern {
@@ -54,6 +74,7 @@ interface AuthPattern {
   impact_if_unremediated: string;
   cwe?: string;
   stack?: Finding["stack"];
+  filter?: (match: string, content: string) => boolean;
 }
 
 /**
@@ -162,19 +183,21 @@ export const AUTH_PATTERNS: AuthPattern[] = [
       "Authenticated users may access resources they should not if object-level checks are missing.",
     cwe: "CWE-285",
   },
-  {
-    id: "AUTH-USERDEFAULTS-TOKEN",
-    title: "Token-like value with UserDefaults",
-    regex: /UserDefaults[\s\S]{0,80}(token|password|session|auth)/gi,
-    severity: "high",
-    confidence: "medium",
-    description: "Possible credential storage in UserDefaults (prefer Keychain for secrets).",
-    remediation: "Store tokens in Keychain with appropriate accessibility flags.",
-    impact_if_unremediated:
-      "Session material in UserDefaults is easier to extract than Keychain-protected secrets.",
-    cwe: "CWE-922",
-    stack: "swift",
-  },
+  ...SWIFT_AUTH_PATTERNS.map(
+    (p): AuthPattern => ({
+      id: p.id === "SWIFT-USERDEFAULTS-TOKEN" ? "AUTH-USERDEFAULTS-TOKEN" : `AUTH-${p.id}`,
+      title: p.title,
+      regex: p.regex,
+      severity: p.severity === "info" ? "info" : p.severity,
+      confidence: p.confidence,
+      description: `${p.title}. Confirm the sink handles credentials or session material insecurely before treating as confirmed.`,
+      remediation: p.recommendation,
+      impact_if_unremediated: p.impact_if_unremediated,
+      cwe: p.cwe,
+      stack: "swift",
+      filter: p.filter,
+    }),
+  ),
   {
     id: "AUTH-RN-INSECURE-TOKEN-STORE",
     title: "Token-like value in AsyncStorage / MMKV",
@@ -260,7 +283,7 @@ WHAT THIS TOOL CHECKS (heuristics)
 - Hardcoded JWT/signing secrets and Authorization headers
 - Disabled TLS certificate verification
 - Next.js middleware-centric auth patterns needing defense in depth
-- Swift UserDefaults usage near token/password terms
+- Swift UserDefaults / app-group token storage, overly broad Keychain accessibility, URLSession server-trust handlers that appear to disable validation
 - Expo / React Native token storage (AsyncStorage / MMKV vs SecureStore) and credential-shaped EXPO_PUBLIC_ env
 - Presence of auth helpers that still need object-level authorization review
 
@@ -315,12 +338,20 @@ export function registerCheckAuthentication(server: McpServer): void {
         const candidates = files.filter((f) => isAuthCandidatePath(f.relativePath));
 
         const always = files.filter((f) =>
-          /middleware\.(ts|js)$|auth\.(ts|js)$|Package\.swift$|Info\.plist$/i.test(
+          /middleware\.(ts|js)$|auth\.(ts|js)$|Package\.swift$|Info\.plist$|\.entitlements$/i.test(
             f.relativePath,
           ),
         );
+        const swiftExtra =
+          params.stack === "swift" || profile.hasSwiftFiles
+            ? files.filter((f) =>
+                shouldScanSwiftAuthFile(f.relativePath, f.ext, params.stack),
+              )
+            : [];
         const toScan = [
-          ...new Map([...always, ...candidates].map((f) => [f.relativePath, f])).values(),
+          ...new Map(
+            [...always, ...candidates, ...swiftExtra].map((f) => [f.relativePath, f]),
+          ).values(),
         ].slice(0, 80);
 
         for (const file of toScan) {
@@ -340,7 +371,9 @@ export function registerCheckAuthentication(server: McpServer): void {
             let match: RegExpExecArray | null;
             let hits = 0;
             while ((match = pattern.regex.exec(content)) !== null && hits < 5) {
+              if (pattern.filter && !pattern.filter(match[0], content)) continue;
               hits++;
+              const rawEvidence = snippetAround(content, match.index);
               findings.push(
                 buildFinding({
                   id: nextId(),
@@ -352,7 +385,10 @@ export function registerCheckAuthentication(server: McpServer): void {
                   stack: pattern.stack ?? "common",
                   file: file.relativePath,
                   line: findLineNumber(content, match.index),
-                  evidence: snippetAround(content, match.index),
+                  evidence:
+                    pattern.stack === "swift"
+                      ? redactedEvidence(rawEvidence)
+                      : rawEvidence,
                   impact_if_unremediated: pattern.impact_if_unremediated,
                   remediation: pattern.remediation,
                   residual_risk:
@@ -360,7 +396,7 @@ export function registerCheckAuthentication(server: McpServer): void {
                   verification_suggestion:
                     "Add automated tests for unauthenticated/unauthorized access; re-run this tool after remediation.",
                   cwe: pattern.cwe,
-                  tags: ["authentication", "remediation"],
+                  tags: ["authentication", pattern.id, "remediation"],
                 }),
               );
             }

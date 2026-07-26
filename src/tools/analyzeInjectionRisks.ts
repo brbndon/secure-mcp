@@ -22,7 +22,11 @@ import {
 } from "../knowledge/findings-schema.js";
 import { INJECTION_PATTERNS } from "../knowledge/common.js";
 import { NEXTJS_PATTERNS } from "../knowledge/nextjs.js";
-import { SWIFT_PATTERNS } from "../knowledge/swift.js";
+import {
+  SWIFT_CONFIG_PATTERNS,
+  SWIFT_CRYPTO_PATTERNS,
+  SWIFT_INJECTION_PATTERNS,
+} from "../knowledge/swift.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
@@ -46,7 +50,7 @@ MANDATORY AGENT WORKFLOW (use intermediate artifacts; thorough multi-phase revie
 WHAT THIS TOOL CHECKS (heuristics; confirm manually)
 - TypeScript/Node: eval/Function, child_process usage, SQL string concatenation, dangerouslySetInnerHTML/innerHTML, path joins with request-like data.
 - Next.js: SSR HTML sinks, redirect parameters that should be allowlisted.
-- Swift: Process/NSTask shell usage, cleartext http:// endpoints, related mobile patterns.
+- Swift: Process/NSTask shell usage, WKWebView bridges / evaluateJavaScript, deep-link handlers, ATS exceptions, weak MD5/SHA1 hashes, cleartext http:// endpoints.
 
 Args:
   - project_root (string): Codebase root to review
@@ -62,6 +66,21 @@ GUARDRAILS
 - Read-only filesystem inspection; does not execute project code.
 - Confidence may be medium/low; the agent must verify before treating a finding as confirmed.
 - Frame every output as guidance for developers fixing their own code.`;
+
+function swiftPatternAppliesToFile(
+  pattern: { id: string; extensions?: string[] },
+  fileExt: string,
+): boolean {
+  const allowed = pattern.extensions ?? [".swift"];
+  if (allowed.includes(fileExt)) return true;
+  if (
+    (pattern.id === "SWIFT-ATS-ARBITRARY" || pattern.id === "SWIFT-ATS-EXCEPTION") &&
+    (fileExt === ".plist" || fileExt === ".xml")
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export function registerAnalyzeInjectionRisks(server: McpServer): void {
   server.registerTool(
@@ -94,6 +113,8 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           ".cjs",
           ".swift",
           ".plist",
+          ".xml",
+          ".entitlements",
           ".html",
         ]);
 
@@ -112,6 +133,8 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           impact: string;
           stack: Finding["stack"];
           confidence?: Finding["confidence"];
+          category?: string;
+          extensions?: string[];
           filter?: (match: string, content: string) => boolean;
         }[] = [];
 
@@ -132,6 +155,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
               impact: p.impact_if_unremediated,
               stack: p.stack,
               confidence: "medium",
+              category: "injection-risk",
             });
           }
         }
@@ -148,11 +172,16 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
               impact: p.impact_if_unremediated,
               stack: "nextjs",
               confidence: "medium",
+              category: "injection-risk",
             });
           }
         }
         if (stack === "auto" || stack === "swift") {
-          for (const p of SWIFT_PATTERNS) {
+          for (const p of [
+            ...SWIFT_INJECTION_PATTERNS,
+            ...SWIFT_CONFIG_PATTERNS,
+            ...SWIFT_CRYPTO_PATTERNS,
+          ]) {
             patterns.push({
               id: p.id,
               title: p.title,
@@ -162,11 +191,10 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
               remediation: p.recommendation,
               impact: p.impact_if_unremediated,
               stack: "swift",
-              confidence: "medium",
-              filter:
-                p.id === "SWIFT-HTTP-URL"
-                  ? (m) => m.toLowerCase().startsWith("http://")
-                  : undefined,
+              confidence: p.confidence,
+              category: p.category,
+              extensions: p.extensions,
+              filter: p.filter,
             });
           }
         }
@@ -186,8 +214,8 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           filesScanned.push(file.relativePath);
 
           for (const pattern of patterns) {
-            if (pattern.stack === "swift" && file.ext !== ".swift" && file.ext !== ".plist") {
-              if (pattern.id !== "SWIFT-ATS-ARBITRARY") continue;
+            if (pattern.stack === "swift" && !swiftPatternAppliesToFile(pattern, file.ext)) {
+              continue;
             }
             if (
               (pattern.stack === "typescript" || pattern.stack === "nextjs") &&
@@ -211,7 +239,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
                   description: `Potential weakness pattern ${pattern.id} observed in ${file.relativePath}. Review whether untrusted input can influence this location and apply the remediation if so.`,
                   severity: pattern.severity,
                   confidence: pattern.confidence ?? "medium",
-                  category: "injection-risk",
+                  category: pattern.category ?? "injection-risk",
                   stack: pattern.stack,
                   file: file.relativePath,
                   line: findLineNumber(content, match.index),
@@ -223,7 +251,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
                   verification_suggestion:
                     "Add tests or code-review checks that unsafe sinks do not receive unsanitized external input; re-run this tool after fixes.",
                   cwe: pattern.cwe,
-                  tags: ["injection-risk", pattern.id, "remediation"],
+                  tags: [pattern.category ?? "injection-risk", pattern.id, "remediation"],
                 }),
               );
             }

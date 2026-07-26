@@ -14,6 +14,7 @@ import {
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
+import { redactedEvidence } from "../lib/redact.js";
 import type { Finding } from "../lib/types.js";
 import {
   buildFinding,
@@ -22,19 +23,13 @@ import {
 } from "../knowledge/findings-schema.js";
 import { SECRET_PATTERNS } from "../knowledge/common.js";
 import { NEXTJS_PATTERNS } from "../knowledge/nextjs.js";
-import { SWIFT_PATTERNS } from "../knowledge/swift.js";
+import { isSwiftSensitivePath, SWIFT_SECRETS_PATTERNS } from "../knowledge/swift.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
 
 const FALSE_POSITIVE_HINTS =
   /example|sample|placeholder|your[_-]?key|xxx+|todo|changeme|dummy|fake|test[_-]?key|process\.env/i;
-
-function redactedEvidence(raw: string): string {
-  // Avoid echoing full secrets back into agent logs when possible
-  if (raw.length <= 24) return raw.replace(/[A-Za-z0-9]/g, (ch, i) => (i < 4 ? ch : "*"));
-  return raw.slice(0, 8) + "…" + raw.slice(-4).replace(/./g, "*") + ` (len=${raw.length})`;
-}
 
 const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential hardcoded secrets and unsafe secret handling so the development team can rotate credentials and harden configuration.
 
@@ -57,7 +52,7 @@ WHAT THIS TOOL CHECKS
 - Private key blocks, cloud tokens (AWS, GitHub, Stripe, Slack), generic API key assignments, JWT-like strings
 - Committed .env files (excluding .env.example)
 - Next.js NEXT_PUBLIC_ secret-like names and client-bundle risks
-- Swift UserDefaults / hardcoded password-like patterns
+- Swift UserDefaults / app-group defaults, Keychain Always accessibility, pasteboard near credentials, sensitive prints, hardcoded secrets, Firebase GoogleService-Info.plist presence
 
 Args:
   - project_root, stack, max_files, response_format
@@ -120,7 +115,8 @@ export function registerReviewSecrets(server: McpServer): void {
             f.ext === ".pem" ||
             f.ext === ".key" ||
             f.relativePath.endsWith("credentials.json") ||
-            f.relativePath.endsWith("service-account.json"),
+            f.relativePath.endsWith("service-account.json") ||
+            isSwiftSensitivePath(f.relativePath),
         );
 
         for (const file of files) {
@@ -159,6 +155,36 @@ export function registerReviewSecrets(server: McpServer): void {
                   "Check .gitignore and git history for env files; confirm CI uses secret stores.",
                 cwe: "CWE-200",
                 tags: ["env-file", "remediation"],
+              }),
+            );
+          }
+
+          if (
+            (params.stack === "auto" || params.stack === "swift") &&
+            /GoogleService-Info\.plist$/i.test(file.relativePath)
+          ) {
+            findings.push(
+              buildFinding({
+                id: nextId(),
+                title: "Firebase GoogleService-Info.plist present",
+                description:
+                  "GoogleService-Info.plist often embeds API keys and project identifiers. Confirm keys are appropriately restricted in the Firebase/Google Cloud consoles and that no secondary secrets were added to the plist.",
+                severity: "info",
+                confidence: "medium",
+                category: "secrets",
+                stack: "swift",
+                file: file.relativePath,
+                evidence: file.relativePath,
+                impact_if_unremediated:
+                  "Unrestricted client keys can be abused if API restrictions and billing controls are weak.",
+                remediation:
+                  "Restrict API keys by app/bundle id and API surface; keep only client-safe values in the plist; never add server secrets here.",
+                residual_risk:
+                  "Client-embedded Firebase config remains extractable from the app bundle by design.",
+                verification_suggestion:
+                  "Review Google Cloud API key restrictions and Firebase App Check for this app id.",
+                cwe: "CWE-200",
+                tags: ["swift", "firebase", "plist", "remediation"],
               }),
             );
           }
@@ -235,32 +261,41 @@ export function registerReviewSecrets(server: McpServer): void {
             }
           }
 
-          if (params.stack === "auto" || params.stack === "swift") {
-            for (const p of SWIFT_PATTERNS.filter(
-              (x) => x.id.includes("USERDEFAULTS") || x.id.includes("HARDCODED"),
-            )) {
+          if (
+            (params.stack === "auto" || params.stack === "swift") &&
+            (file.ext === ".swift" || file.ext === ".plist" || file.ext === ".entitlements")
+          ) {
+            for (const p of SWIFT_SECRETS_PATTERNS) {
               p.regex.lastIndex = 0;
               let match: RegExpExecArray | null;
-              while ((match = p.regex.exec(content)) !== null) {
+              let hits = 0;
+              while ((match = p.regex.exec(content)) !== null && hits < 8) {
+                if (p.filter && !p.filter(match[0], content)) continue;
+                const full = match[0];
+                const nearFp =
+                  FALSE_POSITIVE_HINTS.test(full) ||
+                  FALSE_POSITIVE_HINTS.test(snippetAround(content, match.index, 40));
+                if (nearFp && p.id === "SWIFT-HARDCODED-PASSWORD") continue;
+                hits++;
                 findings.push(
                   buildFinding({
                     id: nextId(),
                     title: p.title,
-                    description: "Swift secret-handling heuristic matched — review storage and remove hardcoded secrets.",
+                    description: `Swift secret-handling heuristic ${p.id} matched — review storage and remove hardcoded or weakly protected secrets.`,
                     severity: p.severity,
-                    confidence: "medium",
-                    category: "secrets",
+                    confidence: nearFp ? "low" : p.confidence,
+                    category: p.category,
                     stack: "swift",
                     file: file.relativePath,
                     line: findLineNumber(content, match.index),
-                    evidence: snippetAround(content, match.index),
+                    evidence: redactedEvidence(snippetAround(content, match.index)),
                     impact_if_unremediated: p.impact_if_unremediated,
                     remediation: p.recommendation,
                     residual_risk: "Old app installs may retain secrets until users upgrade.",
                     verification_suggestion:
-                      "Audit Keychain migration paths and confirm no secrets remain in UserDefaults or source.",
+                      "Audit Keychain migration paths and confirm no secrets remain in UserDefaults, pasteboard, or source.",
                     cwe: p.cwe,
-                    tags: ["swift", "secrets", "remediation"],
+                    tags: ["swift", p.category, p.id, "remediation"],
                   }),
                 );
               }

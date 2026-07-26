@@ -63,7 +63,7 @@ Most tools accept:
 
 `secure_mcp_analyze_architecture` with `stack=auto` unions detected stacks; a concrete `stack` value exclusively focuses pack routing (does not re-OR unrelated profile flags).
 
-`secure_mcp_check_authentication` derives `applied_pack_ids` from the routed packs for the detected (or forced) stacks, narrowed to packs with authn/authz items — so an Expo-only project reports `core` + `expo-rn`, not `auth-web`. Its Expo/React Native heuristics cover token writes to AsyncStorage/MMKV, credential-shaped `EXPO_PUBLIC_` names, and SecureStore access-control review.
+`secure_mcp_check_authentication` derives `applied_pack_ids` from the routed packs for the detected (or forced) stacks, narrowed to packs with authn/authz items — so an Expo-only project reports `core` + `expo-rn`, not `auth-web`. Its Expo/React Native heuristics cover token writes to AsyncStorage/MMKV, credential-shaped `EXPO_PUBLIC_` names, and SecureStore access-control review. Its Swift heuristics cover UserDefaults/app-group token storage, overly broad Keychain accessibility (`kSecAttrAccessibleAlways`), and URLSession server-trust handlers that appear to disable validation. Swift injection/config heuristics (WebView bridges, deep-link handlers, ATS exceptions, weak hashes) live in `analyze_injection_risks`; pasteboard/logging/hardcoded secret patterns live in `review_secrets`.
 
 ## Finding schema (required structure)
 
