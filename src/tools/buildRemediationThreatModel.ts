@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  finalizeInventoryCoverage,
   normalizeProjectRoot,
   profileProject,
   toolError,
@@ -13,11 +14,21 @@ import {
   walkProject,
 } from "../lib/filesystem.js";
 import {
+  redactCoverageReport,
+  redactFinding,
+  redactedSecretPath,
+  redactedSecretPaths,
+} from "../lib/redact.js";
+import {
   buildFinding,
   createFindingIdFactory,
   ProjectRootInput,
 } from "../knowledge/findings-schema.js";
-import type { Finding } from "../lib/types.js";
+import {
+  recommendPackIds,
+  type PackId,
+} from "../knowledge/packs/registry.js";
+import type { Finding, StackFocus } from "../lib/types.js";
 
 const InputSchema = ProjectRootInput.extend({
   focus_area: z
@@ -49,6 +60,121 @@ interface RemediationThreat {
   recommended_controls: string[];
   residual_risk: "high" | "medium" | "low";
   verification_suggestion: string;
+  evidence_paths?: string[];
+  proof_gap?: string[];
+}
+
+interface EvidenceBackedAsset {
+  name: string;
+  evidence_paths: string[];
+  evidence_basis: "path_inventory" | "caller_supplied";
+}
+
+interface EvidenceBackedBoundary {
+  boundary: string;
+  evidence_paths: string[];
+  evidence_basis: "path_inventory" | "inferred_from_stack";
+}
+
+interface ThreatModelEvidence {
+  assets: EvidenceBackedAsset[];
+  boundaries: EvidenceBackedBoundary[];
+  assumptions: string[];
+  invariants: string[];
+  unresolved_questions: string[];
+}
+
+function buildThreatModelEvidence(
+  stacks: string[],
+  files: string[],
+  surface: { api: string[]; auth: string[]; webview: boolean },
+  callerAssets: string[],
+  focus?: string,
+): ThreatModelEvidence {
+  const secretPaths = redactedSecretPaths(
+    files.filter((file) =>
+      /(^|\/)(?:\.env|credentials|service-account|GoogleService-Info)|\.(?:pem|key|entitlements)$/i.test(
+        file,
+      ),
+    ),
+  );
+  const swiftStoragePaths = redactedSecretPaths(
+    files.filter((file) => /keychain|userdefaults|securestore|storage/i.test(file)),
+  );
+  const authPaths = redactedSecretPaths(surface.auth);
+  const apiPaths = redactedSecretPaths(surface.api);
+  const evidenceAssets: EvidenceBackedAsset[] = [
+    ...(authPaths.length
+      ? [{ name: "sessions and credentials", evidence_paths: authPaths, evidence_basis: "path_inventory" as const }]
+      : []),
+    ...(apiPaths.length
+      ? [{ name: "API and business data", evidence_paths: apiPaths, evidence_basis: "path_inventory" as const }]
+      : []),
+    ...(secretPaths.length
+      ? [{ name: "secrets and signing/configuration material", evidence_paths: secretPaths, evidence_basis: "path_inventory" as const }]
+      : []),
+    ...(swiftStoragePaths.length
+      ? [{ name: "device-local credentials", evidence_paths: swiftStoragePaths, evidence_basis: "path_inventory" as const }]
+      : []),
+  ];
+  const assets: EvidenceBackedAsset[] = [
+    ...evidenceAssets,
+    ...callerAssets
+      .filter((asset) => !evidenceAssets.some((existing) => existing.name === asset))
+      .map((name) => ({ name, evidence_paths: [], evidence_basis: "caller_supplied" as const })),
+  ];
+
+  const boundaries: EvidenceBackedBoundary[] = [];
+  if (apiPaths.length || authPaths.length) {
+    boundaries.push({
+      boundary: "client/browser input → server/API entrypoints",
+      evidence_paths: [...new Set([...apiPaths, ...authPaths])],
+      evidence_basis: "path_inventory",
+    });
+  }
+  if (secretPaths.length) {
+    boundaries.push({
+      boundary: "source/configuration → runtime secret stores",
+      evidence_paths: secretPaths,
+      evidence_basis: "path_inventory",
+    });
+  }
+  if (stacks.includes("swift") || swiftStoragePaths.length) {
+    boundaries.push({
+      boundary: "UI/deep links/WebView → privileged app logic and local storage",
+      evidence_paths: [
+        ...new Set([
+          ...swiftStoragePaths,
+          ...redactedSecretPaths(files.filter((file) => /webview|url|deep/i.test(file))),
+        ]),
+      ],
+      evidence_basis: "inferred_from_stack",
+    });
+  }
+
+  const unresolved_questions = [
+    ...(surface.api.length ? [] : ["Which runtime/API entrypoints handle attacker-controlled input?"]),
+    ...(surface.auth.length ? [] : ["Where are sessions, roles, ownership, and token refresh validated?"]),
+    ...(secretPaths.length ? [] : ["Where are production secrets injected and rotated outside this tree?"]),
+    ...(focus ? [`Which concrete files implement the requested focus area: ${focus}?`] : []),
+    "Which deployment, identity-provider, database, and gateway controls are enforced outside the reviewed source tree?",
+  ];
+
+  return {
+    assets,
+    boundaries,
+    assumptions: [
+      "Evidence is limited to bounded path inventory; target code and build/runtime behavior were not executed.",
+      "Caller-supplied assets are prioritization hints, not proof that the asset exists in the reviewed tree.",
+      "Absence from the inventory is not evidence of absence when coverage is partial, capped, ignored, or symlink-limited.",
+    ],
+    invariants: [
+      "All untrusted inputs are validated and authorized at every sensitive server or native boundary.",
+      "Secrets never appear in source, client bundles, logs, or unprotected device storage.",
+      "Threat-model output remains remediation guidance and never becomes exploit or bypass instructions.",
+    ],
+    unresolved_questions,
+  };
 }
 
 const STRIDE_LABELS: Record<RemediationThreat["stride"], string> = {
@@ -59,6 +185,53 @@ const STRIDE_LABELS: Record<RemediationThreat["stride"], string> = {
   D: "Denial of Service",
   E: "Elevation of Privilege",
 };
+
+/** Pick threat-specific evidence paths from inventory + related components. */
+export function threatEvidencePaths(
+  threat: Pick<RemediationThreat, "title" | "related_components" | "stride">,
+  surface: { api: string[]; auth: string[]; secrets?: string[] },
+): string[] {
+  const related = threat.related_components
+    .filter((item) => item.includes("/") || item.includes("."))
+    .map(redactedSecretPath);
+  if (related.length > 0) return [...new Set(related)].slice(0, 8);
+
+  if (/session|credential|auth/i.test(threat.title)) {
+    return redactedSecretPaths(surface.auth).slice(0, 8);
+  }
+  if (/secret|personal data|disclosure|log/i.test(threat.title)) {
+    return redactedSecretPaths([
+      ...(surface.secrets ?? []),
+      ...surface.auth,
+    ]).slice(0, 8);
+  }
+  if (surface.api.length > 0 && /object-level|input validation|Server Action|Route Handler|API/i.test(threat.title)) {
+    return redactedSecretPaths(surface.api).slice(0, 8);
+  }
+  if (surface.auth.length > 0 && threat.stride === "S") {
+    return redactedSecretPaths(surface.auth).slice(0, 8);
+  }
+  if (surface.api.length > 0) return redactedSecretPaths(surface.api).slice(0, 8);
+  return redactedSecretPaths(surface.auth).slice(0, 8);
+}
+
+/** Pack ids claimed by the threat-model tool for the active stacks. */
+export function threatModelPackIds(stacks: readonly string[]): PackId[] {
+  const stackFocus = stacks.filter((s): s is StackFocus =>
+    ["common", "typescript", "nextjs", "swift", "expo"].includes(s),
+  );
+  const recommended = recommendPackIds(stackFocus.length ? stackFocus : ["common"]);
+  const ids = new Set<PackId>(["threat-model", "core"]);
+  for (const id of recommended) {
+    if (id === "threat-model" || id === "core" || id === "secrets") ids.add(id);
+    if (stackFocus.includes("nextjs") && (id === "web-next" || id === "auth-web" || id === "web-api")) {
+      ids.add(id);
+    }
+    if (stackFocus.includes("swift") && (id === "swift-ios" || id === "apple-desktop")) ids.add(id);
+    if (stackFocus.includes("expo") && id === "expo-rn") ids.add(id);
+  }
+  return ["threat-model", "core", ...recommended.filter((id) => ids.has(id) && id !== "threat-model" && id !== "core")];
+}
 
 function buildThreats(
   stacks: string[],
@@ -274,33 +447,7 @@ function buildThreats(
   return threats;
 }
 
-const TOOL_DESCRIPTION = `Defensive secure-code-review tool: build STRIDE-oriented threat-model fragments that prioritise remediation and hardening.
-
-PURPOSE (defensive only)
-- Help the development team understand what can go wrong so they can strengthen controls.
-- Classify risks with STRIDE labels and residual risk after recommended controls.
-- Produce remediation-oriented seeds for the final report — never offensive attack plans, exploit steps, or weaponization guidance.
-
-MANDATORY AGENT WORKFLOW
-1. Inventory and architecture first (list + analyze tools).
-2. Call this tool with optional focus_area and assets worth protecting.
-3. Use recommended_controls as a checklist while running category tools (auth, injection-risks, secrets).
-4. Trace evidence in code for high residual_risk items.
-5. Convert confirmed gaps into Finding objects (evidence → classify → impact → remediate → verify).
-6. Keep multi-phase notes; thorough reviews may span many steps before produce_findings.
-
-Args:
-  - project_root, stack, max_files, response_format
-  - focus_area (optional): feature to harden
-  - assets (optional): assets to protect
-
-Returns:
-  threats[] with STRIDE labels, recommended_controls, residual_risk, verification_suggestion;
-  finding_seeds[] already shaped for remediation reports.
-
-GUARDRAILS
-- Frame all content as defensive design review for the codebase owners.
-- Do not provide exploit construction, PoC attack code, or bypass recipes.`;
+const TOOL_DESCRIPTION = `Defensive tool: produce STRIDE-oriented remediation threat fragments and high-residual finding seeds to prioritise hardening.\n\nArgs: project_root, stack?, focus_area?, assets?, max_files?, focus_paths?, response_format.\nReturns: threats[], finding_seeds (also exposed as findings).\n\nGuidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
 export function registerBuildRemediationThreatModel(server: McpServer): void {
   server.registerTool(
@@ -319,12 +466,13 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
     async (params: Input) => {
       try {
         const root = await normalizeProjectRoot(params.project_root);
-        const profile = await profileProject(root);
+        const profile = await profileProject(root, { focusPrefixes: params.focus_paths });
         const stacks =
           params.stack && params.stack !== "auto" ? [params.stack] : profile.likelyStacks;
 
-        const { files } = await walkProject(root, {
+        const { files, coverage } = await walkProject(root, {
           maxFiles: params.max_files ?? 300,
+          focusPrefixes: params.focus_paths,
         });
 
         const api = files
@@ -335,34 +483,75 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
           .filter((f) => /auth|session|middleware|login|keychain/i.test(f.relativePath))
           .map((f) => f.relativePath)
           .slice(0, 40);
+        const secretFiles = files
+          .filter((f) =>
+            /(^|\/)(?:\.env|credentials|service-account|GoogleService-Info)|\.(?:pem|key|entitlements)$/i.test(
+              f.relativePath,
+            ),
+          )
+          .map((f) => f.relativePath)
+          .slice(0, 40);
         const webview = files.some((f) => /webview|wkwebview|wkscript/i.test(f.relativePath));
-
-        const threats = buildThreats(
+        const evidence = buildThreatModelEvidence(
           stacks,
+          files.map((file) => file.relativePath),
           { api, auth, webview },
           params.assets ?? [],
           params.focus_area,
         );
 
+        const surfaceForEvidence = { api, auth, secrets: secretFiles };
+        const threats = buildThreats(
+          stacks,
+          { api, auth, webview },
+          params.assets ?? [],
+          params.focus_area,
+        ).map((threat) => ({
+          ...threat,
+          related_components: redactedSecretPaths(threat.related_components),
+          evidence_paths: threatEvidencePaths(threat, surfaceForEvidence),
+          proof_gap: evidence.unresolved_questions.slice(0, 3),
+        }));
+
         const nextId = createFindingIdFactory("TM");
         const finding_seeds: Finding[] = threats
           .filter((t) => t.residual_risk === "high")
           .map((t) =>
-            buildFinding({
-              id: nextId(),
-              title: `Remediation priority: ${t.title}`,
-              description: t.description,
-              severity: "high",
-              confidence: "low",
-              category: "threat-model-remediation",
-              evidence: `STRIDE ${t.stride_label}; related components: ${t.related_components.slice(0, 5).join(", ") || "see architecture inventory"}`,
-              impact_if_unremediated: `If controls for "${t.title}" remain weak, ${t.affected_assets.join(", ") || "sensitive assets"} may be exposed or integrity may be compromised.`,
-              remediation: t.recommended_controls.join("; "),
-              residual_risk: `Residual risk rated ${t.residual_risk} until controls are implemented and verified.`,
-              verification_suggestion: t.verification_suggestion,
-              tags: ["threat-model", "remediation", t.stride_label],
-            }),
+            redactFinding(
+              buildFinding({
+                id: nextId(),
+                title: `Remediation priority: ${t.title}`,
+                description: t.description,
+                severity: "high",
+                confidence: "low",
+                category: "threat-model-remediation",
+                rule_family: "threat-model.stride",
+                root_control: `TM-${t.stride}-${t.title.replace(/[^A-Z0-9]+/gi, "-").toUpperCase()}`,
+                evidence: `STRIDE ${t.stride_label}; observed paths: ${
+                  (t.evidence_paths ?? []).join(", ") || "none in bounded inventory"
+                }`,
+                source: "Bounded architecture/path inventory and caller-provided hardening focus.",
+                control: t.recommended_controls.join("; "),
+                sink: t.related_components.slice(0, 5).join(", ") || "unresolved boundary",
+                counterevidence: [
+                  "No target code, deployment, identity provider, or runtime configuration was executed or verified.",
+                ],
+                proof_gap: [
+                  "Confirm the relevant source-to-boundary data flow and control enforcement in the target codebase.",
+                  ...evidence.unresolved_questions.slice(0, 2),
+                ],
+                validation: [t.verification_suggestion],
+                impact_if_unremediated: `If controls for "${t.title}" remain weak, ${t.affected_assets.join(", ") || "sensitive assets"} may be exposed or integrity may be compromised.`,
+                remediation: t.recommended_controls.join("; "),
+                residual_risk: `Residual risk rated ${t.residual_risk} until controls are implemented and verified.`,
+                verification_suggestion: t.verification_suggestion,
+                tags: ["threat-model", "remediation", t.stride_label],
+              }),
+            ),
           );
+
+        const findings = finding_seeds;
+        const applied_pack_ids = threatModelPackIds(stacks);
 
         const data = {
           ok: true as const,
@@ -370,8 +559,21 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
           summary: `Remediation threat-model fragments: ${threats.length} item(s) for stacks [${stacks.join(", ")}]${params.focus_area ? ` focusing on hardening "${params.focus_area}"` : ""}. Use controls to prioritise fixes — not for offensive planning.`,
           stacks,
           assets: params.assets ?? ["user session", "credentials", "PII", "business data"],
+          evidence_backed_assets: evidence.assets,
           focus_area: params.focus_area ?? null,
-          applied_pack_ids: ["threat-model", "core"] as const,
+          applied_pack_ids,
+          findings,
+          coverage: redactCoverageReport(
+            finalizeInventoryCoverage(
+              coverage,
+              files.map((file) => file.relativePath),
+            ),
+          ),
+          evidence,
+          boundary_evidence: evidence.boundaries,
+          assumptions: evidence.assumptions,
+          invariants: evidence.invariants,
+          unresolved_questions: evidence.unresolved_questions,
           trust_boundaries: stacks.includes("swift")
             ? [
                 "UI / deep links → app logic (validate inputs)",
@@ -391,6 +593,7 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
             "STRIDE used defensively to prioritise hardening (Spoofing, Tampering, Repudiation, Information Disclosure, DoS, EoP)",
           notes: [
             "Defensive design review only — identify control gaps and remediations.",
+            "Evidence-backed fields are based on bounded path inventory unless marked caller_supplied or inferred_from_stack.",
             "Do not generate exploits, PoCs, or bypass instructions from these fragments.",
             "Merge confirmed seeds with scan evidence via secure_mcp_produce_findings.",
             "Load the threat-model pack via secure_mcp_get_knowledge_pack when you need the checklist text.",
@@ -408,7 +611,9 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
             (t) =>
               `## ${t.id} [${t.stride_label}] ${t.title}\n` +
               `${t.description}\n` +
+              `- Evidence paths: ${t.evidence_paths?.join(", ") || "none in bounded inventory"}\n` +
               `- Recommended controls: ${t.recommended_controls.join("; ")}\n` +
+              `- Proof gaps: ${t.proof_gap?.join("; ") || "manual confirmation required"}\n` +
               `- Residual risk: ${t.residual_risk}\n` +
               `- Verify: ${t.verification_suggestion}\n`,
           ),

@@ -7,6 +7,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import {
   findLineNumber,
+  finalizeCoverage,
+  recordCoverageExclusion,
+  DEFAULT_MAX_FILE_BYTES,
   normalizeProjectRoot,
   readProjectFile,
   snippetAround,
@@ -14,6 +17,12 @@ import {
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
+import {
+  redactCoverageReport,
+  redactFinding,
+  redactFindings,
+  redactedSecretPaths,
+} from "../lib/redact.js";
 import type { Finding } from "../lib/types.js";
 import {
   buildFinding,
@@ -27,45 +36,18 @@ import {
   SWIFT_CRYPTO_PATTERNS,
   SWIFT_INJECTION_PATTERNS,
 } from "../knowledge/swift.js";
+import type { PackId } from "../knowledge/packs/registry.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
 
 const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential injection-class weaknesses so the development team can harden the codebase.
 
-PURPOSE (defensive only)
-- Find locations where untrusted input may influence dangerous sinks (SQL/query construction, command execution, HTML rendering, path handling, unsafe redirects).
-- Classify each potential weakness with severity, confidence, category, and CWE when known.
-- Recommend concrete remediation (parameterized queries, safe APIs, validation, allowlists).
-- Never generate exploit code, proof-of-concept attacks, or step-by-step abuse instructions.
+Args: project_root, stack?, max_files?, focus_paths?, response_format.
 
-MANDATORY AGENT WORKFLOW (use intermediate artifacts; thorough multi-phase review is expected)
-1. Inventory — Prefer calling secure_mcp_list_project_structure and secure_mcp_analyze_architecture first so review is scoped.
-2. Run this tool to collect candidate weaknesses with evidence.
-3. For each high/critical candidate, open the cited file and trace data flow from untrusted input to the sink (read-only).
-4. Keep, downgrade confidence, or discard false positives; always fill remediation, impact_if_unremediated, residual_risk, and verification_suggestion.
-5. Merge results later via secure_mcp_produce_findings into a remediation-focused report.
-6. Continue until major injection categories relevant to the stack have been examined with evidence (do not stop after the first hit).
+Returns: findings[] using the shared Finding schema (evidence → classification → impact_if_unremediated → remediation → residual_risk → verification_suggestion), files_scanned_count, truncated, applied_pack_ids.
 
-WHAT THIS TOOL CHECKS (heuristics; confirm manually)
-- TypeScript/Node: eval/Function, child_process usage, SQL string concatenation, dangerouslySetInnerHTML/innerHTML, path joins with request-like data.
-- Next.js: SSR HTML sinks, redirect parameters that should be allowlisted.
-- Swift: Process/NSTask shell usage, WKWebView bridges / evaluateJavaScript, deep-link handlers, ATS exceptions, weak MD5/SHA1 hashes, cleartext http:// endpoints.
-
-Args:
-  - project_root (string): Codebase root to review
-  - stack (auto|common|typescript|nextjs|swift): Focus filters
-  - max_files (number, optional): Walk safety cap
-  - response_format (json|markdown): Default json
-
-Returns:
-  findings[] using the shared Finding schema:
-  evidence → classification (severity/confidence/category/cwe) → impact_if_unremediated → remediation → residual_risk → verification_suggestion
-
-GUARDRAILS
-- Read-only filesystem inspection; does not execute project code.
-- Confidence may be medium/low; the agent must verify before treating a finding as confirmed.
-- Frame every output as guidance for developers fixing their own code.`;
+Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
 function swiftPatternAppliesToFile(
   pattern: { id: string; extensions?: string[] },
@@ -116,11 +98,13 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           ".xml",
           ".entitlements",
           ".html",
+          ".md",
         ]);
 
-        const { files, truncated } = await walkProject(root, {
+        const { files, coverage } = await walkProject(root, {
           maxFiles: params.max_files ?? 400,
           extensions,
+          focusPrefixes: params.focus_paths,
         });
 
         const patterns: {
@@ -136,6 +120,8 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           category?: string;
           extensions?: string[];
           filter?: (match: string, content: string) => boolean;
+          packId: PackId;
+          detectorFamily: string;
         }[] = [];
 
         if (
@@ -156,6 +142,8 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
               stack: p.stack,
               confidence: "medium",
               category: "injection-risk",
+              packId: "core",
+              detectorFamily: "core.injection",
             });
           }
         }
@@ -173,6 +161,8 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
               stack: "nextjs",
               confidence: "medium",
               category: "injection-risk",
+              packId: "web-next",
+              detectorFamily: "web-next.injection",
             });
           }
         }
@@ -195,13 +185,38 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
               category: p.category,
               extensions: p.extensions,
               filter: p.filter,
+              packId: "swift-ios",
+              detectorFamily:
+                p.category === "configuration"
+                  ? "swift-ios.configuration"
+                  : p.category === "cryptography"
+                    ? "swift-ios.cryptography"
+                    : "swift-ios.injection",
             });
           }
         }
 
+        const consultedPackIds = [...new Set(patterns.map((pattern) => pattern.packId))];
+        const detectorFamiliesRun = new Set<string>();
+
         for (const file of files) {
-          if (file.size > 256 * 1024) continue;
-          if (file.relativePath.endsWith(".md") && !file.relativePath.includes("security")) {
+          if (file.size > DEFAULT_MAX_FILE_BYTES) {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "max_file_bytes",
+            });
+            continue;
+          }
+          if (
+            file.relativePath.endsWith(".md") &&
+            !file.relativePath.toLowerCase().includes("security")
+          ) {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "non_security_documentation",
+            });
             continue;
           }
 
@@ -209,6 +224,11 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           try {
             content = (await readProjectFile(root, file.relativePath)).content;
           } catch {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "file_read_error",
+            });
             continue;
           }
           filesScanned.push(file.relativePath);
@@ -223,6 +243,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
             ) {
               continue;
             }
+            detectorFamiliesRun.add(pattern.detectorFamily);
 
             pattern.regex.lastIndex = 0;
             let match: RegExpExecArray | null;
@@ -233,26 +254,40 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
               }
               hits++;
               findings.push(
-                buildFinding({
-                  id: nextId(),
-                  title: pattern.title,
-                  description: `Potential weakness pattern ${pattern.id} observed in ${file.relativePath}. Review whether untrusted input can influence this location and apply the remediation if so.`,
-                  severity: pattern.severity,
-                  confidence: pattern.confidence ?? "medium",
-                  category: pattern.category ?? "injection-risk",
-                  stack: pattern.stack,
-                  file: file.relativePath,
-                  line: findLineNumber(content, match.index),
-                  evidence: snippetAround(content, match.index),
-                  impact_if_unremediated: pattern.impact,
-                  remediation: pattern.remediation,
-                  residual_risk:
-                    "Even after fixing this sink, similar patterns may exist elsewhere; re-check related modules.",
-                  verification_suggestion:
-                    "Add tests or code-review checks that unsafe sinks do not receive unsanitized external input; re-run this tool after fixes.",
-                  cwe: pattern.cwe,
-                  tags: [pattern.category ?? "injection-risk", pattern.id, "remediation"],
-                }),
+                redactFinding(
+                  buildFinding({
+                    id: nextId(),
+                    title: pattern.title,
+                    description: `Potential weakness pattern ${pattern.id} observed in ${file.relativePath}. Review whether untrusted input can influence this location and apply the remediation if so.`,
+                    severity: pattern.severity,
+                    confidence: pattern.confidence ?? "medium",
+                    category: pattern.category ?? "injection-risk",
+                    stack: pattern.stack,
+                    rule_family: pattern.detectorFamily,
+                    root_control: pattern.id,
+                    file: file.relativePath,
+                    line: findLineNumber(content, match.index),
+                    evidence: snippetAround(content, match.index),
+                    source: "Request, configuration, or other untrusted input is not proven by this heuristic.",
+                    control: pattern.remediation,
+                    sink: `${file.relativePath}:${findLineNumber(content, match.index)}`,
+                    proof_gap: [
+                      "Trace the candidate input to this sink and confirm the runtime path is reachable.",
+                      "Confirm validation, encoding, parameterization, or allowlisting at the boundary.",
+                    ],
+                    validation: [
+                      "Review the cited file and add a regression test that rejects unsafe input at the boundary.",
+                    ],
+                    impact_if_unremediated: pattern.impact,
+                    remediation: pattern.remediation,
+                    residual_risk:
+                      "Even after fixing this sink, similar patterns may exist elsewhere; re-check related modules.",
+                    verification_suggestion:
+                      "Add tests or code-review checks that unsafe sinks do not receive unsanitized external input; re-run this tool after fixes.",
+                    cwe: pattern.cwe,
+                    tags: [pattern.category ?? "injection-risk", pattern.id, "remediation"],
+                  }),
+                ),
               );
             }
           }
@@ -260,15 +295,30 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
 
         const order = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
         findings.sort((a, b) => order[b.severity] - order[a.severity]);
+        const finalizedCoverage = finalizeCoverage(coverage, filesScanned, findings);
+        const safeFindings = redactFindings(findings);
 
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Injection-risk review: ${findings.length} potential weakness(es) in ${filesScanned.length} file(s)${truncated ? " (file walk truncated)" : ""}. Classify, confirm evidence, and remediate — do not generate exploits.`,
-          findings,
+          summary: `Injection-risk review: ${safeFindings.length} potential weakness(es) in ${filesScanned.length} file(s)${finalizedCoverage.scan_status !== "complete" ? " (coverage is partial or truncated)" : ""}. Classify, confirm evidence, and remediate — do not generate exploits.`,
+          findings: safeFindings,
           files_scanned_count: filesScanned.length,
-          truncated,
-          applied_pack_ids: ["core"] as const,
+          files_reviewed: redactedSecretPaths(filesScanned),
+          truncated: finalizedCoverage.truncation.truncated,
+          coverage: redactCoverageReport(finalizedCoverage),
+          applied_pack_ids: consultedPackIds,
+          knowledge_pack_traceability: {
+            consulted_pack_ids: consultedPackIds,
+            detector_families_run: [...detectorFamiliesRun],
+            detector_families_not_run: consultedPackIds.length
+              ? patterns
+                  .map((pattern) => pattern.detectorFamily)
+                  .filter((family, index, all) => all.indexOf(family) === index)
+                  .filter((family) => !detectorFamiliesRun.has(family))
+              : [],
+            consulted_via: "bundled detector mappings; no remote pack lookup",
+          },
           notes: [
             "Defensive review only: identify → classify → remediate.",
             "Heuristics produce candidates; verify data flow before confirming.",
@@ -281,7 +331,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           `# Injection-risk review (remediation focused)`,
           data.summary,
           "",
-          ...findings.slice(0, 50).map(
+          ...safeFindings.slice(0, 50).map(
             (f) =>
               `### ${f.id} [${f.severity}] ${f.title}\n` +
               `- Evidence: ${f.file}:${f.line ?? "?"}\n` +
