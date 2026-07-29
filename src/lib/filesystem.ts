@@ -7,9 +7,19 @@
  * - Cap file size, tree depth, and total files to keep agents usable on large repos
  */
 
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { ProjectProfile, StackFocus } from "./types.js";
+import type {
+  CandidateDisposition,
+  CoverageCandidateDisposition,
+  CoveragePathDecision,
+  CoverageReport,
+  Finding,
+  ProjectProfile,
+  StackFocus,
+} from "./types.js";
+import { CANDIDATE_DISPOSITIONS } from "./types.js";
 
 /** Default directories/files to skip when walking a project. */
 export const DEFAULT_IGNORE_DIRS = new Set([
@@ -89,6 +99,17 @@ export interface WalkOptions {
   ignoreFiles?: Set<string>;
   /** Additional relative path prefixes to skip (posix-style). */
   extraIgnorePrefixes?: string[];
+  /** Optional focus: only include files whose rel path matches one of these prefixes (for scoped drill-down). */
+  focusPrefixes?: string[];
+  /** Files larger than this are accounted for but not returned for review. */
+  maxFileBytes?: number;
+  /** Cap on coverage path events retained in the report (default 1000). */
+  maxCoverageEvents?: number;
+}
+
+export interface ProfileOptions {
+  /** When set, language sampling walks only these relative prefixes. */
+  focusPrefixes?: string[];
 }
 
 export interface FileEntry {
@@ -123,6 +144,11 @@ export function resolveSafePath(projectRoot: string, maybeRelative: string): str
   return resolved;
 }
 
+function isWithinRoot(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 /** Normalize project root to an absolute existing directory. */
 export async function normalizeProjectRoot(projectRoot: string): Promise<string> {
   if (!projectRoot || !projectRoot.trim()) {
@@ -142,31 +168,57 @@ export async function normalizeProjectRoot(projectRoot: string): Promise<string>
   if (!stat.isDirectory()) {
     throw new Error(`project_root is not a directory: ${absolute}`);
   }
-  return absolute;
+  // Use the real root for every later containment comparison.
+  return await fs.realpath(absolute);
 }
 
 function toPosix(p: string): string {
   return p.split(path.sep).join("/");
 }
 
-function shouldIgnoreName(
+function ignoreReason(
   name: string,
   isDir: boolean,
   ignoreDirs: Set<string>,
   ignoreFiles: Set<string>,
-): boolean {
+): string | null {
   if (name.startsWith(".") && name !== ".env" && name !== ".env.example" && name !== ".env.local") {
-    // Keep security-relevant env files; skip other dotfiles/dirs by default.
     if (isDir || !name.startsWith(".env")) {
-      // Allow .github for workflow review if needed — skip most dot dirs.
-      if (name !== ".github" && name !== ".env") {
-        if (isDir) return true;
-      }
+      if (name !== ".github" && name !== ".env" && isDir) return "hidden_directory";
     }
   }
-  if (isDir && ignoreDirs.has(name)) return true;
-  if (!isDir && ignoreFiles.has(name)) return true;
-  return false;
+  if (isDir && ignoreDirs.has(name)) return "configured_ignored_directory";
+  if (!isDir && ignoreFiles.has(name)) return "configured_ignored_file";
+  return null;
+}
+
+function normalizePrefix(p: string): string {
+  return p.replace(/^\/+|\/+$/g, "");
+}
+
+function matchesFocus(rel: string, prefixes: string[]): boolean {
+  if (!prefixes || prefixes.length === 0) return true;
+  const r = rel.replace(/^\//, "");
+  return prefixes.some((raw) => {
+    const pp = normalizePrefix(raw);
+    if (!pp) return true;
+    if (r === pp) return true;
+    if (r.startsWith(pp + "/")) return true;
+    return false;
+  });
+}
+
+function dirLeadsToAnyFocus(dirRel: string, prefixes: string[]): boolean {
+  if (!prefixes || prefixes.length === 0) return true;
+  const d = normalizePrefix(dirRel);
+  return prefixes.some((raw) => {
+    const pp = normalizePrefix(raw);
+    if (!pp) return true;
+    if (d === "" || d === pp) return true;
+    if (pp.startsWith(d + "/")) return true;
+    if (d.startsWith(pp + "/")) return true;
+    return false;
+  });
 }
 
 /**
@@ -176,26 +228,71 @@ function shouldIgnoreName(
 export async function walkProject(
   projectRoot: string,
   options: WalkOptions = {},
-): Promise<{ files: FileEntry[]; truncated: boolean }> {
+): Promise<{ files: FileEntry[]; truncated: boolean; coverage: CoverageReport }> {
   const root = await normalizeProjectRoot(projectRoot);
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+  const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const extensions = options.extensions === undefined ? CODE_EXTENSIONS : options.extensions;
   const ignoreDirs = options.ignoreDirs ?? DEFAULT_IGNORE_DIRS;
   const ignoreFiles = options.ignoreFiles ?? DEFAULT_IGNORE_FILES;
   const extraIgnorePrefixes = options.extraIgnorePrefixes ?? [];
+  const focusPrefixes = (options.focusPrefixes ?? []).map(normalizePrefix).filter(Boolean);
 
   const files: FileEntry[] = [];
   let truncated = false;
+  const truncationReasons = new Set<string>();
+  const excludedPaths: CoveragePathDecision[] = [];
+  const ignoredPaths: CoveragePathDecision[] = [];
+  let coverageEventsTruncated = false;
+  const maxCoverageEvents = options.maxCoverageEvents ?? 1000;
+
+  const markCoverageEventsTruncated = (reason = "coverage_events_cap"): void => {
+    coverageEventsTruncated = true;
+    truncationReasons.add(reason);
+  };
+
+  const addEvent = (
+    target: CoveragePathDecision[],
+    event: CoveragePathDecision,
+  ): void => {
+    if (target.length < maxCoverageEvents) target.push(event);
+    else markCoverageEventsTruncated("coverage_events_cap");
+  };
 
   async function walk(dir: string, depth: number): Promise<void> {
     if (truncated) return;
     if (depth > maxDepth) return;
 
+    try {
+      const realDir = await fs.realpath(dir);
+      if (!isWithinRoot(root, realDir)) {
+        truncationReasons.add("symlink_containment");
+        addEvent(excludedPaths, {
+          path: toPosix(path.relative(root, dir)) || ".",
+          kind: "directory",
+          reason: "symlink_target_outside_root",
+        });
+        return;
+      }
+    } catch {
+      addEvent(excludedPaths, {
+        path: toPosix(path.relative(root, dir)) || ".",
+        kind: "directory",
+        reason: "directory_realpath_error",
+      });
+      return;
+    }
+
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
+      addEvent(excludedPaths, {
+        path: toPosix(path.relative(root, dir)) || ".",
+        kind: "directory",
+        reason: "directory_read_error",
+      });
       return;
     }
 
@@ -208,49 +305,310 @@ export async function walkProject(
       const rel = toPosix(path.relative(root, abs));
 
       if (extraIgnorePrefixes.some((p) => rel === p || rel.startsWith(`${p}/`))) {
+        addEvent(ignoredPaths, {
+          path: rel,
+          kind: entry.isDirectory() ? "directory" : "file",
+          reason: "extra_ignore_prefix",
+        });
         continue;
       }
 
-      if (shouldIgnoreName(entry.name, entry.isDirectory(), ignoreDirs, ignoreFiles)) {
+      // focus scoping: prune files and dirs that do not match
+      if (focusPrefixes.length > 0) {
+        const isDir = entry.isDirectory();
+        if (isDir) {
+          if (!dirLeadsToAnyFocus(rel, focusPrefixes)) {
+            addEvent(excludedPaths, { path: rel, kind: "directory", reason: "outside_focus_paths" });
+            continue;
+          }
+        } else {
+          if (!matchesFocus(rel, focusPrefixes)) {
+            addEvent(excludedPaths, { path: rel, kind: "file", reason: "outside_focus_paths" });
+            continue;
+          }
+        }
+      }
+
+      const reason = ignoreReason(entry.name, entry.isDirectory(), ignoreDirs, ignoreFiles);
+      if (reason) {
+        addEvent(ignoredPaths, {
+          path: rel,
+          kind: entry.isDirectory() ? "directory" : "file",
+          reason,
+        });
+        continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        try {
+          const realTarget = await fs.realpath(abs);
+          addEvent(excludedPaths, {
+            path: rel,
+            kind: "symlink",
+            reason: isWithinRoot(root, realTarget)
+              ? "symlink_not_followed"
+              : "symlink_target_outside_root",
+          });
+          if (!isWithinRoot(root, realTarget)) truncationReasons.add("symlink_containment");
+        } catch {
+          addEvent(excludedPaths, { path: rel, kind: "symlink", reason: "symlink_unresolvable" });
+        }
         continue;
       }
 
       if (entry.isDirectory()) {
+        if (depth >= maxDepth) {
+          truncated = true;
+          truncationReasons.add("max_depth");
+          addEvent(excludedPaths, { path: rel, kind: "directory", reason: "max_depth" });
+          continue;
+        }
+        try {
+          const realDirectory = await fs.realpath(abs);
+          if (!isWithinRoot(root, realDirectory)) {
+            truncationReasons.add("symlink_containment");
+            addEvent(excludedPaths, {
+              path: rel,
+              kind: "directory",
+              reason: "symlink_target_outside_root",
+            });
+            continue;
+          }
+        } catch {
+          addEvent(excludedPaths, { path: rel, kind: "directory", reason: "directory_realpath_error" });
+          continue;
+        }
         await walk(abs, depth + 1);
         continue;
       }
 
-      if (!entry.isFile()) continue;
+      if (!entry.isFile()) {
+        addEvent(excludedPaths, { path: rel, kind: "other", reason: "not_a_regular_file" });
+        continue;
+      }
 
-      const ext = path.extname(entry.name).toLowerCase();
+      const ext =
+        entry.name === ".env" || entry.name.startsWith(".env.")
+          ? ".env"
+          : path.extname(entry.name).toLowerCase();
       if (extensions && extensions.size > 0 && !extensions.has(ext)) {
         // Always allow extensionless suspicious names like Dockerfile? skip for v1.
         if (entry.name !== "Dockerfile" && entry.name !== "Makefile") {
+          addEvent(excludedPaths, { path: rel, kind: "file", reason: "extension_not_in_scope" });
           continue;
         }
       }
 
+      // lstat avoids following a raced symlink between readdir and size check.
       let size = 0;
       try {
-        const st = await fs.stat(abs);
+        const st = await fs.lstat(abs);
+        if (st.isSymbolicLink()) {
+          addEvent(excludedPaths, {
+            path: rel,
+            kind: "symlink",
+            reason: "symlink_not_followed",
+          });
+          continue;
+        }
+        if (!st.isFile()) {
+          addEvent(excludedPaths, { path: rel, kind: "other", reason: "not_a_regular_file" });
+          continue;
+        }
+        const realFile = await fs.realpath(abs);
+        if (!isWithinRoot(root, realFile)) {
+          truncationReasons.add("symlink_containment");
+          addEvent(excludedPaths, {
+            path: rel,
+            kind: "file",
+            reason: "symlink_target_outside_root",
+          });
+          continue;
+        }
         size = st.size;
-      } catch {
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        addEvent(excludedPaths, {
+          path: rel,
+          kind: "file",
+          reason: code === "ELOOP" ? "symlink_unresolvable" : "file_stat_error",
+        });
+        continue;
+      }
+
+      if (size > maxFileBytes) {
+        truncationReasons.add("max_file_bytes");
+        addEvent(excludedPaths, { path: rel, kind: "file", reason: "max_file_bytes" });
         continue;
       }
 
       files.push({ absolutePath: abs, relativePath: rel, size, ext });
+      if (files.length > maxCoverageEvents) {
+        markCoverageEventsTruncated("included_paths_cap");
+      }
       if (files.length >= maxFiles) {
         truncated = true;
+        truncationReasons.add("max_files");
         return;
       }
     }
   }
 
   await walk(root, 0);
-  return { files, truncated };
+  const includedPaths = files.slice(0, maxCoverageEvents).map((file) => file.relativePath);
+  if (files.length > maxCoverageEvents) {
+    markCoverageEventsTruncated("included_paths_cap");
+    addEvent(excludedPaths, {
+      path: "[omitted-included-paths]",
+      kind: "other",
+      reason: "included_paths_cap",
+    });
+  }
+  const walkTruncated = truncated || truncationReasons.has("max_files") || truncationReasons.has("max_depth") || truncationReasons.has("max_file_bytes") || truncationReasons.has("symlink_containment") || truncationReasons.has("response_size");
+  const effectiveTruncated = walkTruncated;
+  const hasScopeGaps =
+    effectiveTruncated ||
+    coverageEventsTruncated ||
+    excludedPaths.length > 0 ||
+    ignoredPaths.length > 0;
+  const candidateDispositionCounts = Object.fromEntries(
+    CANDIDATE_DISPOSITIONS.map((disposition) => [disposition, 0]),
+  ) as Record<CandidateDisposition, number>;
+  const scan_status: CoverageReport["scan_status"] = effectiveTruncated
+    ? "truncated"
+    : hasScopeGaps
+      ? "partial"
+      : "complete";
+  return {
+    files,
+    truncated: effectiveTruncated || coverageEventsTruncated,
+    coverage: {
+      included_paths: includedPaths,
+      excluded_paths: excludedPaths,
+      ignored_paths: ignoredPaths,
+      caps: { max_files: maxFiles, max_depth: maxDepth, max_file_bytes: maxFileBytes },
+      truncation: {
+        truncated: effectiveTruncated || coverageEventsTruncated,
+        reasons: [...truncationReasons],
+        coverage_events_truncated: coverageEventsTruncated,
+      },
+      files_reviewed: [],
+      candidate_dispositions: [],
+      candidate_disposition_counts: candidateDispositionCounts,
+      scan_status,
+      not_observed_means:
+        scan_status === "complete"
+          ? "no_candidate_in_files_reviewed"
+          : "scope_was_truncated_or_partial",
+    },
+  };
 }
 
-/** Read a file with a hard byte limit; content may be truncated. */
+/** Add a scanner-specific exclusion while keeping the walk's accounting honest. */
+export function recordCoverageExclusion(
+  coverage: CoverageReport,
+  event: CoveragePathDecision,
+  maxCoverageEvents = 1000,
+): void {
+  if (coverage.excluded_paths.length < maxCoverageEvents) {
+    coverage.excluded_paths.push(event);
+  } else {
+    coverage.truncation.coverage_events_truncated = true;
+    coverage.truncation.reasons = [
+      ...new Set([...coverage.truncation.reasons, "coverage_events_cap"]),
+    ];
+  }
+  coverage.truncation.reasons = [...new Set([...coverage.truncation.reasons, event.reason])];
+  if (
+    [
+      "max_files",
+      "max_depth",
+      "max_file_bytes",
+      "response_size",
+      "symlink_containment",
+      "coverage_events_cap",
+      "included_paths_cap",
+    ].includes(event.reason)
+  ) {
+    coverage.truncation.truncated = true;
+  }
+  if (coverage.truncation.coverage_events_truncated && !coverage.truncation.truncated) {
+    // Omitted accounting events make the report incomplete even when the walk finished.
+  }
+  coverage.scan_status = coverage.truncation.truncated
+    ? "truncated"
+    : coverage.truncation.coverage_events_truncated
+      ? "partial"
+      : "partial";
+  coverage.not_observed_means = "scope_was_truncated_or_partial";
+}
+
+/** Finalize a walk report with the files actually opened and candidate decisions. */
+export function finalizeCoverage(
+  coverage: CoverageReport,
+  filesReviewed: readonly string[],
+  candidates: ReadonlyArray<
+    Pick<Finding, "id" | "disposition" | "disposition_reason" | "file" | "line" | "rule_family" | "instance_id">
+  > = [],
+): CoverageReport {
+  const dispositions: CoverageCandidateDisposition[] = candidates.map((candidate) => ({
+    id: candidate.id,
+    disposition: candidate.disposition ?? "needs_review",
+    reason:
+      candidate.disposition_reason ??
+      "Candidate requires confirmation before it is treated as a reportable finding.",
+    ...(candidate.file ? { file: candidate.file } : {}),
+    ...(candidate.line ? { line: candidate.line } : {}),
+    ...(candidate.rule_family ? { rule_family: candidate.rule_family } : {}),
+    ...(candidate.instance_id ? { instance_id: candidate.instance_id } : {}),
+  }));
+  const counts = Object.fromEntries(
+    CANDIDATE_DISPOSITIONS.map((disposition) => [disposition, 0]),
+  ) as Record<CandidateDisposition, number>;
+  for (const candidate of dispositions) counts[candidate.disposition]++;
+  coverage.files_reviewed = [...new Set(filesReviewed)];
+  coverage.candidate_dispositions = dispositions;
+  coverage.candidate_disposition_counts = counts;
+  return coverage;
+}
+
+/** Finalize a metadata-only inventory without implying that file contents were reviewed. */
+export function finalizeInventoryCoverage(
+  coverage: CoverageReport,
+  filesInventoried: readonly string[],
+): CoverageReport {
+  coverage.files_reviewed = [];
+  coverage.not_observed_means =
+    coverage.truncation.truncated || coverage.truncation.reasons.length > 0
+      ? "scope_was_truncated_or_partial"
+      : "no_candidate_in_files_reviewed";
+  coverage.scan_status = coverage.truncation.truncated
+    ? "truncated"
+    : coverage.excluded_paths.length > 0 || coverage.ignored_paths.length > 0
+      ? "partial"
+      : "complete";
+  coverage.not_observed_means =
+    coverage.scan_status === "complete"
+      ? "no_candidate_in_files_reviewed"
+      : "scope_was_truncated_or_partial";
+  coverage.included_paths = [...new Set(filesInventoried)];
+  return coverage;
+}
+
+/** Open flags: prefer no-follow so the final path component cannot race into a symlink. */
+function openReadFlags(): number {
+  const noFollow =
+    "O_NOFOLLOW" in fsConstants
+      ? (fsConstants as typeof fsConstants & { O_NOFOLLOW: number }).O_NOFOLLOW
+      : 0;
+  return fsConstants.O_RDONLY | noFollow;
+}
+
+/**
+ * Read a file with a hard byte limit without buffering the whole file.
+ * Opens without following the final path component when O_NOFOLLOW is available,
+ * then verifies the opened path remains inside the project root.
+ */
 export async function readProjectFile(
   projectRoot: string,
   relativeOrAbsolute: string,
@@ -261,17 +619,65 @@ export async function readProjectFile(
     ? resolveSafePath(root, path.relative(root, relativeOrAbsolute))
     : resolveSafePath(root, relativeOrAbsolute);
 
-  const buf = await fs.readFile(abs);
-  const truncated = buf.length > maxBytes;
-  const slice = truncated ? buf.subarray(0, maxBytes) : buf;
-  // Treat as UTF-8; binary files will still produce a string (agent can ignore).
-  const content = slice.toString("utf8");
-  return {
-    relativePath: toPosix(path.relative(root, abs)),
-    content,
-    truncated,
-    size: buf.length,
-  };
+  const realRoot = await fs.realpath(root);
+
+  // Reject final-component symlinks even when O_NOFOLLOW is unavailable.
+  let lstat;
+  try {
+    lstat = await fs.lstat(abs);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw err;
+    throw err;
+  }
+  if (lstat.isSymbolicLink()) {
+    throw new Error(
+      `Path escapes project root through a symlink: "${relativeOrAbsolute}". Provide a file inside ${realRoot}.`,
+    );
+  }
+  if (!lstat.isFile()) {
+    throw new Error(`Not a regular file: "${relativeOrAbsolute}".`);
+  }
+
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(abs, openReadFlags());
+    const st = await handle.stat();
+    if (!st.isFile()) {
+      throw new Error(`Not a regular file: "${relativeOrAbsolute}".`);
+    }
+
+    // Verify the opened path (and any intermediate resolution) stays in-root.
+    const realFile = await fs.realpath(abs);
+    if (!isWithinRoot(realRoot, realFile)) {
+      throw new Error(
+        `Path escapes project root through a symlink: "${relativeOrAbsolute}". Provide a file inside ${realRoot}.`,
+      );
+    }
+
+    const size = st.size;
+    const toRead = Math.min(maxBytes, size);
+    const buf = Buffer.alloc(toRead);
+    const { bytesRead } = await handle.read(buf, 0, toRead, 0);
+    const content = buf.subarray(0, bytesRead).toString("utf8");
+    return {
+      relativePath: toPosix(path.relative(realRoot, realFile)),
+      content,
+      truncated: size > maxBytes,
+      size,
+    };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ELOOP / EMLINK often mean a symlink was encountered under O_NOFOLLOW.
+    if (code === "ELOOP" || code === "EMLINK" || code === "EPERM") {
+      throw new Error(
+        `Path escapes project root through a symlink: "${relativeOrAbsolute}". Provide a file inside ${realRoot}.`,
+      );
+    }
+    throw err;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 /** Read file if it exists; returns null when missing. */
@@ -351,9 +757,13 @@ export function looksLikeExpoOrReactNativeApp(input: ExpoSignalInput): boolean {
 }
 
 /** Lightweight project fingerprint used by tools. */
-export async function profileProject(projectRoot: string): Promise<ProjectProfile> {
+export async function profileProject(
+  projectRoot: string,
+  options: ProfileOptions = {},
+): Promise<ProjectProfile> {
   const root = await normalizeProjectRoot(projectRoot);
   const topLevelEntries = await listTopLevel(root);
+  const focusPrefixes = options.focusPrefixes;
 
   const exists = async (rel: string): Promise<boolean> => {
     try {
@@ -376,11 +786,12 @@ export async function profileProject(projectRoot: string): Promise<ProjectProfil
     topLevelEntries.some((e) => e.endsWith(".xcodeproj/")) ||
     topLevelEntries.some((e) => e.endsWith(".xcworkspace/"));
 
-  // Sample walk for language presence (cheap caps)
+  // Sample walk for language presence (cheap caps); honor focus_paths when set.
   const { files } = await walkProject(root, {
     maxFiles: 80,
     maxDepth: 6,
     extensions: new Set([".ts", ".tsx", ".js", ".jsx", ".swift", ".json", ".pbxproj", ".plist"]),
+    focusPrefixes,
   });
   const hasSwiftFiles = files.some((f) => f.ext === ".swift") || hasPackageSwift || hasXcodeProject;
   const hasTypeScriptFiles =
@@ -528,6 +939,170 @@ export function toolError(
   };
 }
 
+/** Keys of large arrays we may shrink so structured MCP payloads stay bounded. */
+const SHRINKABLE_ARRAY_KEYS = [
+  "findings",
+  "items",
+  "files_reviewed",
+  "included_paths",
+  "sample_files",
+  "threats",
+  "finding_seeds",
+] as const;
+
+/** Nested coverage arrays that can dominate structuredContent size. */
+const COVERAGE_SHRINKABLE_ARRAY_KEYS = [
+  "included_paths",
+  "excluded_paths",
+  "ignored_paths",
+  "candidate_dispositions",
+  "files_reviewed",
+] as const;
+
+function halfArrayIfLarge(value: unknown): { value: unknown; shrunk: boolean } {
+  if (Array.isArray(value) && value.length > 1) {
+    return { value: value.slice(0, Math.max(1, Math.floor(value.length / 2))), shrunk: true };
+  }
+  return { value, shrunk: false };
+}
+
+function shrinkCoverageArrays(coverage: unknown): { coverage: unknown; shrunk: boolean } {
+  if (!coverage || typeof coverage !== "object") {
+    return { coverage, shrunk: false };
+  }
+  const next: Record<string, unknown> = { ...(coverage as Record<string, unknown>) };
+  let shrunk = false;
+  for (const key of COVERAGE_SHRINKABLE_ARRAY_KEYS) {
+    const result = halfArrayIfLarge(next[key]);
+    if (result.shrunk) {
+      next[key] = result.value;
+      shrunk = true;
+    }
+  }
+  return { coverage: next, shrunk };
+}
+
+/** Minimal coverage stub for last-resort envelopes — never re-attaches bulk path lists. */
+function hardCappedCoverageStub(coverage: CoverageReport | undefined): CoverageReport | undefined {
+  if (!coverage) return undefined;
+  return {
+    included_paths: [],
+    excluded_paths: [],
+    ignored_paths: [],
+    caps: coverage.caps,
+    truncation: {
+      truncated: true,
+      reasons: [...new Set([...coverage.truncation.reasons, "response_size"])],
+      coverage_events_truncated: coverage.truncation.coverage_events_truncated,
+    },
+    files_reviewed: [],
+    candidate_dispositions: [],
+    candidate_disposition_counts: coverage.candidate_disposition_counts,
+    scan_status: "truncated",
+    not_observed_means: "scope_was_truncated_or_partial",
+  };
+}
+
+function markResponseSizeTruncation<T extends object>(data: T): T & { truncated: boolean } {
+  const coverage = (data as { coverage?: CoverageReport }).coverage;
+  return {
+    ...data,
+    truncated: true,
+    ...(coverage
+      ? {
+          coverage: {
+            ...coverage,
+            truncation: {
+              ...coverage.truncation,
+              truncated: true,
+              reasons: [...new Set([...coverage.truncation.reasons, "response_size"])],
+            },
+            scan_status: "truncated" as const,
+            not_observed_means: "scope_was_truncated_or_partial" as const,
+          },
+        }
+      : {}),
+  } as T & { truncated: boolean };
+}
+
+/**
+ * Shrink large array fields until JSON stays under the character budget.
+ * Ensures structuredContent is bounded, not only the text channel.
+ */
+export function boundStructuredPayload<T extends object>(
+  data: T,
+  limit: number = CHARACTER_LIMIT,
+): { data: T; truncated: boolean } {
+  let current: object = data;
+  let truncated = false;
+  let encoded = JSON.stringify(current);
+  if (encoded.length <= limit) {
+    return { data, truncated: false };
+  }
+
+  truncated = true;
+  current = markResponseSizeTruncation(current as T);
+
+  // Progressively cut shrinkable arrays (halve each pass), including nested coverage.
+  for (let pass = 0; pass < 8; pass++) {
+    encoded = JSON.stringify(current);
+    if (encoded.length <= limit) break;
+    const next: Record<string, unknown> = { ...(current as Record<string, unknown>) };
+    let shrunk = false;
+    for (const key of SHRINKABLE_ARRAY_KEYS) {
+      const result = halfArrayIfLarge(next[key]);
+      if (result.shrunk) {
+        next[key] = result.value;
+        shrunk = true;
+      }
+    }
+    const coverageResult = shrinkCoverageArrays(next.coverage);
+    if (coverageResult.shrunk) {
+      next.coverage = coverageResult.coverage;
+      shrunk = true;
+    }
+    if (!shrunk) break;
+    current = next;
+  }
+
+  encoded = JSON.stringify(current);
+  if (encoded.length > limit) {
+    // Last resort: keep summary envelope only; hard-cap or drop bulk coverage.
+    const base = current as Record<string, unknown>;
+    const coverageStub = hardCappedCoverageStub(
+      (base.coverage as CoverageReport | undefined) ?? undefined,
+    );
+    let envelope: Record<string, unknown> = markResponseSizeTruncation({
+      ok: base.ok ?? true,
+      project_root: base.project_root ?? null,
+      summary:
+        typeof base.summary === "string"
+          ? base.summary
+          : "Response truncated to stay within the MCP character budget.",
+      truncated: true,
+      notes: [
+        "structuredContent was reduced because the full payload exceeded CHARACTER_LIMIT.",
+        "Narrow project_root, lower max_files, or request a more focused tool.",
+      ],
+      ...(coverageStub ? { coverage: coverageStub } : {}),
+    });
+    if (JSON.stringify(envelope).length > limit) {
+      // Drop coverage entirely if the stub still exceeds the budget.
+      const { coverage: _drop, ...withoutCoverage } = envelope;
+      envelope = withoutCoverage;
+    }
+    if (JSON.stringify(envelope).length > limit && typeof envelope.summary === "string") {
+      // Trim summary as a final squeeze so JSON stays at or under the limit.
+      const overhead = JSON.stringify({ ...envelope, summary: "" }).length;
+      const maxSummary = Math.max(0, limit - overhead - 2);
+      envelope = { ...envelope, summary: envelope.summary.slice(0, maxSummary) };
+    }
+    current = envelope;
+  }
+
+  return { data: current as T, truncated };
+}
+
 /** Build a standard MCP tool success payload with JSON text + structuredContent. */
 export function toolSuccess<T extends object>(
   data: T,
@@ -536,17 +1111,22 @@ export function toolSuccess<T extends object>(
   content: { type: "text"; text: string }[];
   structuredContent: T;
 } {
+  const { data: bounded, truncated: structuredTruncated } = boundStructuredPayload(data);
   const format = options.responseFormat ?? "json";
   let text: string;
-  if (format === "markdown" && options.markdown) {
+  if (format === "markdown" && options.markdown && !structuredTruncated) {
     text = options.markdown;
+  } else if (format === "markdown" && options.markdown && structuredTruncated) {
+    // Re-serialize from bounded structured data so markdown cannot reintroduce bulk.
+    text = JSON.stringify(bounded, null, 2);
   } else {
-    text = JSON.stringify(data, null, 2);
+    text = JSON.stringify(bounded, null, 2);
   }
-  const { text: limited, truncated } = truncateText(text);
-  const structured = truncated
-    ? ({ ...data, truncated: true } as T & { truncated: boolean })
-    : data;
+  const { text: limited, truncated: textTruncated } = truncateText(text);
+  const structured =
+    structuredTruncated || textTruncated
+      ? markResponseSizeTruncation(bounded)
+      : bounded;
   return {
     content: [{ type: "text", text: limited }],
     structuredContent: structured as T,

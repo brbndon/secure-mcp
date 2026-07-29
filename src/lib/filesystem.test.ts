@@ -8,8 +8,15 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { looksLikeExpoOrReactNativeApp, profileProject, type ExpoSignalInput } from "./filesystem.js";
+import {
+  looksLikeExpoOrReactNativeApp,
+  profileProject,
+  readProjectFile,
+  type ExpoSignalInput,
+} from "./filesystem.js";
 import { recommendPackIds } from "../knowledge/packs/registry.js";
+import { promises as fs } from "node:fs";
+import os from "node:os";
 
 const fixturesDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures");
 
@@ -160,5 +167,40 @@ describe("profileProject fixtures", () => {
     const profile = await profileProject(path.join(fixturesDir, "tiny-app"));
     assert.equal(profile.hasExpo, false);
     assert.ok(profile.likelyStacks.includes("nextjs"));
+  });
+
+  it("honors focus_paths during language sampling", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-focus-"));
+    try {
+      await fs.mkdir(path.join(root, "mobile"), { recursive: true });
+      await fs.mkdir(path.join(root, "web"), { recursive: true });
+      await fs.writeFile(path.join(root, "mobile", "app.swift"), "import SwiftUI\n", "utf8");
+      await fs.writeFile(path.join(root, "web", "page.tsx"), "export default function Page() {}\n", "utf8");
+      // Root still has Next config — config probes are global.
+      await fs.writeFile(path.join(root, "next.config.js"), "module.exports = {}\n", "utf8");
+
+      const focused = await profileProject(root, { focusPrefixes: ["mobile"] });
+      assert.equal(focused.hasSwiftFiles, true);
+      // Sample walk is focus-scoped; pure TS under web/ should not drive TS sampling.
+      // hasTypeScriptFiles may still be true if package.json/tsconfig exist; here they do not.
+      assert.equal(focused.hasTypeScriptFiles, false);
+      assert.ok(focused.likelyStacks.includes("swift"));
+      assert.ok(focused.hasNextConfig);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow symlinks when reading project files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-symlink-read-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-outside-read-"));
+    try {
+      await fs.writeFile(path.join(outside, "secret.ts"), "export const secret = 1;\n", "utf8");
+      await fs.symlink(path.join(outside, "secret.ts"), path.join(root, "link.ts"));
+      await assert.rejects(() => readProjectFile(root, "link.ts"), /symlink|project root/i);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
   });
 });

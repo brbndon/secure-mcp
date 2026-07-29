@@ -7,6 +7,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import {
   findLineNumber,
+  finalizeCoverage,
+  recordCoverageExclusion,
+  DEFAULT_MAX_FILE_BYTES,
   normalizeProjectRoot,
   readProjectFile,
   snippetAround,
@@ -14,8 +17,14 @@ import {
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
-import { redactedEvidence } from "../lib/redact.js";
-import type { Finding } from "../lib/types.js";
+import {
+  redactCoverageReport,
+  redactFinding,
+  redactFindings,
+  redactedSecretPath,
+  redactedSecretPaths,
+} from "../lib/redact.js";
+import type { Finding, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
   createFindingIdFactory,
@@ -28,41 +37,36 @@ import { isSwiftSensitivePath, SWIFT_SECRETS_PATTERNS } from "../knowledge/swift
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
 
+/**
+ * Whether Next.js client-bundle secret detectors may run for this stack focus.
+ * Explicit expo/common/swift must not claim or execute Next-only detectors.
+ */
+export function shouldRunNextjsSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
+  return stack === undefined || stack === "auto" || stack === "nextjs" || stack === "typescript";
+}
+
+export function shouldRunSwiftSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
+  return stack === undefined || stack === "auto" || stack === "swift";
+}
+
+/** Pack ids claimed by secrets review for the active stack focus. */
+export function secretsPackIdsForStack(stack: StackFocus | "auto" | undefined): string[] {
+  const ids = ["core", "secrets"];
+  if (shouldRunNextjsSecretDetectors(stack)) ids.push("web-next");
+  if (shouldRunSwiftSecretDetectors(stack)) ids.push("swift-ios");
+  return ids;
+}
+
 const FALSE_POSITIVE_HINTS =
   /example|sample|placeholder|your[_-]?key|xxx+|todo|changeme|dummy|fake|test[_-]?key|process\.env/i;
 
 const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential hardcoded secrets and unsafe secret handling so the development team can rotate credentials and harden configuration.
 
-PURPOSE (defensive only)
-- Find likely secret material and mis-scoped public env vars.
-- Classify severity and confidence; redaction is applied to evidence where practical.
-- Recommend rotation, removal from source, and proper secret stores.
-- Never teach how to misuse discovered credentials or expand access.
+Args: project_root, stack?, max_files?, focus_paths?, response_format.
 
-MANDATORY AGENT WORKFLOW
-1. Inventory the repo; note env files and config paths.
-2. Run this tool; treat hits as candidates.
-3. Confirm in-repo context (fixture vs production, placeholder vs live-looking values).
-4. For confirmed issues: evidence → classify → impact_if_unremediated → remediation (including rotation) → residual_risk → verification.
-5. Urge immediate rotation for anything that appears to be a live production secret.
-6. Merge into secure_mcp_produce_findings for the remediation report.
-7. Continue until secrets-related classes for the stack are reviewed with evidence.
+Returns: findings[] (category secrets, remediation fields; evidence redacted), env_related_files, truncated, applied_pack_ids.
 
-WHAT THIS TOOL CHECKS
-- Private key blocks, cloud tokens (AWS, GitHub, Stripe, Slack), generic API key assignments, JWT-like strings
-- Committed .env files (excluding .env.example)
-- Next.js NEXT_PUBLIC_ secret-like names and client-bundle risks
-- Swift UserDefaults / app-group defaults, Keychain Always accessibility, pasteboard near credentials, sensitive prints, hardcoded secrets, Firebase GoogleService-Info.plist presence
-
-Args:
-  - project_root, stack, max_files, response_format
-
-Returns:
-  findings[] category secrets, with required remediation fields. Evidence is partially redacted.
-
-GUARDRAILS
-- Read-only filesystem inspection.
-- Do not exfiltrate secrets to external systems; help the owners fix their repository.`;
+Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
 export function registerReviewSecrets(server: McpServer): void {
   server.registerTool(
@@ -84,8 +88,9 @@ export function registerReviewSecrets(server: McpServer): void {
         const nextId = createFindingIdFactory("SEC");
         const findings: Finding[] = [];
         const filesScanned: string[] = [];
+        const detectorFamiliesRun = new Set<string>();
 
-        const { files, truncated } = await walkProject(root, {
+        const { files, coverage } = await walkProject(root, {
           maxFiles: params.max_files ?? 500,
           extensions: new Set([
             ".ts",
@@ -107,6 +112,7 @@ export function registerReviewSecrets(server: McpServer): void {
             ".pem",
             ".key",
           ]),
+          focusPrefixes: params.focus_paths,
         });
 
         const envish = files.filter(
@@ -120,13 +126,32 @@ export function registerReviewSecrets(server: McpServer): void {
         );
 
         for (const file of files) {
-          if (file.size > 256 * 1024) continue;
-          if (file.relativePath.includes(".min.")) continue;
+          if (file.size > DEFAULT_MAX_FILE_BYTES) {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "max_file_bytes",
+            });
+            continue;
+          }
+          if (file.relativePath.includes(".min.")) {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "minified_file",
+            });
+            continue;
+          }
 
           let content: string;
           try {
             content = (await readProjectFile(root, file.relativePath)).content;
           } catch {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "file_read_error",
+            });
             continue;
           }
           filesScanned.push(file.relativePath);
@@ -144,8 +169,13 @@ export function registerReviewSecrets(server: McpServer): void {
                 severity: "medium",
                 confidence: "medium",
                 category: "secrets",
+                rule_family: "secrets.environment-file",
+                root_control: "SECRET-ENV-FILE",
                 file: file.relativePath,
-                evidence: file.relativePath,
+                evidence: redactedSecretPath(file.relativePath),
+                source: "Environment/configuration file in the reviewed tree.",
+                control: "Keep secrets outside source control and use managed runtime secret storage.",
+                sink: redactedSecretPath(file.relativePath),
                 impact_if_unremediated:
                   "Local env files that are committed or shared can leak production credentials.",
                 remediation:
@@ -160,7 +190,7 @@ export function registerReviewSecrets(server: McpServer): void {
           }
 
           if (
-            (params.stack === "auto" || params.stack === "swift") &&
+            shouldRunSwiftSecretDetectors(params.stack) &&
             /GoogleService-Info\.plist$/i.test(file.relativePath)
           ) {
             findings.push(
@@ -173,8 +203,13 @@ export function registerReviewSecrets(server: McpServer): void {
                 confidence: "medium",
                 category: "secrets",
                 stack: "swift",
+                rule_family: "swift-ios.secret-config",
+                root_control: "SWIFT-FIREBASE-CONFIG",
                 file: file.relativePath,
-                evidence: file.relativePath,
+                evidence: redactedSecretPath(file.relativePath),
+                source: "Client-embedded Firebase configuration path.",
+                control: "Restrict client-safe keys and keep server secrets out of app bundles.",
+                sink: redactedSecretPath(file.relativePath),
                 impact_if_unremediated:
                   "Unrestricted client keys can be abused if API restrictions and billing controls are weak.",
                 remediation:
@@ -190,6 +225,7 @@ export function registerReviewSecrets(server: McpServer): void {
           }
 
           for (const pattern of SECRET_PATTERNS) {
+            detectorFamiliesRun.add("secrets.secret-patterns");
             pattern.regex.lastIndex = 0;
             let match: RegExpExecArray | null;
             let hits = 0;
@@ -205,30 +241,38 @@ export function registerReviewSecrets(server: McpServer): void {
               }
               hits++;
               findings.push(
-                buildFinding({
-                  id: nextId(),
-                  title: `Possible secret: ${pattern.name}`,
-                  description: `Matched heuristic for ${pattern.name}. Verify whether this is a real credential and whether it is still active; if so, remediate and rotate.`,
-                  severity: pattern.severity,
-                  confidence: FALSE_POSITIVE_HINTS.test(full) ? "low" : "high",
-                  category: "secrets",
-                  file: file.relativePath,
-                  line: findLineNumber(content, match.index),
-                  evidence: redactedEvidence(full),
-                  impact_if_unremediated: pattern.impact_if_unremediated,
-                  remediation: pattern.remediation,
-                  residual_risk:
-                    "Secrets may remain in git history or secondary systems until rotated and purged.",
-                  verification_suggestion:
-                    "Confirm rotation in the provider console; re-scan the repository and history; ensure CI secrets are updated.",
-                  cwe: "CWE-798",
-                  tags: ["secrets", pattern.name, "remediation"],
-                }),
+                redactFinding(
+                  buildFinding({
+                    id: nextId(),
+                    title: `Possible secret: ${pattern.name}`,
+                    description: `Matched heuristic for ${pattern.name}. Verify whether this is a real credential and whether it is still active; if so, remediate and rotate.`,
+                    severity: pattern.severity,
+                    confidence: FALSE_POSITIVE_HINTS.test(full) ? "low" : "high",
+                    category: "secrets",
+                    rule_family: "secrets.secret-patterns",
+                    root_control: `SECRET-PATTERN-${pattern.name.replace(/[^A-Z0-9]+/gi, "-").toUpperCase()}`,
+                    file: file.relativePath,
+                    line: findLineNumber(content, match.index),
+                    evidence: full,
+                    source: "Repository or configuration content matched a secret-like pattern.",
+                    control: pattern.remediation,
+                    sink: file.relativePath,
+                    impact_if_unremediated: pattern.impact_if_unremediated,
+                    remediation: pattern.remediation,
+                    residual_risk:
+                      "Secrets may remain in git history or secondary systems until rotated and purged.",
+                    verification_suggestion:
+                      "Confirm rotation in the provider console; re-scan the repository and history; ensure CI secrets are updated.",
+                    cwe: "CWE-798",
+                    tags: ["secrets", pattern.name, "remediation"],
+                  }),
+                ),
               );
             }
           }
 
-          if (params.stack !== "swift") {
+          if (shouldRunNextjsSecretDetectors(params.stack)) {
+            detectorFamiliesRun.add("web-next.client-bundle-secrets");
             for (const p of NEXTJS_PATTERNS.filter(
               (x) => x.id.includes("PUBLIC") || x.id.includes("USE-CLIENT"),
             )) {
@@ -236,35 +280,43 @@ export function registerReviewSecrets(server: McpServer): void {
               let match: RegExpExecArray | null;
               while ((match = p.regex.exec(content)) !== null) {
                 findings.push(
-                  buildFinding({
-                    id: nextId(),
-                    title: p.title,
-                    description:
-                      "Next.js client-bundle secret exposure pattern matched. Secrets must not be public env or client-imported.",
-                    severity: p.severity,
-                    confidence: "medium",
-                    category: "secrets",
-                    stack: "nextjs",
-                    file: file.relativePath,
-                    line: findLineNumber(content, match.index),
-                    evidence: snippetAround(content, match.index),
-                    impact_if_unremediated: p.impact_if_unremediated,
-                    remediation: p.recommendation,
-                    residual_risk: "Old client bundles may still contain rotated secrets until redeployed.",
-                    verification_suggestion:
-                      "Inspect production client bundles and env naming conventions after the fix.",
-                    cwe: p.cwe,
-                    tags: ["nextjs", "secrets", "remediation"],
-                  }),
+                  redactFinding(
+                    buildFinding({
+                      id: nextId(),
+                      title: p.title,
+                      description:
+                        "Next.js client-bundle secret exposure pattern matched. Secrets must not be public env or client-imported.",
+                      severity: p.severity,
+                      confidence: "medium",
+                      category: "secrets",
+                      stack: "nextjs",
+                      rule_family: "web-next.client-bundle-secrets",
+                      root_control: p.id,
+                      file: file.relativePath,
+                      line: findLineNumber(content, match.index),
+                      evidence: snippetAround(content, match.index),
+                      source: "Next.js client-bundle or public configuration path.",
+                      control: p.recommendation,
+                      sink: file.relativePath,
+                      impact_if_unremediated: p.impact_if_unremediated,
+                      remediation: p.recommendation,
+                      residual_risk: "Old client bundles may still contain rotated secrets until redeployed.",
+                      verification_suggestion:
+                        "Inspect production client bundles and env naming conventions after the fix.",
+                      cwe: p.cwe,
+                      tags: ["nextjs", "secrets", "remediation"],
+                    }),
+                  ),
                 );
               }
             }
           }
 
           if (
-            (params.stack === "auto" || params.stack === "swift") &&
+            shouldRunSwiftSecretDetectors(params.stack) &&
             (file.ext === ".swift" || file.ext === ".plist" || file.ext === ".entitlements")
           ) {
+            detectorFamiliesRun.add("swift-ios.secret-handling");
             for (const p of SWIFT_SECRETS_PATTERNS) {
               p.regex.lastIndex = 0;
               let match: RegExpExecArray | null;
@@ -278,25 +330,32 @@ export function registerReviewSecrets(server: McpServer): void {
                 if (nearFp && p.id === "SWIFT-HARDCODED-PASSWORD") continue;
                 hits++;
                 findings.push(
-                  buildFinding({
-                    id: nextId(),
-                    title: p.title,
-                    description: `Swift secret-handling heuristic ${p.id} matched — review storage and remove hardcoded or weakly protected secrets.`,
-                    severity: p.severity,
-                    confidence: nearFp ? "low" : p.confidence,
-                    category: p.category,
-                    stack: "swift",
-                    file: file.relativePath,
-                    line: findLineNumber(content, match.index),
-                    evidence: redactedEvidence(snippetAround(content, match.index)),
-                    impact_if_unremediated: p.impact_if_unremediated,
-                    remediation: p.recommendation,
-                    residual_risk: "Old app installs may retain secrets until users upgrade.",
-                    verification_suggestion:
-                      "Audit Keychain migration paths and confirm no secrets remain in UserDefaults, pasteboard, or source.",
-                    cwe: p.cwe,
-                    tags: ["swift", p.category, p.id, "remediation"],
-                  }),
+                  redactFinding(
+                    buildFinding({
+                      id: nextId(),
+                      title: p.title,
+                      description: `Swift secret-handling heuristic ${p.id} matched — review storage and remove hardcoded or weakly protected secrets.`,
+                      severity: p.severity,
+                      confidence: nearFp ? "low" : p.confidence,
+                      category: p.category,
+                      stack: "swift",
+                      rule_family: "swift-ios.secret-handling",
+                      root_control: p.id,
+                      file: file.relativePath,
+                      line: findLineNumber(content, match.index),
+                      evidence: snippetAround(content, match.index),
+                      source: "Swift source or Apple configuration matched a secret-handling heuristic.",
+                      control: p.recommendation,
+                      sink: file.relativePath,
+                      impact_if_unremediated: p.impact_if_unremediated,
+                      remediation: p.recommendation,
+                      residual_risk: "Old app installs may retain secrets until users upgrade.",
+                      verification_suggestion:
+                        "Audit Keychain migration paths and confirm no secrets remain in UserDefaults, pasteboard, or source.",
+                      cwe: p.cwe,
+                      tags: ["swift", p.category, p.id, "remediation"],
+                    }),
+                  ),
                 );
               }
             }
@@ -305,15 +364,35 @@ export function registerReviewSecrets(server: McpServer): void {
 
         const order = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
         findings.sort((a, b) => order[b.severity] - order[a.severity]);
+        const finalizedCoverage = finalizeCoverage(coverage, filesScanned, findings);
+        const safeFindings = redactFindings(findings);
 
+        const applied_pack_ids = secretsPackIdsForStack(params.stack);
+        const detectorFamiliesAvailable = [
+          "secrets.secret-patterns",
+          ...(shouldRunNextjsSecretDetectors(params.stack)
+            ? ["web-next.client-bundle-secrets"]
+            : []),
+          ...(shouldRunSwiftSecretDetectors(params.stack) ? ["swift-ios.secret-handling"] : []),
+        ];
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Secrets review: ${findings.length} potential issue(s) across ${filesScanned.length} file(s). Rotate confirmed live secrets; remediate storage — do not misuse credentials.`,
-          findings,
-          env_related_files: envish.map((f) => f.relativePath),
-          truncated,
-          applied_pack_ids: ["core", "secrets"] as const,
+          summary: `Secrets review: ${safeFindings.length} potential issue(s) across ${filesScanned.length} file(s)${finalizedCoverage.scan_status !== "complete" ? " (coverage is partial or truncated)" : ""}. Rotate confirmed live secrets; remediate storage — do not misuse credentials.`,
+          findings: safeFindings,
+          files_reviewed: redactedSecretPaths(filesScanned),
+          env_related_files: envish.map((f) => redactedSecretPath(f.relativePath)),
+          truncated: finalizedCoverage.truncation.truncated,
+          coverage: redactCoverageReport(finalizedCoverage),
+          applied_pack_ids,
+          knowledge_pack_traceability: {
+            consulted_pack_ids: applied_pack_ids,
+            detector_families_run: [...detectorFamiliesRun].sort(),
+            detector_families_not_run: detectorFamiliesAvailable
+              .filter((family) => !detectorFamiliesRun.has(family))
+              .sort(),
+            consulted_via: "bundled detector mappings; no remote pack lookup",
+          },
           notes: [
             "Defensive secret hygiene only: identify → classify → rotate/remediate.",
             "Evidence is partially redacted; open the file locally to confirm.",
@@ -326,7 +405,7 @@ export function registerReviewSecrets(server: McpServer): void {
           `# Secrets review (remediation focused)`,
           data.summary,
           "",
-          ...findings.slice(0, 40).map(
+          ...safeFindings.slice(0, 40).map(
             (f) =>
               `### ${f.id} [${f.severity}/${f.confidence}] ${f.title}\n` +
               `- ${f.file ?? "?"}:${f.line ?? "?"}\n` +

@@ -6,16 +6,23 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import {
+  finalizeCoverage,
   findLineNumber,
   normalizeProjectRoot,
   profileProject,
+  recordCoverageExclusion,
   readProjectFile,
   snippetAround,
   toolError,
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
-import { redactedEvidence } from "../lib/redact.js";
+import {
+  redactCoverageReport,
+  redactFinding,
+  redactFindings,
+  redactedSecretPaths,
+} from "../lib/redact.js";
 import type { Finding, ProjectProfile, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
@@ -75,6 +82,17 @@ interface AuthPattern {
   cwe?: string;
   stack?: Finding["stack"];
   filter?: (match: string, content: string) => boolean;
+}
+
+/** Stable traceability family for an auth detector, independent of report ids. */
+export function authDetectorFamily(stack: AuthPattern["stack"]): string {
+  return stack === "swift"
+    ? "swift-ios.authentication"
+    : stack === "expo"
+      ? "expo-rn.authentication"
+      : stack === "nextjs"
+        ? "web-next.authentication"
+        : "auth-web.authentication";
 }
 
 /**
@@ -265,37 +283,11 @@ export const AUTH_PATTERNS: AuthPattern[] = [
 
 const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential authentication and authorization weaknesses so the development team can harden access control.
 
-PURPOSE (defensive only)
-- Locate incomplete session validation, hardcoded credentials, weak TLS verification, middleware-only checks, and insecure mobile token storage.
-- Classify each potential weakness (severity, confidence, category, CWE when known).
-- Recommend concrete remediation steps and verification ideas.
-- Never produce exploit instructions, credential-stuffing playbooks, or bypass recipes.
+Args: project_root, stack?, max_files?, focus_paths?, response_format.
 
-MANDATORY AGENT WORKFLOW (multi-phase; keep intermediate notes)
-1. Inventory + architecture tools first to locate auth-related paths.
-2. Run this tool for candidate weaknesses with evidence.
-3. Open cited files and verify session checks, ownership checks, and secret handling (read-only).
-4. For each confirmed item, complete: evidence → classification → impact_if_unremediated → remediation → residual_risk → verification_suggestion.
-5. Cross-check with secure_mcp_review_secrets and secure_mcp_build_remediation_threat_model.
-6. Continue until major authn/authz classes for the stack are covered with evidence; then merge via secure_mcp_produce_findings.
+Returns: findings[] (shared Finding schema), applied_pack_ids, files_reviewed, notes.
 
-WHAT THIS TOOL CHECKS (heuristics)
-- Hardcoded JWT/signing secrets and Authorization headers
-- Disabled TLS certificate verification
-- Next.js middleware-centric auth patterns needing defense in depth
-- Swift UserDefaults / app-group token storage, overly broad Keychain accessibility, URLSession server-trust handlers that appear to disable validation
-- Expo / React Native token storage (AsyncStorage / MMKV vs SecureStore) and credential-shaped EXPO_PUBLIC_ env
-- Presence of auth helpers that still need object-level authorization review
-
-Args:
-  - project_root, stack, max_files, response_format
-
-Returns:
-  findings[] in the shared Finding schema (remediation required fields).
-
-GUARDRAILS
-- Read-only; does not execute project code.
-- Frame all follow-up as helping the codebase owners fix their own application.`;
+Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
 export function registerCheckAuthentication(server: McpServer): void {
   server.registerTool(
@@ -314,12 +306,13 @@ export function registerCheckAuthentication(server: McpServer): void {
     async (params: Input) => {
       try {
         const root = await normalizeProjectRoot(params.project_root);
-        const profile = await profileProject(root);
+        const profile = await profileProject(root, { focusPrefixes: params.focus_paths });
         const nextId = createFindingIdFactory("AUTH");
         const findings: Finding[] = [];
         const filesReviewed: string[] = [];
+        const detectorFamiliesRun = new Set<string>();
 
-        const { files } = await walkProject(root, {
+        const { files, coverage } = await walkProject(root, {
           maxFiles: params.max_files ?? 400,
           extensions: new Set([
             ".ts",
@@ -333,6 +326,7 @@ export function registerCheckAuthentication(server: McpServer): void {
             ".mjs",
             ".cjs",
           ]),
+          focusPrefixes: params.focus_paths,
         });
 
         const candidates = files.filter((f) => isAuthCandidatePath(f.relativePath));
@@ -354,18 +348,44 @@ export function registerCheckAuthentication(server: McpServer): void {
           ).values(),
         ].slice(0, 80);
 
+        const scanPaths = new Set(toScan.map((file) => file.relativePath));
+        for (const file of files) {
+          if (!scanPaths.has(file.relativePath)) {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "authentication_candidate_filter_or_budget",
+            });
+          }
+        }
+
         for (const file of toScan) {
-          if (file.size > 256 * 1024) continue;
+          if (file.size > 256 * 1024) {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "max_file_bytes",
+            });
+            continue;
+          }
           let content: string;
           try {
             content = (await readProjectFile(root, file.relativePath)).content;
           } catch {
+            recordCoverageExclusion(coverage, {
+              path: file.relativePath,
+              kind: "file",
+              reason: "file_read_error",
+            });
             continue;
           }
           filesReviewed.push(file.relativePath);
 
           for (const pattern of AUTH_PATTERNS) {
             if (!authPatternAppliesToStack(pattern.stack, params.stack)) continue;
+
+            const detectorFamily = authDetectorFamily(pattern.stack);
+            detectorFamiliesRun.add(detectorFamily);
 
             pattern.regex.lastIndex = 0;
             let match: RegExpExecArray | null;
@@ -375,7 +395,8 @@ export function registerCheckAuthentication(server: McpServer): void {
               hits++;
               const rawEvidence = snippetAround(content, match.index);
               findings.push(
-                buildFinding({
+                redactFinding(
+                  buildFinding({
                   id: nextId(),
                   title: pattern.title,
                   description: pattern.description,
@@ -383,12 +404,20 @@ export function registerCheckAuthentication(server: McpServer): void {
                   confidence: pattern.confidence,
                   category: "authentication",
                   stack: pattern.stack ?? "common",
+                  rule_family: detectorFamily,
+                  root_control: pattern.id,
                   file: file.relativePath,
                   line: findLineNumber(content, match.index),
-                  evidence:
-                    pattern.stack === "swift"
-                      ? redactedEvidence(rawEvidence)
-                      : rawEvidence,
+                  evidence: rawEvidence,
+                  source: "Request, session, credential, or device-storage path identified by the detector.",
+                  control: pattern.remediation,
+                  sink: `${file.relativePath}:${findLineNumber(content, match.index)}`,
+                  proof_gap: [
+                    "Confirm the sensitive operation and its authorization/ownership checks in context.",
+                  ],
+                  validation: [
+                    "Add negative tests for unauthenticated and unauthorized access, then re-run the category review.",
+                  ],
                   impact_if_unremediated: pattern.impact_if_unremediated,
                   remediation: pattern.remediation,
                   residual_risk:
@@ -397,7 +426,8 @@ export function registerCheckAuthentication(server: McpServer): void {
                     "Add automated tests for unauthenticated/unauthorized access; re-run this tool after remediation.",
                   cwe: pattern.cwe,
                   tags: ["authentication", pattern.id, "remediation"],
-                }),
+                  }),
+                ),
               );
             }
           }
@@ -405,9 +435,10 @@ export function registerCheckAuthentication(server: McpServer): void {
 
         const nextProfileSignal =
           profile.hasNextConfig || profile.likelyStacks.includes("nextjs");
+        const hasMiddleware = files.some((f) => /middleware\.(ts|js)$/.test(f.relativePath));
         if (shouldEmitProfileAuthFinding("nextjs", nextProfileSignal, params.stack)) {
-          const hasMiddleware = files.some((f) => /middleware\.(ts|js)$/.test(f.relativePath));
           if (hasMiddleware) {
+            detectorFamiliesRun.add("web-next.profile-auth-boundary");
             findings.push(
               buildFinding({
                 id: nextId(),
@@ -418,7 +449,12 @@ export function registerCheckAuthentication(server: McpServer): void {
                 confidence: "medium",
                 category: "authentication",
                 stack: "nextjs",
+                rule_family: "web-next.profile-auth-boundary",
+                root_control: "AUTH-MIDDLEWARE-MATCHER-COVERAGE",
                 evidence: "middleware file present in project tree",
+                source: "Next.js middleware entrypoint detected in the reviewed tree.",
+                control: "Repeat authentication and authorization at each sensitive server entrypoint.",
+                sink: "Next.js middleware matcher and server entrypoints",
                 impact_if_unremediated:
                   "Sensitive server entrypoints may lack authentication or authorization if only middleware is relied upon.",
                 remediation:
@@ -433,6 +469,7 @@ export function registerCheckAuthentication(server: McpServer): void {
         }
 
         if (shouldEmitProfileAuthFinding("expo", profile.hasExpo, params.stack)) {
+          detectorFamiliesRun.add("expo-rn.profile-auth-storage");
           findings.push(
             buildFinding({
               id: nextId(),
@@ -443,7 +480,12 @@ export function registerCheckAuthentication(server: McpServer): void {
               confidence: "low",
               category: "authentication",
               stack: "expo",
+              rule_family: "expo-rn.profile-auth-storage",
+              root_control: "AUTH-EXPO-STORAGE-REDIRECTS",
               evidence: "Expo / React Native signals present in project profile",
+              source: "Expo / React Native project signals in package/configuration files.",
+              control: "Use platform-secure token storage and exact redirect validation.",
+              sink: "Mobile token storage and auth redirect paths",
               impact_if_unremediated:
                 "Client-side token storage or loose auth redirects can expose sessions on the device or in logs.",
               remediation:
@@ -458,6 +500,7 @@ export function registerCheckAuthentication(server: McpServer): void {
         }
 
         if (shouldEmitProfileAuthFinding("swift", profile.hasSwiftFiles, params.stack)) {
+          detectorFamiliesRun.add("swift-ios.profile-auth-storage");
           findings.push(
             buildFinding({
               id: nextId(),
@@ -468,7 +511,12 @@ export function registerCheckAuthentication(server: McpServer): void {
               confidence: "low",
               category: "authentication",
               stack: "swift",
+              rule_family: "swift-ios.profile-auth-storage",
+              root_control: "AUTH-SWIFT-KEYCHAIN-STORAGE",
               evidence: "Swift / Xcode signals present in project profile",
+              source: "Swift/Xcode project signals in the reviewed tree.",
+              control: "Use appropriately protected Keychain storage for session material.",
+              sink: "Keychain/UserDefaults session-token paths",
               impact_if_unremediated:
                 "Session tokens stored insecurely increase risk of local credential exposure.",
               remediation: "Audit Keychain helpers and entitlement keychain-access-groups; migrate secrets from UserDefaults.",
@@ -480,15 +528,42 @@ export function registerCheckAuthentication(server: McpServer): void {
           );
         }
 
+        const detectorFamiliesAvailable = new Set(
+          AUTH_PATTERNS.filter((pattern) => authPatternAppliesToStack(pattern.stack, params.stack)).map(
+            (pattern) => authDetectorFamily(pattern.stack),
+          ),
+        );
+        if (shouldEmitProfileAuthFinding("nextjs", nextProfileSignal, params.stack) && hasMiddleware) {
+          detectorFamiliesAvailable.add("web-next.profile-auth-boundary");
+        }
+        if (shouldEmitProfileAuthFinding("expo", profile.hasExpo, params.stack)) {
+          detectorFamiliesAvailable.add("expo-rn.profile-auth-storage");
+        }
+        if (shouldEmitProfileAuthFinding("swift", profile.hasSwiftFiles, params.stack)) {
+          detectorFamiliesAvailable.add("swift-ios.profile-auth-storage");
+        }
+
         const applied_pack_ids = authPackIdsForProfile(profile, params.stack);
+        const finalizedCoverage = finalizeCoverage(coverage, filesReviewed, findings);
+        const safeFindings = redactFindings(findings);
 
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Authentication review: ${findings.length} potential weakness(es) across ${filesReviewed.length} file(s). Classify, confirm, and remediate — do not generate exploits.`,
-          findings,
-          files_reviewed: filesReviewed,
+          summary: `Authentication review: ${safeFindings.length} potential weakness(es) across ${filesReviewed.length} file(s)${finalizedCoverage.scan_status !== "complete" ? " (coverage is partial or truncated)" : ""}. Classify, confirm, and remediate — do not generate exploits.`,
+          findings: safeFindings,
+          files_reviewed: redactedSecretPaths(filesReviewed),
+          truncated: finalizedCoverage.truncation.truncated,
+          coverage: redactCoverageReport(finalizedCoverage),
           applied_pack_ids,
+          knowledge_pack_traceability: {
+            consulted_pack_ids: applied_pack_ids,
+            detector_families_run: [...detectorFamiliesRun].sort(),
+            detector_families_not_run: [...detectorFamiliesAvailable]
+              .filter((family) => !detectorFamiliesRun.has(family))
+              .sort(),
+            consulted_via: "bundled detector mappings and routed pack metadata; no remote pack lookup",
+          },
           notes: [
             "Defensive review only: identify → classify → remediate.",
             "Heuristic candidates need manual confirmation of data flow and authorization logic.",
@@ -502,7 +577,7 @@ export function registerCheckAuthentication(server: McpServer): void {
           "",
           data.summary,
           "",
-          ...findings.map(
+          ...safeFindings.map(
             (f) =>
               `## [${f.severity}/${f.confidence}] ${f.id}: ${f.title}\n` +
               `${f.description}\n` +
