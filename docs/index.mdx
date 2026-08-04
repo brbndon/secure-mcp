@@ -1,0 +1,67 @@
+---
+title: secure-mcp
+description: "Defensive, agent-first security audits over MCP: scope repositories, route stack-aware guidance, and produce structured remediation findings."
+sidebar:
+  label: Start here
+  order: 1
+---
+
+<Badge variant="success">read-only by design</Badge> <Badge variant="accent">stdio transport</Badge>
+
+## Security review that agents can carry forward
+
+`secure-mcp` gives coding agents a small, structured toolkit for defensive code review. It inventories a repository, detects its stack, loads only the knowledge packs it needs, and turns likely weaknesses into remediation-ready findings.
+
+The server is intentionally local. It reads files under an approved `project_root`, never executes the target project, and keeps stdout reserved for MCP JSON-RPC.
+
+<CardGroup cols={2}>
+  <Card title="Install and connect" href="/installation" icon="rocket">
+    Build the server, provide a local license key, and connect it to Claude, Cursor, Codex, or another stdio client.
+  </Card>
+  <Card title="Run the audit workflow" href="/quickstart" icon="workflow">
+    Follow the multi-phase sequence from inventory to confirmed findings and a human-facing remediation plan.
+  </Card>
+  <Card title="Explore the tool surface" href="/tools" icon="scan-search">
+    See what each tool reads, returns, and contributes to the final report.
+  </Card>
+  <Card title="Host these docs" href="/hosting" icon="github">
+    The repository includes a GitHub Pages workflow for publishing the Blume site on every main-branch push.
+  </Card>
+</CardGroup>
+
+## The operating model
+
+<Columns cols={3}>
+  <Column>
+    ### Scope first
+
+    Start with project structure and architecture so scans stay bounded and stack-aware.
+  </Column>
+  <Column>
+    ### Remediate clearly
+
+    Every finding carries evidence, classification, impact, remediation, residual risk, and verification.
+  </Column>
+  <Column>
+    ### Verify before reporting
+
+    Heuristics are candidates. Agents confirm data flow before treating a signal as a finding.
+  </Column>
+</Columns>
+
+:::note
+This project is for authorized defensive review only. It does not generate exploits, execute code from the target repository, or use discovered secrets against systems.
+:::
+
+## What it covers today
+
+| Surface | Coverage |
+| --- | --- |
+| Web | TypeScript, Next.js App Router, API handlers, cookies, CSRF, and `NEXT_PUBLIC_` exposure |
+| Apple platforms | Swift, SwiftUI, Keychain, ATS, WebView bridges, deep links, and macOS controls |
+| React Native | Expo config, SecureStore, OTA boundaries, deep links, and token storage |
+| Cross-cutting | Authentication, injection risks, secrets, threat modeling, and report rollup |
+
+<Card title="Read the design notes" href="/architecture" icon="book-open">
+  Understand the process boundaries, filesystem policy, progressive knowledge packs, and extension points.
+</Card>

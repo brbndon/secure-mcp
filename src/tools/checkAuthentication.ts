@@ -5,6 +5,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
+import { loadConfig, type ServerConfig } from "../config.js";
 import {
   finalizeCoverage,
   findLineNumber,
@@ -23,6 +24,7 @@ import {
   redactFindings,
   redactedSecretPaths,
 } from "../lib/redact.js";
+import { escapeMarkdown } from "../lib/markdown.js";
 import type { Finding, ProjectProfile, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
@@ -289,7 +291,10 @@ Returns: findings[] (shared Finding schema), applied_pack_ids, files_reviewed, n
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
-export function registerCheckAuthentication(server: McpServer): void {
+export function registerCheckAuthentication(
+  server: McpServer,
+  config: ServerConfig = loadConfig(),
+): void {
   server.registerTool(
     "secure_mcp_check_authentication",
     {
@@ -306,14 +311,22 @@ export function registerCheckAuthentication(server: McpServer): void {
     async (params: Input) => {
       try {
         const root = await normalizeProjectRoot(params.project_root);
-        const profile = await profileProject(root, { focusPrefixes: params.focus_paths });
+        const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
+        const profile = await profileProject(root, {
+          focusPrefixes: params.focus_paths,
+          maxFiles: effectiveMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
+        });
         const nextId = createFindingIdFactory("AUTH");
         const findings: Finding[] = [];
         const filesReviewed: string[] = [];
         const detectorFamiliesRun = new Set<string>();
 
         const { files, coverage } = await walkProject(root, {
-          maxFiles: params.max_files ?? 400,
+          maxFiles: params.max_files ?? config.defaultMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
           extensions: new Set([
             ".ts",
             ".tsx",
@@ -360,7 +373,7 @@ export function registerCheckAuthentication(server: McpServer): void {
         }
 
         for (const file of toScan) {
-          if (file.size > 256 * 1024) {
+          if (file.size > config.maxFileBytes) {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,
               kind: "file",
@@ -370,7 +383,7 @@ export function registerCheckAuthentication(server: McpServer): void {
           }
           let content: string;
           try {
-            content = (await readProjectFile(root, file.relativePath)).content;
+            content = (await readProjectFile(root, file.relativePath, config.maxFileBytes)).content;
           } catch {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,
@@ -579,11 +592,13 @@ export function registerCheckAuthentication(server: McpServer): void {
           "",
           ...safeFindings.map(
             (f) =>
-              `## [${f.severity}/${f.confidence}] ${f.id}: ${f.title}\n` +
-              `${f.description}\n` +
-              (f.file ? `- Evidence location: ${f.file}${f.line ? `:${f.line}` : ""}\n` : "") +
-              `- Impact if unremediated: ${f.impact_if_unremediated}\n` +
-              `- Remediation: ${f.remediation}\n`,
+              `## [${escapeMarkdown(`${f.severity}/${f.confidence}`)}] ${escapeMarkdown(f.id)}: ${escapeMarkdown(f.title)}\n` +
+              `${escapeMarkdown(f.description)}\n` +
+              (f.file
+                ? `- Evidence location: ${escapeMarkdown(`${f.file}${f.line ? `:${f.line}` : ""}`)}\n`
+                : "") +
+              `- Impact if unremediated: ${escapeMarkdown(f.impact_if_unremediated)}\n` +
+              `- Remediation: ${escapeMarkdown(f.remediation)}\n`,
           ),
         ].join("\n");
 

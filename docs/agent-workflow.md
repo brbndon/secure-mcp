@@ -1,4 +1,10 @@
-# Agent workflow
+---
+title: Agent workflow
+description: Follow secure-mcp's multi-phase, remediation-focused sequence for an authorized code review, from bounded inventory to confirmed findings and human handoff.
+sidebar:
+  label: Agent workflow
+  order: 8
+---
 
 How a coding agent should use `secure-mcp` for **defensive, remediation-focused** secure code review.
 
@@ -29,7 +35,7 @@ Prefer long, multi-phase analysis with intermediate artifacts when thoroughness 
 Phase 1  list_project_structure          → inventory artifact (no packs yet)
 Phase 2  analyze_architecture            → stacks + recommended_packs + pack_batches
          get_knowledge_pack              → pack_batches[0] first (summary); more batches only if needed
-         build_remediation_threat_model  → trust boundaries + controls (optional)
+         build_remediation_threat_model  → evidence-backed assets/boundaries + controls (optional)
 Phase 3  check_authentication
          analyze_injection_risks
          review_secrets                  → category candidate artifacts
@@ -49,7 +55,8 @@ After each phase, retain structured notes the final report can cite:
 | Artifact | Contents |
 |----------|----------|
 | Inventory | stacks, file counts, sample paths |
-| Architecture | surfaces, trust boundaries, `recommended_packs`, `pack_batches`, small `checklist_seed` |
+| Coverage | included/reviewed paths, ignored/excluded reasons, caps, truncation, and candidate dispositions |
+| Architecture | surfaces, evidence-backed trust boundaries, `recommended_packs`, `pack_batches`, small `checklist_seed` |
 | Knowledge packs | checklist items for detected stacks only |
 | Threat model (remediation) | STRIDE items + recommended controls |
 | Category findings | raw tool findings with confidence |
@@ -98,6 +105,8 @@ Every finding passed to `secure_mcp_produce_findings` must include:
 
 ## False positive hygiene
 
+Treat `coverage.not_observed_means` as authoritative: only `no_candidate_in_files_reviewed` describes an empty result for the reviewed scope. A partial/truncated status requires a scoped follow-up before claiming a category was reviewed.
+
 Before final report:
 
 1. Open each high/critical finding’s file at the cited line.
@@ -110,7 +119,7 @@ Before final report:
 **Medium monorepo:**
 
 ```json
-{ "project_root": "/abs/path", "max_files": 800, "stack": "auto" }
+{ "project_root": "/abs/path", "max_files": 800, "stack": "auto", "focus_paths": ["src/app"] }
 ```
 
 **Swift-focused hardening pass:**

@@ -1,0 +1,72 @@
+---
+title: Installation
+description: Build secure-mcp locally, configure its defensive license gate, and connect the stdio MCP server to Claude, Cursor, Codex, or another authorized client.
+sidebar:
+  label: Installation
+  order: 2
+---
+
+## Installation
+
+`secure-mcp` runs as a local subprocess over stdio. The client launches the built entrypoint, passes a license key in the environment, and exchanges MCP messages over stdin/stdout.
+
+## Requirements
+
+- Node.js 20 or newer
+- pnpm preferred (npm also works)
+- An authorized local checkout of the server
+
+## Build the server
+
+```bash
+pnpm install
+pnpm build
+```
+
+The compiled entrypoint is `dist/index.js`.
+
+## Configure the local license
+
+For local development and smoke tests, use the documented development key with development mode enabled:
+
+```bash
+export SECURE_MCP_DEV_MODE=1
+export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
+```
+
+The server validates the key format locally and emits a warning on stderr in development mode. Do not use the development key with production or real data.
+
+## Connect a client
+
+Point your MCP client at the built entrypoint and pass the license environment variable. Claude Desktop and Claude Code use a configuration shaped like this:
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+      "env": {
+        "SECURE_MCP_LICENSE_KEY": "smcp_dev_local_testing_key_v1",
+        "SECURE_MCP_DEV_MODE": "1"
+      }
+    }
+  }
+}
+```
+
+Cursor and other stdio clients use the same `command`, `args`, and `env` values. The `project_root` supplied to a tool must be visible to the machine running the server; absolute paths are safest.
+
+:::tip
+Run `pnpm smoke` after building to confirm the server starts, lists its tools, and can analyze the included fixture without executing it.
+:::
+
+## Development loop
+
+```bash
+pnpm dev
+pnpm test
+pnpm verify
+```
+
+`pnpm dev` runs the MCP server through `tsx`; it is a stdio process, so logs belong on stderr and the terminal may look quiet while the client is connected.

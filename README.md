@@ -25,13 +25,16 @@ Rule-based scanners are useful, but agents still need:
 | `secure_mcp_list_project_structure` | Inventory for review scoping |
 | `secure_mcp_analyze_architecture` | Stacks, trust boundaries, `recommended_packs` / `pack_batches` |
 | `secure_mcp_get_knowledge_pack` | On-demand stack checklists (max 6 packs/call) |
+| `secure_mcp_get_audit_guidance` | Detailed agent workflow/guardrails on demand (avoids description bloat) |
 | `secure_mcp_check_authentication` | Authn/authz weaknesses → remediation |
 | `secure_mcp_analyze_injection_risks` | Injection-class risks → remediation |
 | `secure_mcp_review_secrets` | Secret hygiene → rotate & remediate |
 | `secure_mcp_build_remediation_threat_model` | STRIDE fragments for hardening priority |
 | `secure_mcp_produce_findings` | Dedupe, prioritise, remediation report |
 
-All tools are **read-only**, never execute project code, and respect ignore patterns / size caps.
+All tools are **read-only**, never execute project code, and respect ignore patterns / size caps. Bounded audit tools return structured `coverage` with included/reviewed/excluded paths, ignore reasons, caps, truncation, and candidate dispositions; an empty finding list is not a claim that the whole tree was scanned.
+
+Shared optional argument: `focus_paths` accepts relative path prefixes for scoped drill-down on `secure_mcp_list_project_structure`, `secure_mcp_analyze_architecture`, and the category/remediation tools; omit it for a whole-repository review.
 
 ### Finding structure
 
@@ -42,6 +45,8 @@ Every finding is structured as:
 3. **impact_if_unremediated** (high-level only)
 4. **remediation**
 5. **residual_risk** / **verification_suggestion**
+
+Findings also carry additive traceability when available: stable `rule_family`, `root_control`, and `instance_id`, plus `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and a candidate `disposition`.
 
 ## Requirements
 
@@ -59,6 +64,7 @@ pnpm install
 pnpm build
 
 # Run (stdio MCP server)
+export SECURE_MCP_DEV_MODE=1
 export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
 pnpm start
 ```
@@ -66,6 +72,7 @@ pnpm start
 Development (tsx, no build step):
 
 ```bash
+export SECURE_MCP_DEV_MODE=1
 export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
 pnpm dev
 ```
@@ -73,13 +80,14 @@ pnpm dev
 Smoke test (spawns the server, lists tools, runs a few calls against a fixture):
 
 ```bash
+export SECURE_MCP_DEV_MODE=1
 export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
 pnpm smoke
 ```
 
 ## License key
 
-The server **refuses to start** without a valid key.
+The server refuses to start without a valid key (except in DEV_MODE with the documented dev key, which emits a warning).
 
 | Source | Variable |
 |--------|----------|
@@ -88,11 +96,14 @@ The server **refuses to start** without a valid key.
 
 **Format:** `smcp_<token>` where token is ≥16 characters of `[A-Za-z0-9_-]`.
 
-**Development key (documented for local/CI only):**
+**Development / CI key (local/agent testing only):**
 
 ```text
 smcp_dev_local_testing_key_v1
 ```
+
+**To use dev key:** set both `SECURE_MCP_DEV_MODE=1` and `SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1`.
+A clear warning is emitted on stderr. Never use in production or with real data.
 
 v1 performs **local format validation only** (no network). A remote validator can be added later without changing tool names.
 
@@ -109,6 +120,7 @@ Use the built entrypoint after `pnpm build`. Always set the license env var in t
       "command": "node",
       "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
       "env": {
+        "SECURE_MCP_DEV_MODE": "1",
         "SECURE_MCP_LICENSE_KEY": "smcp_dev_local_testing_key_v1"
       }
     }
@@ -128,7 +140,7 @@ Point the client at:
 node /absolute/path/to/secure-mcp/dist/index.js
 ```
 
-with `SECURE_MCP_LICENSE_KEY` in the process environment.
+with `SECURE_MCP_LICENSE_KEY` in the process environment; when using the documented dev key, also set `SECURE_MCP_DEV_MODE=1`.
 
 > **Important:** `project_root` arguments must be paths **visible to the machine running the MCP server** (usually your laptop). Prefer absolute paths.
 
@@ -137,7 +149,7 @@ with `SECURE_MCP_LICENSE_KEY` in the process environment.
 1. `secure_mcp_list_project_structure` — inventory (no knowledge packs yet)  
 2. `secure_mcp_analyze_architecture` — stacks, trust boundaries, `recommended_packs`, `pack_batches`  
 3. `secure_mcp_get_knowledge_pack` — load `pack_batches[0]` first (`detail=summary`; max 6 pack ids per call; items fair-sampled across packs, default max 24)  
-4. Category tools: authentication, injection-risks, secrets (+ optional threat model)  
+4. Category tools: authentication, injection-risks, secrets, threat-model (support focus_paths)
 5. Confirm data flows in code; no exploit generation  
 6. `secure_mcp_produce_findings` — remediation-focused report  
 
@@ -170,6 +182,7 @@ fixtures/rn-lib-no-expo/ # react-native dep + non-Expo app.json (detection guard
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
+| `SECURE_MCP_DEV_MODE` | — | Set to `1` to allow the documented dev key for local/agent/CI testing only |
 | `SECURE_MCP_LICENSE_KEY` | — | License key |
 | `SECURE_MCP_LICENSE_FILE` | — | Path to key file |
 | `SECURE_MCP_MAX_FILES` | `400` | Default walk cap |
@@ -184,6 +197,19 @@ fixtures/rn-lib-no-expo/ # react-native dep + non-Expo app.json (detection guard
 - [Security auditor skill](skills/security-auditor.md)
 - [Development skill](skills/development.md)
 - [Sample audit session](examples/sample-audit-session.md)
+- [Security policy](SECURITY.md)
+
+### Docs website
+
+The repository includes a Blume-powered docs site and a GitHub Pages workflow:
+
+```bash
+pnpm docs:dev
+pnpm docs:build
+pnpm docs:preview
+```
+
+Local docs verification uses `.blume-verify/dist` so it stays separate from the MCP server's compiled `dist/` output. The GitHub Pages workflow builds the production artifact in a clean runner and publishes it through `.github/workflows/deploy-docs.yml`.
 
 ## Security notes
 
@@ -191,6 +217,8 @@ fixtures/rn-lib-no-expo/ # react-native dep + non-Expo app.json (detection guard
 - The server does **not** execute target project code.
 - Logs go to **stderr** only (stdout is MCP JSON-RPC).
 - Secret findings redact evidence where practical; still handle outputs carefully.
+- Secret-like evidence paths and snippets are redacted before return; source file locations remain available for authorized local remediation.
+- `not_observed_means` in coverage distinguishes “no candidate in files reviewed” from a partial or truncated scan.
 - This product is for **authorized defensive review** of codebases you own or are engaged to harden.
 
 ## Extending

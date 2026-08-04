@@ -1,0 +1,41 @@
+---
+title: GitHub Pages
+description: Publish this Blume documentation site to GitHub Pages with a static build, project-site base path, local search, and AI-readable documentation artifacts.
+sidebar:
+  label: GitHub Pages
+  order: 5
+---
+
+## GitHub Pages
+
+This repository is ready to publish its Blume docs site as a static GitHub Pages deployment. The workflow at `.github/workflows/deploy-docs.yml` builds the site and uploads the generated artifact whenever `main` changes.
+
+## Local build
+
+```bash
+pnpm docs:build
+pnpm docs:preview
+```
+
+The docs build uses `.blume-verify/dist` so it does not collide with the MCP server's TypeScript output in `dist/`.
+
+## Enable Pages once
+
+1. Push the repository to GitHub with `main` as its default branch.
+2. Open **Settings → Pages**.
+3. Set **Source** to **GitHub Actions**.
+4. Push a change or run **Deploy docs** manually from the Actions tab.
+
+The workflow derives the project-site base path and canonical URL from GitHub's `GITHUB_REPOSITORY` value. A repository named `owner.github.io` is treated as a root user site; other repositories publish under `/<repo>`.
+
+## Custom domains and forks
+
+Set `BLUME_SITE` and `BLUME_BASE_PATH` in the workflow if you use a custom domain or a different mount point:
+
+```yaml
+env:
+  BLUME_SITE: https://docs.example.com
+  BLUME_BASE_PATH: ""
+```
+
+The output is fully static: HTML, local search, sitemap/robots metadata when a site URL is available, and AI-readable `llms.txt` files. No MCP server secrets or license keys are needed to build the documentation site.

@@ -28,6 +28,8 @@ Application security engineer using secure-mcp for structured discovery, then re
 **Do not load knowledge packs until after Phase 1 stack detection.**  
 Use architecture `pack_batches` (preferred) or `recommended_packs`. Each `get_knowledge_pack` call accepts **at most 6** pack ids — load `pack_batches[0]` first with `detail=summary`; load later batches only if needed. Never request all packs. Multi-pack responses **fair-sample** items (round-robin) so stack packs are not starved under `max_items` (default 24). Category tools return findings (heuristics server-side), not textbooks.
 
+Every bounded inventory/category result includes coverage accounting. Preserve it with the findings: an empty `findings` array means no candidate was observed in `files_reviewed`, and only when `coverage.not_observed_means` is `no_candidate_in_files_reviewed`; partial or truncated coverage must be reported and followed up.
+
 ## Pack routing (typical)
 
 Order matches runtime priority (`core` → `secrets` → stack packs):
@@ -60,7 +62,7 @@ Forced `stack` (e.g. `swift`): exclusive focus — packs for that stack only (do
 
 ### Phase 3 — Category analysis
 
-Run in parallel when possible:
+Run in parallel when possible (focus_paths supported):
 
 - `secure_mcp_check_authentication`
 - `secure_mcp_analyze_injection_risks`
@@ -80,6 +82,8 @@ Call `secure_mcp_produce_findings`; write executive summary → prioritised fixe
 ## Finding quality bar
 
 Prefer the shared Finding schema so `produce_findings` can sort and dedupe. Separate confirmed / likely / needs review. Never claim “the app is secure.”
+
+Use stable `instance_id`/`root_control` values when merging runs, and retain `source`, `control`, `sink`, `counterevidence`, `proof_gap`, and `validation` so reviewers can distinguish evidence from assumptions.
 
 ## Communication
 

@@ -12,10 +12,15 @@
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/tools/checkAuthentication.test.ts",
+    "test": "tsx --test src/server.test.ts src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/knowledge/findings-schema.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/tools/checkAuthentication.test.ts src/tools/produceFindings.test.ts src/tools/reviewSecrets.test.ts src/tools/buildRemediationThreatModel.test.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "typecheck": "tsc --noEmit",
-    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm smoke"
+    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm smoke",
+    "docs:dev": "npx --yes blume@1.2.0 dev",
+    "docs:build": "BLUME_RUNTIME_DIR=.blume-verify npx --yes blume@1.2.0 build",
+    "docs:check": "BLUME_RUNTIME_DIR=.blume-verify npx --yes blume@1.2.0 check",
+    "docs:validate": "BLUME_RUNTIME_DIR=.blume-verify npx --yes blume@1.2.0 validate",
+    "docs:preview": "pnpm exec astro preview --root .blume-verify"
   },
   "engines": {
     "node": ">=20"
@@ -37,6 +42,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
+    "blume": "1.2.0",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }

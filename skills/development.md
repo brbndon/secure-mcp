@@ -24,6 +24,7 @@ Anything an agent or hosted model reads (tool names/descriptions, skills, docs, 
 ```bash
 pnpm install
 pnpm build
+export SECURE_MCP_DEV_MODE=1
 export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
 pnpm smoke
 ```

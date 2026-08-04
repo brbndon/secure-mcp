@@ -278,15 +278,28 @@ export function countEligiblePackItems(
  * Count how many returned items belong to each pack (by item id membership).
  * Used so agents can see fair multi-pack coverage (or truncation).
  */
+/** Preserve first-seen order while dropping duplicate pack ids. */
+export function uniquePackIds(packIds: readonly PackId[]): PackId[] {
+  const seen = new Set<PackId>();
+  const out: PackId[] = [];
+  for (const id of packIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 export function countItemsPerPack(
   items: ReadonlyArray<{ id: string }>,
   packIds: readonly PackId[],
 ): Record<PackId, number> {
+  const uniqueIds = uniquePackIds(packIds);
   const counts = {} as Record<PackId, number>;
-  for (const id of packIds) counts[id] = 0;
+  for (const id of uniqueIds) counts[id] = 0;
 
   const idToPacks = new Map<string, PackId[]>();
-  for (const packId of packIds) {
+  for (const packId of uniqueIds) {
     for (const item of PACK_BY_ID[packId].items) {
       const list = idToPacks.get(item.id) ?? [];
       list.push(packId);

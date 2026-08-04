@@ -6,7 +6,9 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
+import { loadConfig, type ServerConfig } from "../config.js";
 import {
+  finalizeInventoryCoverage,
   normalizeProjectRoot,
   profileProject,
   readProjectFileIfExists,
@@ -14,6 +16,8 @@ import {
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
+import { redactCoverageReport, redactedSecretPaths } from "../lib/redact.js";
+import { escapeMarkdown } from "../lib/markdown.js";
 import { ProjectRootInput } from "../knowledge/findings-schema.js";
 import {
   checklistFromPackIds,
@@ -32,8 +36,18 @@ interface SurfaceArea {
   data_layer_hints: string[];
 }
 
-async function detectSurface(root: string, maxFiles?: number): Promise<SurfaceArea> {
-  const { files } = await walkProject(root, { maxFiles: maxFiles ?? 400 });
+async function detectSurface(
+  root: string,
+  maxFiles?: number,
+  focusPaths?: string[],
+  config: ServerConfig = loadConfig(),
+): Promise<{ surface: SurfaceArea; coverage: ReturnType<typeof finalizeInventoryCoverage> }> {
+  const { files, coverage } = await walkProject(root, {
+    maxFiles: maxFiles ?? config.defaultMaxFiles,
+    maxDepth: config.maxDepth,
+    maxFileBytes: config.maxFileBytes,
+    focusPrefixes: focusPaths,
+  });
   const entrypoints: string[] = [];
   const auth_related: string[] = [];
   const config_files: string[] = [];
@@ -116,42 +130,31 @@ async function detectSurface(root: string, maxFiles?: number): Promise<SurfaceAr
 
   const uniq = (arr: string[]) => [...new Set(arr)].slice(0, 50);
   return {
-    entrypoints: uniq(entrypoints),
-    auth_related: uniq(auth_related),
-    config_files: uniq(config_files),
-    api_routes: uniq(api_routes),
-    data_layer_hints: uniq(data_layer_hints),
+    surface: {
+      entrypoints: uniq(entrypoints),
+      auth_related: uniq(auth_related),
+      config_files: uniq(config_files),
+      api_routes: uniq(api_routes),
+      data_layer_hints: uniq(data_layer_hints),
+    },
+    coverage: finalizeInventoryCoverage(coverage, files.map((file) => file.relativePath)),
   };
 }
 
-export function registerAnalyzeArchitecture(server: McpServer): void {
+export function registerAnalyzeArchitecture(
+  server: McpServer,
+  config: ServerConfig = loadConfig(),
+): void {
   server.registerTool(
     "secure_mcp_analyze_architecture",
     {
       title: "Analyze architecture for hardening",
-      description: `Defensive secure-code-review tool: produce an architecture overview that helps place security controls and plan remediation.
+      description: `Defensive secure-code-review tool: high-level architecture map (stacks, surfaces, trust boundaries) and recommended knowledge packs for progressive loading.
 
-PURPOSE (defensive only)
-- Map likely stacks, auth-related paths, API/route surfaces, config files, data-layer hints, and trust boundaries.
-- Return recommended_packs and pack_batches so the agent can load stack-relevant checklists via secure_mcp_get_knowledge_pack (progressive disclosure — not a full encyclopedia dump).
-- Support multi-phase review: inventory → architecture → knowledge packs → deep category analysis → remediation report.
-- Never frame results as offensive targeting guidance.
+Args: project_root, stack?, max_files?, focus_paths?, response_format.
+Returns: stacks, surface, trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
 
-MANDATORY AGENT WORKFLOW
-1. Prefer secure_mcp_list_project_structure first.
-2. Call this tool and retain stacks, surface, trust_boundaries, recommended_packs, and pack_batches.
-3. Call secure_mcp_get_knowledge_pack with pack_batches[0] (detail=summary first). Multi-pack responses fair-sample items so stack packs are included. If pack_batches has more entries, load them in later calls only as needed.
-4. Use next_tools: authentication, injection-risks, secrets, remediation threat model.
-5. Trace data flows for high-value components before writing findings.
-6. Continue until major classes relevant to the stack are examined with evidence; then produce_findings.
-
-Args:
-  - project_root (string): Repository root
-  - stack (enum): auto = union of detected stacks; a specific focus (nextjs|expo|swift|…) exclusively scopes recommended packs (does not re-OR other profile signals)
-  - max_files / response_format: standard options
-
-Returns:
-  Architecture summary, surface maps, trust boundaries, recommended_packs, pack_batches, a small checklist_seed (secondary), and suggested next tools.`,
+Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`,
       inputSchema: InputSchema,
       annotations: {
         readOnlyHint: true,
@@ -163,10 +166,24 @@ Returns:
     async (params: Input) => {
       try {
         const root = await normalizeProjectRoot(params.project_root);
-        const profile = await profileProject(root);
-        const surface = await detectSurface(root, params.max_files);
+        const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
+        const profile = await profileProject(root, {
+          focusPrefixes: params.focus_paths,
+          maxFiles: effectiveMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
+        });
+        const detected = await detectSurface(root, effectiveMaxFiles, params.focus_paths, config);
+        const { surface } = detected;
+        const safeSurface = {
+          entrypoints: redactedSecretPaths(surface.entrypoints),
+          auth_related: redactedSecretPaths(surface.auth_related),
+          config_files: redactedSecretPaths(surface.config_files),
+          api_routes: redactedSecretPaths(surface.api_routes),
+          data_layer_hints: redactedSecretPaths(surface.data_layer_hints),
+        };
 
-        const packageJson = await readProjectFileIfExists(root, "package.json", 64 * 1024);
+        const packageJson = await readProjectFileIfExists(root, "package.json", config.maxFileBytes);
         let dependencies: string[] = [];
         if (packageJson) {
           try {
@@ -247,8 +264,11 @@ Returns:
             hasNextConfig: profile.hasNextConfig,
             hasSwiftFiles: profile.hasSwiftFiles,
           },
-          top_level: profile.topLevelEntries,
-          surface,
+          top_level: redactedSecretPaths(profile.topLevelEntries),
+          top_level_truncated: profile.topLevelEntriesTruncated,
+          surface: safeSurface,
+          coverage: redactCoverageReport(detected.coverage),
+          files_reviewed: [],
           trust_boundaries,
           notable_dependencies: dependencies.filter((d) =>
             /next|react|expo|auth|clerk|prisma|drizzle|supabase|stripe|swift|firebase|aws|openai/i.test(
@@ -282,19 +302,19 @@ Returns:
         const md = [
           `# Architecture overview`,
           "",
-          `**Root:** ${root}`,
-          `**Stacks:** ${stacks.join(", ")}`,
-          `**Recommended packs:** ${recommended_packs.join(", ")}`,
-          `**Pack batches:** ${pack_batches.map((b, i) => `[${i}] ${b.join(", ")}`).join(" · ")}`,
+          `**Root:** ${escapeMarkdown(root)}`,
+          `**Stacks:** ${escapeMarkdown(stacks.join(", "))}`,
+          `**Recommended packs:** ${escapeMarkdown(recommended_packs.join(", "))}`,
+          `**Pack batches:** ${escapeMarkdown(pack_batches.map((b, i) => `[${i}] ${b.join(", ")}`).join(" · "))}`,
           "",
           `## Trust boundaries`,
           ...trust_boundaries.map((t) => `- ${t}`),
           "",
           `## Auth-related paths (${surface.auth_related.length})`,
-          ...surface.auth_related.slice(0, 20).map((p) => `- ${p}`),
+          ...safeSurface.auth_related.slice(0, 20).map((p) => `- ${escapeMarkdown(p)}`),
           "",
           `## API / route surface (${surface.api_routes.length})`,
-          ...surface.api_routes.slice(0, 20).map((p) => `- ${p}`),
+          ...safeSurface.api_routes.slice(0, 20).map((p) => `- ${escapeMarkdown(p)}`),
           "",
           `## Next: load packs then category tools`,
           ...pack_batches.map(

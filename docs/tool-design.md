@@ -1,4 +1,10 @@
-# Tool design
+---
+title: Tool design
+description: Learn how secure-mcp names tools, shapes responses, models findings, and stays remediation-oriented as the defensive audit surface grows.
+sidebar:
+  label: Tool design
+  order: 7
+---
 
 ## Framing
 
@@ -76,6 +82,8 @@ Every finding must support:
 5. **residual_risk**
 6. **verification_suggestion**
 
+The additive traceability fields are `rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and `disposition`. `instance_id` is deterministic for the same detector/control/source location and is independent of session/report numbering.
+
 See `src/knowledge/findings-schema.ts` and `src/lib/types.ts`.
 
 ## Output shape
@@ -92,6 +100,10 @@ Success payloads include at least:
 ```
 
 Category tools include `findings: Finding[]`.
+
+Read-only inventory and category tools also return `coverage`. It records included paths, excluded/ignored paths with reasons, file/depth/size caps, truncation causes, files actually reviewed, and all candidate dispositions (`reportable`, `needs_review`, `suppressed`, `not_applicable`, `deferred`). `not_observed_means` explicitly distinguishes an empty result within reviewed files from an incomplete scan.
+
+Inventory and architecture responses expose a bounded top-level entry preview; `topLevelEntriesTruncated` / `top_level_truncated` indicates when the preview was shortened while stack signals were still collected from the full root directory stream.
 
 Errors use `isError: true` and `{ "ok": false, "error": "...", "hint": "..." }`.
 

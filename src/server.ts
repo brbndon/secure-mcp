@@ -15,7 +15,7 @@ export function createServer(config: ServerConfig = loadConfig()): McpServer {
     version: config.version,
   });
 
-  registerAllTools(server);
+  registerAllTools(server, config);
 
   return server;
 }

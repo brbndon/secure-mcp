@@ -5,13 +5,17 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { loadConfig, type ServerConfig } from "../config.js";
 import {
+  finalizeInventoryCoverage,
   normalizeProjectRoot,
   profileProject,
   toolError,
   toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
+import { redactCoverageReport, redactedSecretPaths } from "../lib/redact.js";
+import { escapeMarkdown, markdownCode } from "../lib/markdown.js";
 import { ProjectRootInput } from "../knowledge/findings-schema.js";
 
 const InputSchema = ProjectRootInput.extend({
@@ -39,32 +43,36 @@ function toMarkdown(data: {
   truncated: boolean;
 }): string {
   const lines: string[] = [
-    `# Project structure: ${data.project_root}`,
+    `# Project structure: ${escapeMarkdown(data.project_root)}`,
     "",
     "## Profile",
     `- Stacks: ${data.profile.likelyStacks.join(", ")}`,
     `- TypeScript files: ${data.profile.hasTypeScriptFiles}`,
     `- Next.js signals: ${data.profile.hasNextConfig}`,
     `- Swift signals: ${data.profile.hasSwiftFiles}`,
+    `- Top-level entry preview truncated: ${data.profile.topLevelEntriesTruncated}`,
     "",
     "## Top-level entries",
-    ...data.profile.topLevelEntries.map((e) => `- ${e}`),
+    ...redactedSecretPaths(data.profile.topLevelEntries).map((e) => `- ${escapeMarkdown(e)}`),
     "",
     `## Files scanned: ${data.file_count}${data.truncated ? " (truncated)" : ""}`,
     "",
     "### By extension",
   ];
   for (const [ext, count] of Object.entries(data.by_extension).sort((a, b) => b[1] - a[1])) {
-    lines.push(`- \`${ext || "(none)"}\`: ${count}`);
+    lines.push(`- ${markdownCode(ext || "(none)")}: ${count}`);
   }
   lines.push("", "### Sample paths");
-  for (const f of data.sample_files.slice(0, 40)) {
-    lines.push(`- ${f}`);
+  for (const f of redactedSecretPaths(data.sample_files).slice(0, 40)) {
+    lines.push(`- ${escapeMarkdown(f)}`);
   }
   return lines.join("\n");
 }
 
-export function registerListProjectStructure(server: McpServer): void {
+export function registerListProjectStructure(
+  server: McpServer,
+  config: ServerConfig = loadConfig(),
+): void {
   server.registerTool(
     "secure_mcp_list_project_structure",
     {
@@ -84,14 +92,17 @@ MANDATORY AGENT WORKFLOW
 
 Args:
   - project_root (string): Path to the repository root under review
-  - stack (enum, optional): auto|common|typescript|nextjs|swift
+  - stack (enum, optional): auto|common|typescript|nextjs|swift|expo
   - max_files (number, optional): Cap on files to list
   - max_depth (number, optional): Directory depth limit
   - include_extensions (string[], optional): Limit to these extensions
+  - focus_paths (string[], optional): Relative path prefixes for scoped drill-down
   - response_format (json|markdown): Default json
 
 Returns:
   Structured inventory with profile, extension histogram, and sample file paths.
+
+Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.
 
 Examples:
   - Start of any defensive review: project_root="/path/to/repo"
@@ -110,16 +121,28 @@ Error Handling:
     async (params: Input) => {
       try {
         const root = await normalizeProjectRoot(params.project_root);
-        const profile = await profileProject(root);
+        const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
+        const effectiveMaxDepth = Math.min(
+          params.max_depth ?? config.maxDepth,
+          config.maxDepth,
+        );
+        const profile = await profileProject(root, {
+          focusPrefixes: params.focus_paths,
+          maxFiles: effectiveMaxFiles,
+          maxDepth: effectiveMaxDepth,
+          maxFileBytes: config.maxFileBytes,
+        });
         const extensions =
           params.include_extensions && params.include_extensions.length > 0
             ? new Set(params.include_extensions.map((e) => (e.startsWith(".") ? e : `.${e}`)))
             : undefined;
 
-        const { files, truncated } = await walkProject(root, {
-          maxFiles: params.max_files,
-          maxDepth: params.max_depth,
+        const { files, truncated, coverage } = await walkProject(root, {
+          maxFiles: effectiveMaxFiles,
+          maxDepth: effectiveMaxDepth,
+          maxFileBytes: config.maxFileBytes,
           extensions: extensions ?? undefined,
+          focusPrefixes: params.focus_paths,
         });
 
         const by_extension: Record<string, number> = {};
@@ -143,12 +166,17 @@ Error Handling:
             hasXcodeProject: profile.hasXcodeProject,
             hasSwiftFiles: profile.hasSwiftFiles,
             hasTypeScriptFiles: profile.hasTypeScriptFiles,
-            topLevelEntries: profile.topLevelEntries,
+            topLevelEntries: redactedSecretPaths(profile.topLevelEntries),
+            topLevelEntriesTruncated: profile.topLevelEntriesTruncated,
           },
           file_count: files.length,
           by_extension,
-          sample_files,
+          sample_files: redactedSecretPaths(sample_files),
           truncated,
+          coverage: redactCoverageReport(
+            finalizeInventoryCoverage(coverage, files.map((file) => file.relativePath)),
+          ),
+          files_reviewed: [],
         };
 
         return toolSuccess(data, {

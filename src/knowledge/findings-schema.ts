@@ -179,16 +179,16 @@ export function buildFinding(
     partial.root_control ??
     partial.tags?.find((tag) => /^[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+$/.test(tag)) ??
     `${ruleFamily}:unclassified`;
-  const instanceId =
-    partial.instance_id ??
-    createFindingInstanceId({
-      rule_family: ruleFamily,
-      root_control: rootControl,
-      file: partial.file,
-      line: partial.line,
-      source: partial.source,
-      sink: partial.sink,
-    });
+  // Canonicalize identity from detector metadata and source location. Caller-supplied
+  // ids are accepted by the input schema for compatibility but never control dedupe.
+  const instanceId = createFindingInstanceId({
+    rule_family: ruleFamily,
+    root_control: rootControl,
+    file: partial.file,
+    line: partial.line,
+    source: partial.source,
+    sink: partial.sink,
+  });
   return {
     ...partial,
     rule_family: ruleFamily,
