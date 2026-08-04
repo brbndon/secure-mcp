@@ -1,0 +1,50 @@
+---
+title: Docs hosting
+description: Build this Blume site — landing page and docs — for Vercel, Cloudflare Pages, Cloudflare Workers, or another static host.
+sidebar:
+  label: Docs hosting
+  order: 5
+---
+
+## Docs hosting
+
+The site is a single Blume build: the marketing pages live in `pages/` (custom .astro routes served at `/`, `/help`, `/support`, `/privacy`, `/terms`) and the documentation lives under `/docs/*` (content in `docs/docs/`). The workflow at `.github/workflows/deploy-docs.yml` builds and checks the site whenever `main` changes. It does not deploy the result, so the repository can remain independent of a hosting provider and its account requirements.
+
+## Local build
+
+```bash
+pnpm docs:build
+pnpm docs:preview
+```
+
+The docs build uses `.blume-verify/dist` so it does not collide with the MCP server's TypeScript output in `dist/`.
+
+## Vercel deployment
+
+The repository root carries a `vercel.json` for the Vercel project:
+
+- Build command: `pnpm docs:build`
+- Output directory: `.blume-verify/dist`
+
+`BLUME_SITE` and `BLUME_BASE_PATH` can be set in the Vercel project environment to control the canonical site URL (e.g. `https://securemcp.dev`) and mount point.
+
+## Cloudflare deployment
+
+For a host that builds directly from the repository, use:
+
+- Build command: `pnpm docs:build`
+- Output directory: `.blume-verify/dist`
+
+Cloudflare Pages can use these settings for a static deployment. A Cloudflare Workers site can consume the same static output through its chosen Workers Static Assets configuration.
+
+## Custom domains and forks
+
+Set `BLUME_SITE` and `BLUME_BASE_PATH` in the hosting build environment if you use a custom domain or a different mount point:
+
+```yaml
+env:
+  BLUME_SITE: https://docs.example.com
+  BLUME_BASE_PATH: ""
+```
+
+The output is fully static: HTML, local search, sitemap/robots metadata when a site URL is available, and AI-readable `llms.txt` files. No MCP server secrets or license keys are needed to build the documentation site.

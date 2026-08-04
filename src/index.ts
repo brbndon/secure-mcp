@@ -22,6 +22,14 @@ async function main(): Promise<void> {
     console.error(
       `[secure-mcp] License OK (${license.keySource}${license.isDevKey ? ", development key" : ""}).`,
     );
+    if (license.isDevKey) {
+      console.error(
+        "[secure-mcp] WARNING: SECURE_MCP_DEV_MODE=1 with development license key is active. " +
+          "This allows startup for local development / agent / CI testing ONLY. " +
+          "Do NOT use in production, do not process production data or secrets, and do not deploy with DEV_MODE enabled. " +
+          "Production deployments must use a production license key without DEV_MODE.",
+      );
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[secure-mcp] License check failed: ${message}`);

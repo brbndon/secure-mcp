@@ -5,11 +5,11 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
+import { loadConfig, type ServerConfig } from "../config.js";
 import {
   findLineNumber,
   finalizeCoverage,
   recordCoverageExclusion,
-  DEFAULT_MAX_FILE_BYTES,
   normalizeProjectRoot,
   readProjectFile,
   snippetAround,
@@ -24,6 +24,7 @@ import {
   redactedSecretPath,
   redactedSecretPaths,
 } from "../lib/redact.js";
+import { escapeMarkdown } from "../lib/markdown.js";
 import type { Finding, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
@@ -42,7 +43,7 @@ type Input = z.infer<typeof InputSchema>;
  * Explicit expo/common/swift must not claim or execute Next-only detectors.
  */
 export function shouldRunNextjsSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
-  return stack === undefined || stack === "auto" || stack === "nextjs" || stack === "typescript";
+  return stack === undefined || stack === "auto" || stack === "nextjs";
 }
 
 export function shouldRunSwiftSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
@@ -68,7 +69,10 @@ Returns: findings[] (category secrets, remediation fields; evidence redacted), e
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
-export function registerReviewSecrets(server: McpServer): void {
+export function registerReviewSecrets(
+  server: McpServer,
+  config: ServerConfig = loadConfig(),
+): void {
   server.registerTool(
     "secure_mcp_review_secrets",
     {
@@ -91,7 +95,9 @@ export function registerReviewSecrets(server: McpServer): void {
         const detectorFamiliesRun = new Set<string>();
 
         const { files, coverage } = await walkProject(root, {
-          maxFiles: params.max_files ?? 500,
+          maxFiles: params.max_files ?? config.defaultMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
           extensions: new Set([
             ".ts",
             ".tsx",
@@ -126,7 +132,7 @@ export function registerReviewSecrets(server: McpServer): void {
         );
 
         for (const file of files) {
-          if (file.size > DEFAULT_MAX_FILE_BYTES) {
+          if (file.size > config.maxFileBytes) {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,
               kind: "file",
@@ -145,7 +151,7 @@ export function registerReviewSecrets(server: McpServer): void {
 
           let content: string;
           try {
-            content = (await readProjectFile(root, file.relativePath)).content;
+            content = (await readProjectFile(root, file.relativePath, config.maxFileBytes)).content;
           } catch {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,
@@ -407,10 +413,10 @@ export function registerReviewSecrets(server: McpServer): void {
           "",
           ...safeFindings.slice(0, 40).map(
             (f) =>
-              `### ${f.id} [${f.severity}/${f.confidence}] ${f.title}\n` +
-              `- ${f.file ?? "?"}:${f.line ?? "?"}\n` +
-              `- Evidence: ${f.evidence}\n` +
-              `- Remediation: ${f.remediation}\n`,
+              `### ${escapeMarkdown(f.id)} [${escapeMarkdown(`${f.severity}/${f.confidence}`)}] ${escapeMarkdown(f.title)}\n` +
+              `- ${escapeMarkdown(`${f.file ?? "?"}:${f.line ?? "?"}`)}\n` +
+              `- Evidence: ${escapeMarkdown(f.evidence)}\n` +
+              `- Remediation: ${escapeMarkdown(f.remediation)}\n`,
           ),
         ].join("\n");
 

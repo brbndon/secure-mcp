@@ -69,6 +69,10 @@ export async function resolveLicenseKey(): Promise<{
 /**
  * Validate a license key for v1 (local format + known dev key).
  * Production keys for a future paid tier can share the same format.
+ *
+ * Dev keys are only accepted when SECURE_MCP_DEV_MODE=1 (for agents, local dev, CI).
+ * When DEV_MODE + dev key: allow startup but the caller emits a clear warning on stderr.
+ * Strict behavior is kept for production keys (and dev key without DEV_MODE).
  */
 export function validateLicenseKey(key: string | null | undefined): LicenseResult {
   if (!key || !key.trim()) {
@@ -77,7 +81,7 @@ export function validateLicenseKey(key: string | null | undefined): LicenseResul
       keySource: "none",
       reason:
         "License key is missing. Set SECURE_MCP_LICENSE_KEY or SECURE_MCP_LICENSE_FILE. " +
-        `For local development use: ${DEV_LICENSE_KEY}`,
+        `For local development use the documented dev key with SECURE_MCP_DEV_MODE=1: ${DEV_LICENSE_KEY}`,
     };
   }
 
@@ -92,8 +96,22 @@ export function validateLicenseKey(key: string | null | undefined): LicenseResul
     };
   }
 
-  // v1: any well-formed key is accepted. A future release may call a remote validator.
   const isDevKey = trimmed === DEV_LICENSE_KEY;
+  const devMode = process.env.SECURE_MCP_DEV_MODE === "1";
+
+  if (isDevKey && !devMode) {
+    return {
+      valid: false,
+      keySource: "env",
+      reason:
+        `Development key ${DEV_LICENSE_KEY} is only permitted when SECURE_MCP_DEV_MODE=1 is set ` +
+        "(for local development, agent testing, and CI smoke tests). " +
+        "For production use, obtain a production license key and do not set DEV_MODE.",
+      isDevKey: true,
+    };
+  }
+
+  // v1: well-formed keys accepted; dev key gated behind DEV_MODE.
   return {
     valid: true,
     keySource: "env",

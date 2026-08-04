@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">secure-mcp — compact terminal severity, dark</title>
+  <desc id="desc">A high-contrast light terminal window with a bold prompt and stacked severity bars.</desc>
+  <rect width="64" height="64" rx="14" fill="#f5f5f7"/>
+  <rect x="8" y="8" width="48" height="48" rx="12" fill="#e1e1e6" stroke="#c4c4ca" stroke-width="1.5"/>
+  <path d="M17 28.5 22 32l-5 3.5" fill="none" stroke="#1d1d1f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M30 23.5h18M30 30h18M30 36.5h18" stroke="#1d1d1f" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M30 36.5h18" stroke="#8e8e93" stroke-width="4.5" stroke-linecap="round"/>
+</svg>

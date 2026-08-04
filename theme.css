@@ -1,0 +1,31 @@
+:root {
+  --blume-foreground: #10201c;
+  --blume-muted: #e7efeb;
+  --blume-muted-foreground: #547068;
+  --blume-border: #cadbd4;
+  --blume-code-background: #eaf2ee;
+}
+
+:root[data-theme="dark"] {
+  --blume-foreground: #e3f0eb;
+  --blume-muted: #16231f;
+  --blume-muted-foreground: #91b0a5;
+  --blume-border: #29433a;
+  --blume-code-background: #111d19;
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--blume-accent) 12%, transparent), transparent 26rem),
+    linear-gradient(140deg, color-mix(in srgb, var(--blume-action) 4%, transparent), transparent 42%);
+}
+
+:root[data-theme="dark"] body {
+  background-image:
+    radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--blume-accent) 15%, transparent), transparent 26rem),
+    linear-gradient(140deg, color-mix(in srgb, var(--blume-action) 7%, transparent), transparent 42%);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--blume-accent) 28%, transparent);
+}

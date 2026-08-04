@@ -1,0 +1,51 @@
+---
+title: Quickstart
+description: Run secure-mcp from repository inventory through stack-aware checks, evidence verification, and a structured remediation report for an authorized code review.
+sidebar:
+  label: Quickstart
+  order: 3
+---
+
+## Quickstart
+
+The safest useful audit is staged. Each phase leaves a small artifact the next phase can use, so agents do not spend context on irrelevant checklists or jump from a regex hit to a confident claim.
+
+<Steps>
+  <Step title="Inventory the target">
+    Call `secure_mcp_list_project_structure` with an absolute `project_root`. Record the file count, sample paths, and any scope limits.
+  </Step>
+  <Step title="Profile the architecture">
+    Call `secure_mcp_analyze_architecture` with `stack: "auto"`. Keep its detected stacks, trust boundaries, `recommended_packs`, and `pack_batches`.
+  </Step>
+  <Step title="Load only the relevant knowledge">
+    Pass the first `pack_batches` entry to `secure_mcp_get_knowledge_pack` with the default `detail: "summary"`. Load later batches only when the review needs them.
+  </Step>
+  <Step title="Run category checks">
+    Run authentication, injection-risk, and secret-hygiene checks in parallel when the client supports it. Add the remediation threat model when control placement needs more structure.
+  </Step>
+  <Step title="Confirm the candidates">
+    Open each high- or critical-confidence candidate at its cited file and line. Verify the data flow, remove fixtures that are out of scope, and merge duplicates.
+  </Step>
+  <Step title="Produce the report">
+    Send the confirmed findings to `secure_mcp_produce_findings` with `dedupe: true`, a minimum severity/confidence, and `response_format: "markdown"` for the human-facing handoff.
+  </Step>
+</Steps>
+
+## A focused architecture call
+
+```json
+{
+  "project_root": "/absolute/path/to/target",
+  "stack": "auto",
+  "max_files": 400,
+  "focus_paths": ["src", "app"]
+}
+```
+
+Use `focus_paths` for a drill-down after the first repository-wide pass. Keep the initial `max_files` bounded; the server already applies depth, byte, and ignore-pattern caps.
+
+## The non-negotiable rule
+
+> Treat heuristic hits as candidates, not confirmed vulnerabilities. Read the cited code and verify the data flow before reporting impact.
+
+For the full sequence, intermediate artifacts, and defensive boundaries, read [Agent workflow](/docs/agent-workflow).

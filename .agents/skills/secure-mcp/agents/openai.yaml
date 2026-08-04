@@ -1,4 +1,0 @@
-interface:
-  display_name: "Secure MCP Audit"
-  short_description: "Route defensive reviews across web, mobile, and Apple apps"
-  default_prompt: "Use $secure-mcp to audit this repository and produce a prioritized remediation plan."

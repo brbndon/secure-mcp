@@ -27,6 +27,7 @@ export {
   packIdsWithCategories,
   recommendPackIds,
   recommendPackPlan,
+  uniquePackIds,
   PACK_IDS,
 } from "./registry.js";
 export type {

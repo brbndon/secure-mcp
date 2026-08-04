@@ -13,6 +13,7 @@ import {
   PACK_IDS,
   countEligiblePackItems,
   countItemsPerPack,
+  uniquePackIds,
   filterPackItems,
   getPack,
   isPackId,
@@ -118,7 +119,7 @@ Returns:
           );
         }
 
-        const packIds = params.pack_ids as PackId[];
+        const packIds = uniquePackIds(params.pack_ids as PackId[]);
         const packs = packIds.map((id) => getPack(id));
         const maxItems = params.max_items ?? DEFAULT_MAX_ITEMS;
         const filtered = filterPackItems(packs, {

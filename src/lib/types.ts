@@ -207,4 +207,5 @@ export interface ProjectProfile {
   hasMacOS: boolean;
   likelyStacks: StackFocus[];
   topLevelEntries: string[];
+  topLevelEntriesTruncated: boolean;
 }

@@ -1,0 +1,156 @@
+---
+/**
+ * CSS-only pi / ACP session mockup for the hero — illustrative marketing
+ * content matching a real pi coding-agent TUI, not a live capture.
+ * Real tool output lives in the screenshots section.
+ */
+import PiWindow from "./PiWindow.astro";
+
+const tools = [
+  {
+    name: "secure_mcp_list_project_structure",
+    result: "8 files · stacks: nextjs + swift",
+  },
+  {
+    name: "secure_mcp_analyze_architecture",
+    result: "5 packs recommended · 1 batch",
+  },
+  {
+    name: "secure_mcp_review_secrets",
+    result: "3 candidates · evidence redacted",
+  },
+] as const;
+---
+
+<div class="relative mx-auto w-full max-w-[34rem] md:max-w-none">
+  <PiWindow
+    title="acme-web"
+    cwd="acme-web"
+    branch="main"
+    showStatus
+    label="pi coding agent session: user invokes the secure-mcp skill, the agent plans a defensive audit, calls inventory architecture and secrets tools, and surfaces a high-severity finding with remediation"
+  >
+    <div
+      class="flex h-full flex-col font-mono text-[0.72rem] leading-[1.55] md:text-[0.76rem] md:leading-[1.58]"
+    >
+      <!-- Session body (scrollable area look) -->
+      <div class="flex-1 space-y-0 px-3.5 pt-3 pb-2 md:px-4">
+        <!-- Skill banner -->
+        <div
+          class="mb-3 rounded-sm px-3 py-2.5"
+          style="background: #2f3038;"
+        >
+          <p class="m-0 tracking-tight">
+            <span style="color: #c9a0ff;">[skill]</span>{" "}
+            <span style="color: #e8e8ee;">secure-mcp</span>{" "}
+            <span style="color: #7a7a86;">(ctrl+o to expand)</span>
+          </p>
+        </div>
+
+        <!-- Assistant reasoning -->
+        <div class="space-y-2.5" style="color: #a8a8b0;">
+          <p class="m-0">
+            The user has invoked the{" "}
+            <span style="color: #7ec8c0;">secure-mcp</span> skill. According to
+            the skill instructions, I need to:
+          </p>
+          <ol class="m-0 list-decimal space-y-1 pl-5">
+            <li>Create an audit goal in the host&rsquo;s goal facility</li>
+            <li>Preflight: inspect the repository, classify the stack, open a TODO</li>
+            <li>Run the multi-phase secure-mcp review sequence</li>
+          </ol>
+          <p class="m-0">
+            Working directory is{" "}
+            <span style="color: #7ec8c0;">~/code/acme-web</span>. Starting the
+            bounded inventory, then architecture and secrets.
+          </p>
+        </div>
+
+        <!-- Tool calls -->
+        <ul class="mt-3.5 grid list-none gap-1.5 p-0">
+          {
+            tools.map((tool) => (
+              <li class="grid grid-cols-1 gap-0.5 sm:grid-cols-[minmax(0,1.15fr)_auto] sm:items-baseline sm:gap-3">
+                <span class="min-w-0" style="color: #d0d0d6;">
+                  <span style="color: #7a7a86;" aria-hidden="true">
+                    →
+                  </span>{" "}
+                  <span class="break-all sm:break-normal">{tool.name}</span>
+                </span>
+                <span
+                  class="pl-4 sm:pl-0 sm:text-right"
+                  style="color: #8a8a94;"
+                >
+                  {tool.result}
+                </span>
+              </li>
+            ))
+          }
+        </ul>
+
+        <!-- Finding card (still illustrative) -->
+        <div
+          class="mt-3.5 rounded-md border px-3 py-2.5"
+          style="border-color: #555861; background: #35363e;"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span
+              class="text-[0.62rem] font-medium tracking-[0.06em] uppercase"
+              style="color: #8a8a94;"
+            >
+              Finding · SEC-001
+            </span>
+            <span
+              class="rounded-full px-2 py-0.5 text-[0.6rem] font-semibold tracking-wide uppercase"
+              style="background: #e8e8ee; color: #1d1d1f;"
+            >
+              high
+            </span>
+          </div>
+          <p class="mt-1.5 mb-0.5 text-[0.78rem] font-medium" style="color: #e8e8ee;">
+            Possible secret: API key assignment
+          </p>
+          <p class="m-0 text-[0.68rem]" style="color: #8a8a94;">
+            ios/Secrets.swift:5 · CWE-798 · evidence redacted
+          </p>
+          <p
+            class="mt-2 mb-0 border-t pt-2 text-[0.68rem] leading-relaxed"
+            style="border-color: #555861; color: #b8b8c0;"
+          >
+            Remediation: rotate the key, load from a secret manager, remove from
+            source and history.
+          </p>
+        </div>
+
+        <p class="mt-3 mb-1" style="color: #8a8a94;">
+          <span aria-hidden="true">∴</span> Working…
+        </p>
+      </div>
+
+      <!-- Composer -->
+      <div class="shrink-0 px-3.5 pt-1 pb-2 md:px-4" aria-hidden="true">
+        <div
+          class="rounded-sm border-t pt-2.5"
+          style="border-color: #555861;"
+        >
+          <div
+            class="flex min-h-[2.25rem] items-start gap-0 border-l-2 pl-2.5"
+            style="border-color: #7ec8c0;"
+          >
+            <span
+              class="mt-0.5 inline-block h-3.5 w-2 shrink-0"
+              style="background: #e8e8ee;"
+            ></span>
+          </div>
+          <div
+            class="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[0.68rem]"
+          >
+            <span style="color: #7ec8c0;">deepseek-v4-flash</span>
+            <span style="color: #c8c8ce;">Opencode Go</span>
+            <span style="color: #8a8a94;">high</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </PiWindow>
+</div>

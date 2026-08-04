@@ -1,0 +1,20 @@
+---
+import LandingLayout from "../_home/LandingLayout.astro";
+import PageIntro from "../_home/components/PageIntro.astro";
+import SupportForm from "../_home/components/SupportForm.astro";
+
+const pageTitle = "Support — secure-mcp";
+const pageDescription =
+  "Contact support for secure-mcp: setup, license keys, tool results, and feature requests.";
+---
+
+<LandingLayout title={pageTitle} description={pageDescription} route="/support">
+  <PageIntro
+    eyebrow="Support"
+    title="We read every message."
+    titleId="support-title"
+    lede="Setup problems, license questions, unexpected tool results, feature ideas — tell us what happened and what you expected."
+    wide
+  />
+  <SupportForm />
+</LandingLayout>

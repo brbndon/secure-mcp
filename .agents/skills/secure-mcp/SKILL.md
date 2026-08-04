@@ -1,6 +1,6 @@
 ---
 name: secure-mcp
-description: Master defensive secure-code-review and hardening workflow for websites, Next.js or TypeScript services, Expo or React Native apps, iOS Swift apps, macOS Swift apps, and mixed repositories. Use when auditing a repository or its dependencies, reviewing authentication, authorization, injection, secrets, trust boundaries, or Apple entitlements, or producing a remediation plan. Preflight the repository and dependency manifests, classify the platform, create an explicit TODO, then route a bounded multi-phase review through the secure_mcp tools and manual evidence confirmation.
+description: Master defensive secure-code-review and hardening workflow for websites, Next.js or TypeScript services, Expo or React Native apps, iOS Swift apps, macOS Swift apps, and mixed repositories. Use when auditing, reviewing, or securing an app, repository, or codebase — even when the user only describes the app ("audit my iOS app", "is my Next.js service secure?") — or when reviewing authentication, authorization, injection, secrets, trust boundaries, or Apple entitlements, or producing a remediation plan. On invocation, autonomously create an audit goal in the host goal facility, preflight and classify the repository, create an explicit TODO, then route a bounded multi-phase review through the secure_mcp tools and manual evidence confirmation.
 ---
 
 # Secure MCP
@@ -15,6 +15,21 @@ Use this skill as the default orchestration layer for authorized security review
 - Never execute target-project code, install target dependencies, contact target services, or alter the target repository during an audit. If the user requests hardening, make changes only after the audit and only within the requested scope.
 - Preserve secret redaction. Do not copy keys or tokens into notes, prompts, reports, commits, or logs; recommend rotation for credentials that may be live.
 - Record scan limits and coverage. An empty result is not evidence that an entire repository is clean when coverage is partial or truncated.
+
+## On invocation: create the audit goal
+
+Invoking this skill authorizes goal creation — do not ask permission. As soon as the skill is activated, create a goal in the host's goal/plan facility (pi `/goal` and goal tools, or equivalent) that names the repository, the outcome, the verification evidence, the scope bounds, and the stop conditions. The goal is the outcome contract; the TODO in the next section is its phase checklist.
+
+1. Resolve the target repository before creating the goal:
+   - Explicit path, or the current working directory already inside a repo → use it.
+   - Description only → check the current working directory for app manifests first (`package.json`, `Package.swift`, `*.xcodeproj`/`*.xcworkspace`, `app.json`, `app.config.*`); if absent, search nearby directories for a matching app. If the target is still ambiguous, ask one concise question with concrete options — then create the goal with the agreed root.
+2. Write the goal to the quality bar: a concrete outcome (complete read-only audit plus a prioritized remediation and retest plan, or hardening when explicitly requested), verification evidence (final report with severity/confidence counts, confirmed findings with file:line evidence, coverage and disposition narrative, retest plan), scope bounds (read-only; fixes only in hardening mode and only within requested scope), and stop conditions (cannot locate the repo, scope unclear, or a live credential is found).
+3. If a goal is already active and still matches the request, continue it instead of creating a duplicate. If it conflicts, say so and ask before replacing it.
+4. Update the goal after each phase and mark it complete only when the final report has been delivered (and, in hardening mode, after fixes are verified). Never complete the goal on partial coverage — that is a stop-and-report condition, not a completion.
+
+Example goal objective:
+
+> Complete a read-only security audit of `<root>` covering authentication, injection, secrets, and trust boundaries for its `<platform>` stack, confirm every candidate manually with file:line evidence, and deliver a prioritized remediation report with severity/confidence counts, coverage limits, and a concrete retest plan.
 
 ## Preflight: inspect, classify, then create the TODO
 
@@ -40,7 +55,7 @@ Use these routing heuristics; require multiple signals and preserve mixed classi
 
 Do not infer macOS or iOS from Swift alone, Expo from a bare `app.json`, or an app from a library or dev-only framework dependency. Treat auto Expo/Swift signals as advisory when they conflict with preflight classification. The server accepts `auto`, `common`, `typescript`, `nextjs`, `swift`, and `expo` stack hints; it does not accept `ios`, `macos`, or `web` as values. If preflight evidence conflicts with auto-detection, use an explicit valid stack or split the package review rather than trusting the root profile.
 
-4. Create an explicit audit TODO before invoking the server. Use the agent's built-in plan/task facility when available; otherwise keep a transient structured note and do not add a TODO file to the target unless requested. Include:
+4. Create an explicit audit TODO before invoking the server, aligned with the goal created at invocation. Use the agent's built-in plan/task facility when available; otherwise keep a transient structured note and do not add a TODO file to the target unless requested. Include:
 
    - [ ] Preflight repository, platform, dependencies, and authorized scope
    - [ ] MCP tool inventory, optional-tool presence, and license readiness
@@ -50,7 +65,7 @@ Do not infer macOS or iOS from Swift alone, Expo from a bare `app.json`, or an a
    - [ ] Manual evidence confirmation and false-positive disposition
    - [ ] Prioritized remediation report and retest plan
 
-Keep the TODO updated after each phase. The TODO is the control point that proves the deep server review was planned before it started.
+Keep the TODO updated after each phase and mirror that progress in the audit goal. The TODO is the control point that proves the deep server review was planned before it started.
 
 ## Secure-mcp review sequence
 
@@ -139,7 +154,7 @@ End with a human-readable report containing:
 - suppressed or deferred candidates and why they remain unresolved;
 - prioritized fix plan and a concrete retest plan.
 
-Never claim that the application is secure. State the review boundary and remaining uncertainty.
+Never claim that the application is secure. State the review boundary and remaining uncertainty. After the report is delivered, mark the audit goal complete with the report location and an evidence summary; if coverage is partial, report it and stop instead of completing the goal.
 
 ## Platform-focused review prompts
 
@@ -154,6 +169,6 @@ For a mixed repository, run inventory, architecture, and category reviews per de
 
 ## Hardening mode
 
-When the user asks for implementation rather than a report, complete the preflight, TODO, and secure-mcp review first. Then make the smallest authorized fix, run the narrowest relevant formatter/type-checker/tests, and rerun the affected secure-mcp tools with the same scope. Do not update dependencies, lockfiles, entitlements, persisted data, or deployment configuration as incidental cleanup. Report changed files, verification results, residual risk, and any coverage gaps.
+When the user asks for implementation rather than a report, record the hardening scope in the audit goal, then complete the preflight, TODO, and secure-mcp review first. Then make the smallest authorized fix, run the narrowest relevant formatter/type-checker/tests, and rerun the affected secure-mcp tools with the same scope. Do not update dependencies, lockfiles, entitlements, persisted data, or deployment configuration as incidental cleanup. Report changed files, verification results, residual risk, and any coverage gaps.
 
-For repository-specific details, read the committed `docs/agent-workflow.md`, `skills/security-auditor.md`, and `README.md`. If `docs/tools.mdx` exists in the checkout, read it as an additional reference. Before every tool call, treat the live MCP inventory and input schema as authoritative; if a name, enum, field, pack id, or limit differs from this skill, follow the live schema and record the compatibility gap rather than inventing a call. Do not hardcode assumptions from this skill when the live schema disagrees.
+This skill is installed globally for all coding agents and is self-contained. For optional server internals, read `docs/agent-workflow.md`, `skills/security-auditor.md`, and `README.md` (and `docs/tools.mdx` if present) from the secure-mcp checkout at `/Users/brandon/Code/secure-mcp` when it is available; skip them otherwise. Before every tool call, treat the live MCP inventory and input schema as authoritative; if a name, enum, field, pack id, or limit differs from this skill, follow the live schema and record the compatibility gap rather than inventing a call. Do not hardcode assumptions from this skill when the live schema disagrees.

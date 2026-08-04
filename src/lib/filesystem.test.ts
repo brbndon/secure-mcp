@@ -191,6 +191,25 @@ describe("profileProject fixtures", () => {
     }
   });
 
+  it("bounds the top-level preview while preserving root project signals", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-top-level-"));
+    try {
+      for (let i = 0; i < 25; i++) {
+        await fs.writeFile(path.join(root, `entry-${String(i).padStart(2, "0")}.ts`), "", "utf8");
+      }
+      await fs.mkdir(path.join(root, "z.xcodeproj"));
+      await fs.mkdir(path.join(root, "android"));
+      await fs.mkdir(path.join(root, "ios"));
+
+      const profile = await profileProject(root, { maxFiles: 1 });
+      assert.equal(profile.topLevelEntries.length, 20);
+      assert.equal(profile.topLevelEntriesTruncated, true);
+      assert.equal(profile.hasXcodeProject, true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not follow symlinks when reading project files", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-symlink-read-"));
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-outside-read-"));

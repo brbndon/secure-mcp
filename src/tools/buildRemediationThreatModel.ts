@@ -5,6 +5,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { loadConfig, type ServerConfig } from "../config.js";
 import {
   finalizeInventoryCoverage,
   normalizeProjectRoot,
@@ -19,6 +20,7 @@ import {
   redactedSecretPath,
   redactedSecretPaths,
 } from "../lib/redact.js";
+import { escapeMarkdown } from "../lib/markdown.js";
 import {
   buildFinding,
   createFindingIdFactory,
@@ -190,10 +192,13 @@ const STRIDE_LABELS: Record<RemediationThreat["stride"], string> = {
 export function threatEvidencePaths(
   threat: Pick<RemediationThreat, "title" | "related_components" | "stride">,
   surface: { api: string[]; auth: string[]; secrets?: string[] },
+  inventoryPaths: readonly string[] = [...surface.api, ...surface.auth, ...(surface.secrets ?? [])],
 ): string[] {
   const related = threat.related_components
     .filter((item) => item.includes("/") || item.includes("."))
-    .map(redactedSecretPath);
+    .flatMap((item) =>
+      inventoryPaths.filter((path) => pathMatchesInventory(item, path)).map(redactedSecretPath),
+    );
   if (related.length > 0) return [...new Set(related)].slice(0, 8);
 
   if (/session|credential|auth/i.test(threat.title)) {
@@ -213,6 +218,16 @@ export function threatEvidencePaths(
   }
   if (surface.api.length > 0) return redactedSecretPaths(surface.api).slice(0, 8);
   return redactedSecretPaths(surface.auth).slice(0, 8);
+}
+
+function pathMatchesInventory(component: string, inventoryPath: string): boolean {
+  const normalizedComponent = component.replace(/^\/+|\/+$/g, "");
+  const normalizedPath = inventoryPath.replace(/^\/+|\/+$/g, "");
+  if (normalizedComponent.endsWith("/**")) {
+    const prefix = normalizedComponent.slice(0, -3).replace(/\/+$/, "");
+    return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);
+  }
+  return normalizedComponent === normalizedPath;
 }
 
 /** Pack ids claimed by the threat-model tool for the active stacks. */
@@ -449,7 +464,10 @@ function buildThreats(
 
 const TOOL_DESCRIPTION = `Defensive tool: produce STRIDE-oriented remediation threat fragments and high-residual finding seeds to prioritise hardening.\n\nArgs: project_root, stack?, focus_area?, assets?, max_files?, focus_paths?, response_format.\nReturns: threats[], finding_seeds (also exposed as findings).\n\nGuidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
-export function registerBuildRemediationThreatModel(server: McpServer): void {
+export function registerBuildRemediationThreatModel(
+  server: McpServer,
+  config: ServerConfig = loadConfig(),
+): void {
   server.registerTool(
     "secure_mcp_build_remediation_threat_model",
     {
@@ -466,12 +484,20 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
     async (params: Input) => {
       try {
         const root = await normalizeProjectRoot(params.project_root);
-        const profile = await profileProject(root, { focusPrefixes: params.focus_paths });
+        const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
+        const profile = await profileProject(root, {
+          focusPrefixes: params.focus_paths,
+          maxFiles: effectiveMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
+        });
         const stacks =
           params.stack && params.stack !== "auto" ? [params.stack] : profile.likelyStacks;
 
         const { files, coverage } = await walkProject(root, {
-          maxFiles: params.max_files ?? 300,
+          maxFiles: params.max_files ?? config.defaultMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
           focusPrefixes: params.focus_paths,
         });
 
@@ -509,7 +535,11 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
         ).map((threat) => ({
           ...threat,
           related_components: redactedSecretPaths(threat.related_components),
-          evidence_paths: threatEvidencePaths(threat, surfaceForEvidence),
+          evidence_paths: threatEvidencePaths(
+            threat,
+            surfaceForEvidence,
+            files.map((file) => file.relativePath),
+          ),
           proof_gap: evidence.unresolved_questions.slice(0, 3),
         }));
 
@@ -602,20 +632,20 @@ export function registerBuildRemediationThreatModel(server: McpServer): void {
 
         const md = [
           `# Remediation-focused threat model`,
-          data.summary,
+          escapeMarkdown(data.summary),
           "",
           `## Trust boundaries (for control placement)`,
-          ...data.trust_boundaries.map((b) => `- ${b}`),
+          ...data.trust_boundaries.map((b) => `- ${escapeMarkdown(b)}`),
           "",
           ...threats.map(
             (t) =>
-              `## ${t.id} [${t.stride_label}] ${t.title}\n` +
-              `${t.description}\n` +
-              `- Evidence paths: ${t.evidence_paths?.join(", ") || "none in bounded inventory"}\n` +
-              `- Recommended controls: ${t.recommended_controls.join("; ")}\n` +
-              `- Proof gaps: ${t.proof_gap?.join("; ") || "manual confirmation required"}\n` +
-              `- Residual risk: ${t.residual_risk}\n` +
-              `- Verify: ${t.verification_suggestion}\n`,
+              `## ${escapeMarkdown(t.id)} [${escapeMarkdown(t.stride_label)}] ${escapeMarkdown(t.title)}\n` +
+              `${escapeMarkdown(t.description)}\n` +
+              `- Evidence paths: ${escapeMarkdown(t.evidence_paths?.join(", ") || "none in bounded inventory")}\n` +
+              `- Recommended controls: ${escapeMarkdown(t.recommended_controls.join("; "))}\n` +
+              `- Proof gaps: ${escapeMarkdown(t.proof_gap?.join("; ") || "manual confirmation required")}\n` +
+              `- Residual risk: ${escapeMarkdown(t.residual_risk)}\n` +
+              `- Verify: ${escapeMarkdown(t.verification_suggestion)}\n`,
           ),
         ].join("\n");
 

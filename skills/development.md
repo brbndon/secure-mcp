@@ -24,8 +24,17 @@ Anything an agent or hosted model reads (tool names/descriptions, skills, docs, 
 ```bash
 pnpm install
 pnpm build
+export SECURE_MCP_DEV_MODE=1
 export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
 pnpm smoke
+```
+
+Install the master skill and MCP client wiring for pi / Claude Code / Cursor / Codex:
+
+```bash
+./scripts/install-agents.sh install    # idempotent; re-run any time
+./scripts/install-agents.sh check     # verify symlinks, configs, server startup
+./scripts/install-agents.sh uninstall
 ```
 
 ## Code map
@@ -37,6 +46,8 @@ pnpm smoke
 | `src/tools/` | One tool per file + `index.ts` registration |
 | `src/knowledge/packs/` | Named packs + registry / stack routing |
 | `src/knowledge/common.ts` etc. | Scan patterns + re-exports of pack checklists |
+| `scripts/install-agents.sh` | Idempotent install/check/uninstall of the master skill symlinks + MCP client configs (pi, Claude Code, Cursor, Codex) |
+| `agents/codex.toml` | OpenAI Codex agent manifest copied to `~/.codex/agents/secure-mcp.toml` by the install script |
 | `src/lib/filesystem.ts` | Safe FS walk/read/helpers + stack profiling |
 | `src/lib/license.ts` | License resolution/validation |
 | `src/lib/types.ts` | Shared TS types |

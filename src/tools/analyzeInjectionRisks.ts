@@ -5,11 +5,11 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
+import { loadConfig, type ServerConfig } from "../config.js";
 import {
   findLineNumber,
   finalizeCoverage,
   recordCoverageExclusion,
-  DEFAULT_MAX_FILE_BYTES,
   normalizeProjectRoot,
   readProjectFile,
   snippetAround,
@@ -23,7 +23,8 @@ import {
   redactFindings,
   redactedSecretPaths,
 } from "../lib/redact.js";
-import type { Finding } from "../lib/types.js";
+import { escapeMarkdown } from "../lib/markdown.js";
+import type { Finding, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
   createFindingIdFactory,
@@ -64,7 +65,14 @@ function swiftPatternAppliesToFile(
   return false;
 }
 
-export function registerAnalyzeInjectionRisks(server: McpServer): void {
+export function shouldRunNextjsInjectionDetectors(stack: "auto" | StackFocus): boolean {
+  return stack === "auto" || stack === "nextjs";
+}
+
+export function registerAnalyzeInjectionRisks(
+  server: McpServer,
+  config: ServerConfig = loadConfig(),
+): void {
   server.registerTool(
     "secure_mcp_analyze_injection_risks",
     {
@@ -102,7 +110,9 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
         ]);
 
         const { files, coverage } = await walkProject(root, {
-          maxFiles: params.max_files ?? 400,
+          maxFiles: params.max_files ?? config.defaultMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
           extensions,
           focusPrefixes: params.focus_paths,
         });
@@ -147,7 +157,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
             });
           }
         }
-        if (stack === "auto" || stack === "nextjs" || stack === "typescript") {
+        if (shouldRunNextjsInjectionDetectors(stack)) {
           for (const p of NEXTJS_PATTERNS) {
             if (p.id.includes("PUBLIC") || p.id.includes("USE-CLIENT")) continue;
             patterns.push({
@@ -200,7 +210,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
         const detectorFamiliesRun = new Set<string>();
 
         for (const file of files) {
-          if (file.size > DEFAULT_MAX_FILE_BYTES) {
+          if (file.size > config.maxFileBytes) {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,
               kind: "file",
@@ -222,7 +232,7 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
 
           let content: string;
           try {
-            content = (await readProjectFile(root, file.relativePath)).content;
+            content = (await readProjectFile(root, file.relativePath, config.maxFileBytes)).content;
           } catch {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,
@@ -333,10 +343,10 @@ export function registerAnalyzeInjectionRisks(server: McpServer): void {
           "",
           ...safeFindings.slice(0, 50).map(
             (f) =>
-              `### ${f.id} [${f.severity}] ${f.title}\n` +
-              `- Evidence: ${f.file}:${f.line ?? "?"}\n` +
-              `- Impact if unremediated: ${f.impact_if_unremediated}\n` +
-              `- Remediation: ${f.remediation}\n`,
+              `### ${escapeMarkdown(f.id)} [${escapeMarkdown(f.severity)}] ${escapeMarkdown(f.title)}\n` +
+              `- Evidence: ${escapeMarkdown(`${f.file ?? "?"}:${f.line ?? "?"}`)}\n` +
+              `- Impact if unremediated: ${escapeMarkdown(f.impact_if_unremediated)}\n` +
+              `- Remediation: ${escapeMarkdown(f.remediation)}\n`,
           ),
         ].join("\n");
 

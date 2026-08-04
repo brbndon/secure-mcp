@@ -1,0 +1,43 @@
+---
+interface Props {
+  eyebrow: string;
+  title: string;
+  titleId: string;
+  lede?: string;
+  /** Wider intro for help/support; default is legal-friendly */
+  wide?: boolean;
+  class?: string;
+}
+
+const {
+  eyebrow,
+  title,
+  titleId,
+  lede,
+  wide = false,
+  class: className = "",
+} = Astro.props;
+---
+
+<section
+  class:list={[
+    "site-shell pt-16 pb-10 md:pt-20 md:pb-12",
+    wide ? "max-w-[40rem]" : "max-w-[38rem]",
+    className,
+  ]}
+  aria-labelledby={titleId}
+>
+  <p class="eyebrow">{eyebrow}</p>
+  <h1
+    id={titleId}
+    class="m-0 mb-4 text-[clamp(2.25rem,5.5vw,3.25rem)] font-semibold tracking-[-0.03em] leading-[1.08]"
+  >
+    {title}
+  </h1>
+  {
+    lede && (
+      <p class="lede text-[1.0625rem] md:text-[1.125rem]">{lede}</p>
+    )
+  }
+  <slot />
+</section>

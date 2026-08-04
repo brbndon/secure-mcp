@@ -19,6 +19,7 @@ import {
   packIdsWithCategories,
   recommendPackIds,
   recommendPackPlan,
+  uniquePackIds,
 } from "./registry.js";
 import type { StackFocus } from "../../lib/types.js";
 import type { KnowledgePack, PackItem } from "./types.js";
@@ -403,6 +404,17 @@ describe("packIdsWithCategories", () => {
     assert.ok(authPacks.includes("expo-rn"));
     assert.ok(!authPacks.includes("secrets"), `secrets has no authn items: ${authPacks.join(",")}`);
     assert.ok(!authPacks.includes("auth-web"));
+  });
+});
+
+describe("uniquePackIds", () => {
+  it("dedupes pack ids before sampling and counting", () => {
+    assert.deepEqual(uniquePackIds(["core", "core", "secrets", "core"]), ["core", "secrets"]);
+    const packs = uniquePackIds(["core", "core", "secrets"]).map((id) => getPack(id));
+    const items = filterPackItems(packs, { maxItems: DEFAULT_MAX_ITEMS });
+    const counts = countItemsPerPack(items, ["core", "core", "secrets"]);
+    assert.deepEqual(Object.keys(counts).sort(), ["core", "secrets"]);
+    assert.equal(Object.keys(counts).length, 2);
   });
 });
 

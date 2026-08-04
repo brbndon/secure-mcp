@@ -1,0 +1,58 @@
+---
+/**
+ * Pi-style frame for gallery panels — same chrome language as the hero
+ * session, with a collapsible-looking tool/skill header above real output.
+ */
+import PiWindow from "./PiWindow.astro";
+
+interface Props {
+  /** Window title (project / context) */
+  title: string;
+  /** Tool or skill header label, e.g. secure_mcp_review_secrets */
+  header: string;
+  /** "tool" | "skill" — colors the bracket tag */
+  headerKind?: "tool" | "skill";
+  /** Accessible label describing the panel content */
+  label: string;
+  /** Optional max height for scrollable body content */
+  maxHeightClass?: string;
+  class?: string;
+}
+
+const {
+  title,
+  header,
+  headerKind = "tool",
+  label,
+  maxHeightClass = "",
+  class: className = "",
+} = Astro.props;
+
+const tagColor = headerKind === "skill" ? "#c9a0ff" : "#7ec8c0";
+const tag = headerKind === "skill" ? "skill" : "tool";
+---
+
+<PiWindow title={title} label={label} class={className}>
+  <div class="flex h-full min-h-0 flex-col font-mono text-[0.625rem] leading-[1.5] md:text-[0.655rem] md:leading-[1.52]">
+    <div
+      class="mx-3 mt-2.5 shrink-0 rounded-sm px-2 py-1.5 md:mx-3.5"
+      style="background: #2f3038;"
+    >
+      <p class="m-0 truncate tracking-tight text-[0.6rem] md:text-[0.625rem]">
+        <span style={`color: ${tagColor};`}>[{tag}]</span>{" "}
+        <span style="color: #e8e8ee;">{header}</span>{" "}
+        <span style="color: #7a7a86;">(ctrl+o to expand)</span>
+      </p>
+    </div>
+
+    <div
+      class:list={[
+        "min-h-0 flex-1 overflow-auto px-3 pt-2 pb-2.5 md:px-3.5",
+        maxHeightClass,
+      ]}
+      style="color: #c8c8ce;"
+    >
+      <slot />
+    </div>
+  </div>
+</PiWindow>

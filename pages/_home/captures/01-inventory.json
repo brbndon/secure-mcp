@@ -1,0 +1,85 @@
+{
+  "ok": true,
+  "project_root": "/Users/brandon/Code/secure-mcp/fixtures/tiny-app",
+  "summary": "Found 8 files under /Users/brandon/Code/secure-mcp/fixtures/tiny-app. Likely stacks: common, typescript, nextjs, swift.",
+  "profile": {
+    "likelyStacks": [
+      "common",
+      "typescript",
+      "nextjs",
+      "swift"
+    ],
+    "hasPackageJson": true,
+    "hasNextConfig": true,
+    "hasTsConfig": false,
+    "hasPackageSwift": false,
+    "hasXcodeProject": false,
+    "hasSwiftFiles": true,
+    "hasTypeScriptFiles": true,
+    "topLevelEntries": [
+      "app/",
+      "ios/",
+      "lib/",
+      "middleware.ts",
+      "next.config.js",
+      "package.json"
+    ],
+    "topLevelEntriesTruncated": false
+  },
+  "file_count": 8,
+  "by_extension": {
+    ".ts": 3,
+    ".tsx": 1,
+    ".plist": 1,
+    ".swift": 1,
+    ".js": 1,
+    ".json": 1
+  },
+  "sample_files": [
+    "app/api/search/route.ts",
+    "app/page.tsx",
+    "ios/Info.plist",
+    "ios/Secrets.swift",
+    "lib/auth.ts",
+    "middleware.ts",
+    "next.config.js",
+    "package.json"
+  ],
+  "truncated": false,
+  "coverage": {
+    "included_paths": [
+      "app/api/search/route.ts",
+      "app/page.tsx",
+      "ios/Info.plist",
+      "ios/Secrets.swift",
+      "lib/auth.ts",
+      "middleware.ts",
+      "next.config.js",
+      "package.json"
+    ],
+    "excluded_paths": [],
+    "ignored_paths": [],
+    "caps": {
+      "max_files": 400,
+      "max_depth": 12,
+      "max_file_bytes": 262144
+    },
+    "truncation": {
+      "truncated": false,
+      "reasons": [],
+      "coverage_events_truncated": false
+    },
+    "files_reviewed": [],
+    "candidate_dispositions": [],
+    "candidate_disposition_counts": {
+      "reportable": 0,
+      "needs_review": 0,
+      "suppressed": 0,
+      "not_applicable": 0,
+      "deferred": 0
+    },
+    "scan_status": "complete",
+    "not_observed_means": "no_candidate_in_files_reviewed"
+  },
+  "files_reviewed": []
+}

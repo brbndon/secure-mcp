@@ -110,6 +110,20 @@ export interface WalkOptions {
 export interface ProfileOptions {
   /** When set, language sampling walks only these relative prefixes. */
   focusPrefixes?: string[];
+  /** Optional scan limits inherited from the server configuration. */
+  maxFiles?: number;
+  maxDepth?: number;
+  maxFileBytes?: number;
+}
+
+interface TopLevelInspection {
+  entries: string[];
+  truncated: boolean;
+  hasXcodeProject: boolean;
+  hasAndroidDirectory: boolean;
+  hasIosDirectory: boolean;
+  hasAppDirectory: boolean;
+  hasPagesDirectory: boolean;
 }
 
 export interface FileEntry {
@@ -696,13 +710,47 @@ export async function readProjectFileIfExists(
   }
 }
 
+/** Stream top-level entries while retaining only a bounded preview. */
+async function inspectTopLevel(projectRoot: string, maxEntries: number): Promise<TopLevelInspection> {
+  const root = await normalizeProjectRoot(projectRoot);
+  const directory = await fs.opendir(root);
+  const entries: string[] = [];
+  let entryCount = 0;
+  let hasXcodeProject = false;
+  let hasAndroidDirectory = false;
+  let hasIosDirectory = false;
+  let hasAppDirectory = false;
+  let hasPagesDirectory = false;
+
+  for await (const entry of directory) {
+    entryCount++;
+    const isDirectory = entry.isDirectory();
+    if (entries.length < maxEntries) {
+      entries.push(isDirectory ? `${entry.name}/` : entry.name);
+    }
+    if (!isDirectory) continue;
+    hasXcodeProject ||= entry.name.endsWith(".xcodeproj") || entry.name.endsWith(".xcworkspace");
+    hasAndroidDirectory ||= entry.name === "android";
+    hasIosDirectory ||= entry.name === "ios";
+    hasAppDirectory ||= entry.name === "app";
+    hasPagesDirectory ||= entry.name === "pages";
+  }
+
+  entries.sort((a, b) => a.localeCompare(b));
+  return {
+    entries,
+    truncated: entryCount > maxEntries,
+    hasXcodeProject,
+    hasAndroidDirectory,
+    hasIosDirectory,
+    hasAppDirectory,
+    hasPagesDirectory,
+  };
+}
+
 /** List top-level directory names/files for architecture overview. */
 export async function listTopLevel(projectRoot: string): Promise<string[]> {
-  const root = await normalizeProjectRoot(projectRoot);
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  return entries
-    .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-    .sort((a, b) => a.localeCompare(b));
+  return (await inspectTopLevel(projectRoot, 1_000)).entries;
 }
 
 /** Signals used to decide whether a project really is an Expo / React Native app. */
@@ -762,8 +810,14 @@ export async function profileProject(
   options: ProfileOptions = {},
 ): Promise<ProjectProfile> {
   const root = await normalizeProjectRoot(projectRoot);
-  const topLevelEntries = await listTopLevel(root);
+  const topLevel = await inspectTopLevel(
+    root,
+    Math.min(1_000, Math.max(20, options.maxFiles ?? 80)),
+  );
+  const topLevelEntries = topLevel.entries;
   const focusPrefixes = options.focusPrefixes;
+  const metadataReadLimit = (defaultLimit: number): number =>
+    options.maxFileBytes ?? defaultLimit;
 
   const exists = async (rel: string): Promise<boolean> => {
     try {
@@ -782,14 +836,13 @@ export async function profileProject(
     (await exists("next.config.ts")) ||
     (await exists("next.config.cjs"));
   const hasPackageSwift = await exists("Package.swift");
-  const hasXcodeProject =
-    topLevelEntries.some((e) => e.endsWith(".xcodeproj/")) ||
-    topLevelEntries.some((e) => e.endsWith(".xcworkspace/"));
+  const hasXcodeProject = topLevel.hasXcodeProject;
 
   // Sample walk for language presence (cheap caps); honor focus_paths when set.
   const { files } = await walkProject(root, {
-    maxFiles: 80,
-    maxDepth: 6,
+    maxFiles: options.maxFiles ?? 80,
+    maxDepth: options.maxDepth ?? 6,
+    maxFileBytes: options.maxFileBytes,
     extensions: new Set([".ts", ".tsx", ".js", ".jsx", ".swift", ".json", ".pbxproj", ".plist"]),
     focusPrefixes,
   });
@@ -799,7 +852,7 @@ export async function profileProject(
 
   let dependencyNames: string[] = [];
   if (hasPackageJson) {
-    const pkgFile = await readProjectFileIfExists(root, "package.json", 64 * 1024);
+    const pkgFile = await readProjectFileIfExists(root, "package.json", metadataReadLimit(64 * 1024));
     if (pkgFile) {
       try {
         const pkg = JSON.parse(pkgFile.content) as {
@@ -816,10 +869,10 @@ export async function profileProject(
     }
   }
 
-  const appJson = await readProjectFileIfExists(root, "app.json", 32 * 1024);
+  const appJson = await readProjectFileIfExists(root, "app.json", metadataReadLimit(32 * 1024));
   let appConfigContent: string | null = null;
   for (const name of ["app.config.js", "app.config.ts", "app.config.mjs", "app.config.cjs"]) {
-    const file = await readProjectFileIfExists(root, name, 32 * 1024);
+    const file = await readProjectFileIfExists(root, name, metadataReadLimit(32 * 1024));
     if (file) {
       appConfigContent = file.content;
       break;
@@ -838,7 +891,7 @@ export async function profileProject(
     hasReactNativeConfig:
       (await exists("react-native.config.js")) || (await exists("react-native.config.ts")),
     hasNativeProjectDirs:
-      topLevelEntries.includes("android/") && topLevelEntries.includes("ios/"),
+      topLevel.hasAndroidDirectory && topLevel.hasIosDirectory,
   });
 
   // Conservative macOS detection: AppKit / Mac Catalyst / macosx deployment signals
@@ -846,7 +899,7 @@ export async function profileProject(
   if (hasSwiftFiles) {
     const sampleSwift = files.filter((f) => f.ext === ".swift").slice(0, 30);
     for (const f of sampleSwift) {
-      const body = await readProjectFileIfExists(root, f.relativePath, 32 * 1024);
+      const body = await readProjectFileIfExists(root, f.relativePath, metadataReadLimit(32 * 1024));
       if (!body) continue;
       if (
         /\bimport\s+AppKit\b|\bNSApplication\b|\bNSWindow\b|\bMacCatalyst\b|#if\s+os\(macOS\)/.test(
@@ -860,7 +913,7 @@ export async function profileProject(
     if (!hasMacOS) {
       const pbx = files.find((f) => f.relativePath.endsWith(".pbxproj"));
       if (pbx) {
-        const body = await readProjectFileIfExists(root, pbx.relativePath, 64 * 1024);
+        const body = await readProjectFileIfExists(root, pbx.relativePath, metadataReadLimit(64 * 1024));
         if (body && /SDKROOT\s*=\s*macosx|MACOSX_DEPLOYMENT_TARGET/.test(body.content)) {
           hasMacOS = true;
         }
@@ -875,7 +928,7 @@ export async function profileProject(
     likelyStacks.push("nextjs");
   } else if (
     !hasExpo &&
-    (topLevelEntries.includes("app/") || topLevelEntries.includes("pages/"))
+    (topLevel.hasAppDirectory || topLevel.hasPagesDirectory)
   ) {
     likelyStacks.push("nextjs");
   }
@@ -895,6 +948,7 @@ export async function profileProject(
     hasMacOS,
     likelyStacks,
     topLevelEntries,
+    topLevelEntriesTruncated: topLevel.truncated,
   };
 }
 

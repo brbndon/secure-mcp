@@ -6,8 +6,16 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { toolError, toolSuccess } from "../lib/filesystem.js";
-import { SEVERITY_ORDER, type Finding, type Severity } from "../lib/types.js";
-import { FindingSchema } from "../knowledge/findings-schema.js";
+import { redactFindings } from "../lib/redact.js";
+import { escapeMarkdown, markdownCode } from "../lib/markdown.js";
+import {
+  CANDIDATE_DISPOSITIONS,
+  SEVERITY_ORDER,
+  type CandidateDisposition,
+  type Finding,
+  type Severity,
+} from "../lib/types.js";
+import { ensureFindingTraceability, FindingSchema } from "../knowledge/findings-schema.js";
 
 const InputSchema = z
   .object({
@@ -55,7 +63,10 @@ function confidenceAtLeast(
 }
 
 function dedupeKey(f: Finding): string {
-  return [f.category, f.title, f.file ?? "", f.line ?? "", f.cwe ?? ""].join("|").toLowerCase();
+  return (
+    f.instance_id ??
+    [f.category, f.title, f.file ?? "", f.line ?? "", f.cwe ?? ""].join("|")
+  ).toLowerCase();
 }
 
 function mergeFindings(a: Finding, b: Finding): Finding {
@@ -85,6 +96,20 @@ function mergeFindings(a: Finding, b: Finding): Finding {
         : b.verification_suggestion,
     cwe: a.cwe ?? b.cwe,
     owasp: a.owasp ?? b.owasp,
+    rule_family: a.rule_family ?? b.rule_family,
+    root_control: a.root_control ?? b.root_control,
+    instance_id: a.instance_id ?? b.instance_id,
+    disposition:
+      a.disposition === "reportable" || b.disposition === "reportable"
+        ? "reportable"
+        : a.disposition ?? b.disposition,
+    disposition_reason: a.disposition_reason ?? b.disposition_reason,
+    source: a.source ?? b.source,
+    control: a.control ?? b.control,
+    sink: a.sink ?? b.sink,
+    counterevidence: [...new Set([...(a.counterevidence ?? []), ...(b.counterevidence ?? [])])],
+    proof_gap: [...new Set([...(a.proof_gap ?? []), ...(b.proof_gap ?? [])])],
+    validation: [...new Set([...(a.validation ?? []), ...(b.validation ?? [])])],
     tags: tags.length ? tags : undefined,
   };
 }
@@ -96,11 +121,11 @@ function buildMarkdown(
   counts: Record<string, number>,
 ): string {
   const lines: string[] = [
-    `# ${title}`,
+    `# ${escapeMarkdown(title)}`,
     "",
     "> Defensive secure-code-review report. Goal: help the development team harden the codebase. Do not include exploit or attack PoC content.",
     "",
-    projectRoot ? `**Project:** ${projectRoot}` : "",
+    projectRoot ? `**Project:** ${escapeMarkdown(projectRoot)}` : "",
     `**Total findings:** ${findings.length}`,
     "",
     "## Summary by severity (remediation priority)",
@@ -111,62 +136,81 @@ function buildMarkdown(
 
   for (const f of findings) {
     lines.push("");
-    lines.push(`### ${f.id} — ${f.title}`);
+    lines.push(`### ${escapeMarkdown(f.id)} — ${escapeMarkdown(f.title)}`);
     lines.push("");
     lines.push(`#### Classification`);
     lines.push(`- **Severity:** ${f.severity}`);
     lines.push(`- **Confidence:** ${f.confidence}`);
-    lines.push(`- **Category:** ${f.category}`);
-    if (f.cwe) lines.push(`- **CWE:** ${f.cwe}`);
-    if (f.owasp) lines.push(`- **OWASP:** ${f.owasp}`);
-    if (f.file) lines.push(`- **Location:** ${f.file}${f.line ? `:${f.line}` : ""}`);
+    lines.push(`- **Category:** ${escapeMarkdown(f.category)}`);
+    if (f.cwe) lines.push(`- **CWE:** ${escapeMarkdown(f.cwe)}`);
+    if (f.owasp) lines.push(`- **OWASP:** ${escapeMarkdown(f.owasp)}`);
+    if (f.file) {
+      lines.push(
+        `- **Location:** ${escapeMarkdown(`${f.file}${f.line ? `:${f.line}` : ""}`)}`,
+      );
+    }
+    if (f.instance_id) lines.push(`- **Stable instance:** ${escapeMarkdown(f.instance_id)}`);
+    if (f.rule_family) lines.push(`- **Rule family:** ${escapeMarkdown(f.rule_family)}`);
+    if (f.root_control) lines.push(`- **Root control:** ${escapeMarkdown(f.root_control)}`);
+    if (f.disposition) lines.push(`- **Disposition:** ${escapeMarkdown(f.disposition)}`);
+    if (f.disposition_reason) {
+      lines.push(`- **Disposition reason:** ${escapeMarkdown(f.disposition_reason)}`);
+    }
     lines.push("");
     lines.push(`#### Evidence`);
-    lines.push(f.description);
+    lines.push(escapeMarkdown(f.description));
     lines.push("");
-    lines.push(`\`${f.evidence}\``);
+    lines.push(markdownCode(f.evidence));
+    if (f.source || f.control || f.sink) {
+      lines.push("");
+      lines.push(`#### Proof context`);
+      if (f.source) lines.push(`- **Source:** ${escapeMarkdown(f.source)}`);
+      if (f.control) lines.push(`- **Control:** ${escapeMarkdown(f.control)}`);
+      if (f.sink) lines.push(`- **Sink:** ${escapeMarkdown(f.sink)}`);
+    }
+    if (f.counterevidence?.length) {
+      lines.push("");
+      lines.push(`#### Counterevidence`);
+      for (const item of f.counterevidence) lines.push(`- ${escapeMarkdown(item)}`);
+    }
+    if (f.proof_gap?.length) {
+      lines.push("");
+      lines.push(`#### Proof gap`);
+      for (const item of f.proof_gap) lines.push(`- ${escapeMarkdown(item)}`);
+    }
+    if (f.validation?.length) {
+      lines.push("");
+      lines.push(`#### Validation`);
+      for (const item of f.validation) lines.push(`- ${escapeMarkdown(item)}`);
+    }
     lines.push("");
     lines.push(`#### Impact if unremediated`);
-    lines.push(f.impact_if_unremediated);
+    lines.push(escapeMarkdown(f.impact_if_unremediated));
     lines.push("");
     lines.push(`#### Remediation`);
-    lines.push(f.remediation);
+    lines.push(escapeMarkdown(f.remediation));
     lines.push("");
     lines.push(`#### Residual risk`);
-    lines.push(f.residual_risk);
+    lines.push(escapeMarkdown(f.residual_risk));
     lines.push("");
     lines.push(`#### Verification suggestion`);
-    lines.push(f.verification_suggestion);
+    lines.push(escapeMarkdown(f.verification_suggestion));
   }
 
   return lines.filter((l) => l !== undefined).join("\n");
 }
 
-const TOOL_DESCRIPTION = `Defensive secure-code-review tool: normalize, filter, deduplicate, and prioritise findings into a remediation-focused final report for the development team.
+/** Exported for tests: markdown includes additive proof/traceability fields. */
+export function findingsToMarkdown(
+  title: string,
+  projectRoot: string | undefined,
+  findings: Finding[],
+  counts: Record<string, number>,
+): string {
+  return buildMarkdown(title, projectRoot, findings, counts);
+}
 
-PURPOSE (defensive only)
-- Combine intermediate findings from inventory, architecture, authentication, injection-risk, secrets, threat-model-for-remediation, and manual agent analysis.
-- Enforce the shared Finding schema: evidence → classification → impact_if_unremediated → remediation → residual_risk → verification_suggestion.
-- Produce executive summary stats for prioritising hardening work.
-- Never rewrite findings into exploit guides or offensive playbooks.
-
-WHEN TO CALL
-- After multi-phase review tools and agent confirmation of high-priority items.
-- Thorough audits should accumulate intermediate artifacts before this final rollup (long-running, multi-step analysis is expected and encouraged).
-
-Args:
-  - findings (Finding[], required): must include all required remediation fields
-  - project_root (optional metadata)
-  - min_severity / min_confidence filters
-  - dedupe (boolean, default true)
-  - report_title, response_format
-
-Returns:
-  Prioritised findings (renumbered F-001…), severity counts, executive_summary, optional markdown body structured for remediation.
-
-GUARDRAILS
-- Reject incomplete findings that lack remediation structure (schema validation).
-- Report language must stay defensive and owner-focused.`;
+const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts.`;
 
 export function registerProduceFindings(server: McpServer): void {
   server.registerTool(
@@ -184,7 +228,7 @@ export function registerProduceFindings(server: McpServer): void {
     },
     async (params: Input) => {
       try {
-        let list: Finding[] = params.findings.map((f) => ({ ...f }));
+        let list: Finding[] = params.findings.map((f) => ensureFindingTraceability({ ...f }));
 
         list = list.filter(
           (f) =>
@@ -205,12 +249,22 @@ export function registerProduceFindings(server: McpServer): void {
         list.sort((a, b) => {
           const sev = SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity];
           if (sev !== 0) return sev;
-          return CONFIDENCE_ORDER[b.confidence] - CONFIDENCE_ORDER[a.confidence];
+          const confidence = CONFIDENCE_ORDER[b.confidence] - CONFIDENCE_ORDER[a.confidence];
+          if (confidence !== 0) return confidence;
+          return (a.instance_id ?? a.id).localeCompare(b.instance_id ?? b.id);
         });
 
-        list = list.map((f, i) => ({
+        // Redact after identity/dedupe so stable keys use unredacted location metadata.
+        list = redactFindings(list).map((f, i) => ({
           ...f,
-          tags: [...new Set([...(f.tags ?? []), `source-id:${f.id}`, "remediation-report"])],
+          tags: [
+            ...new Set([
+              ...(f.tags ?? []),
+              `source-id:${f.id}`,
+              ...(f.instance_id ? [`instance-id:${f.instance_id}`] : []),
+              "remediation-report",
+            ]),
+          ],
           id: `F-${String(i + 1).padStart(3, "0")}`,
         }));
 
@@ -237,6 +291,7 @@ export function registerProduceFindings(server: McpServer): void {
             .slice(0, 10)
             .map((f) => ({
               id: f.id,
+              instance_id: f.instance_id,
               title: f.title,
               severity: f.severity,
               remediation: f.remediation,
@@ -251,6 +306,7 @@ export function registerProduceFindings(server: McpServer): void {
           summary: `${title}: ${list.length} finding(s); critical=${counts.critical}, high=${counts.high}, medium=${counts.medium}, low=${counts.low}, info=${counts.info}. Prioritise remediation.`,
           executive_summary,
           findings: list,
+          candidate_disposition_counts: countDispositions(list),
           notes: [
             "Each finding follows evidence → classify → impact → remediate → verify.",
             "Do not expand this report into exploit or PoC attack material.",
@@ -269,6 +325,14 @@ export function registerProduceFindings(server: McpServer): void {
       }
     },
   );
+}
+
+function countDispositions(findings: Finding[]): Record<CandidateDisposition, number> {
+  const counts = Object.fromEntries(
+    CANDIDATE_DISPOSITIONS.map((disposition) => [disposition, 0]),
+  ) as Record<CandidateDisposition, number>;
+  for (const finding of findings) counts[finding.disposition ?? "needs_review"]++;
+  return counts;
 }
 
 function topCategories(findings: Finding[], n: number): { category: string; count: number }[] {

@@ -73,11 +73,14 @@ export function redactedEvidence(raw: string): string {
 
 /**
  * Redact secret-like strings on a finding before it crosses an MCP output boundary.
- * Does not alter stable identity fields (id, instance_id, rule_family, root_control, line).
+ * Stable identity fields are generated from non-secret metadata, but are still
+ * passed through the same boundary redaction for compatibility with external
+ * callers that supply legacy metadata.
  */
 export function redactFinding(finding: Finding): Finding {
   return {
     ...finding,
+    id: redactedEvidence(finding.id),
     title: redactedEvidence(finding.title),
     file: finding.file !== undefined ? redactedSecretPath(finding.file) : undefined,
     evidence: redactedEvidence(finding.evidence),
@@ -99,6 +102,13 @@ export function redactFinding(finding: Finding): Finding {
       finding.disposition_reason !== undefined
         ? redactedEvidence(finding.disposition_reason)
         : undefined,
+    rule_family:
+      finding.rule_family !== undefined ? redactedEvidence(finding.rule_family) : undefined,
+    root_control:
+      finding.root_control !== undefined ? redactedEvidence(finding.root_control) : undefined,
+    instance_id:
+      finding.instance_id !== undefined ? redactedEvidence(finding.instance_id) : undefined,
+    tags: finding.tags?.map(redactedEvidence),
   };
 }
 
@@ -126,8 +136,15 @@ export function redactCoverageReport(coverage: CoverageReport): CoverageReport {
     files_reviewed: redactedSecretPaths(coverage.files_reviewed),
     candidate_dispositions: coverage.candidate_dispositions.map((item) => ({
       ...item,
+      id: redactedEvidence(item.id),
       reason: redactedEvidence(item.reason),
       ...(item.file !== undefined ? { file: redactedSecretPath(item.file) } : {}),
+      ...(item.rule_family !== undefined
+        ? { rule_family: redactedEvidence(item.rule_family) }
+        : {}),
+      ...(item.instance_id !== undefined
+        ? { instance_id: redactedEvidence(item.instance_id) }
+        : {}),
     })),
   };
 }

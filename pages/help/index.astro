@@ -1,0 +1,436 @@
+---
+import LandingLayout from "../_home/LandingLayout.astro";
+import PageIntro from "../_home/components/PageIntro.astro";
+
+const base = import.meta.env.BASE_URL;
+
+const pageTitle = "Getting started — secure-mcp";
+const pageDescription =
+  "Install secure-mcp, set a license key, connect it to your MCP client, and run a structured defensive code review.";
+
+const steps = [
+  {
+    id: "install-and-build-the-server",
+    number: "01",
+    title: "Install and build the server",
+    body: "Requires Node.js 20+ and pnpm (or npm). The build produces the stdio entrypoint used by every MCP client.",
+    code: "cd secure-mcp\npnpm install\npnpm build",
+  },
+  {
+    id: "get-a-license-key",
+    number: "02",
+    title: "Provide a license key",
+    body: "The server refuses to start without a valid key, set as an environment variable or a single-line file.",
+    code: "export SECURE_MCP_LICENSE_KEY=smcp_<token>\npnpm start",
+  },
+  {
+    id: "connect-from-mcp-clients",
+    number: "03",
+    title: "Connect from your client",
+    body: "Point any MCP client at the built entrypoint with the license variable set. Works in Claude, Cursor, Codex, pi, and other stdio clients.",
+    code: `{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "node",
+      "args": ["/abs/path/secure-mcp/dist/index.js"],
+      "env": { "SECURE_MCP_LICENSE_KEY": "smcp_<token>" }
+    }
+  }
+}`,
+  },
+  {
+    id: "install-the-agent-skill",
+    number: "04",
+    title: "Install the agent skill",
+    body: "One script symlinks the master skill into pi, Claude Code, Cursor, and Codex, and wires the server config for each harness.",
+    code: "./scripts/install-agents.sh install\n./scripts/install-agents.sh check",
+  },
+] as const;
+
+const workflowPhases = [
+  {
+    phase: "Phase 1",
+    title: "Inventory",
+    body: "secure_mcp_list_project_structure scopes the repository and reports stacks, paths, and coverage.",
+  },
+  {
+    phase: "Phase 2",
+    title: "Architecture and guidance",
+    body: "secure_mcp_analyze_architecture detects stacks and recommends knowledge packs; secure_mcp_get_knowledge_pack loads them on demand.",
+  },
+  {
+    phase: "Phase 3",
+    title: "Category checks",
+    body: "Authentication, injection risks, and secrets reviews run in parallel, each returning structured candidates.",
+  },
+  {
+    phase: "Phase 4",
+    title: "Confirmation",
+    body: "The agent opens each candidate's file at the cited line and confirms the data flow before anything is reported.",
+  },
+  {
+    phase: "Phase 5",
+    title: "Remediation report",
+    body: "secure_mcp_produce_findings dedupes, filters, and prioritizes findings into a human-facing report.",
+  },
+  {
+    phase: "Phase 6",
+    title: "Handoff",
+    body: "Executive summary, fix plan, methodology limits, and a retest checklist — no exploit content anywhere.",
+  },
+] as const;
+---
+
+<LandingLayout title={pageTitle} description={pageDescription} route="/help">
+  <PageIntro
+    eyebrow="Getting started"
+    title="Run a review in five steps."
+    titleId="help-title"
+    lede="Everything from install to handoff — the commands are real, from the current build."
+    wide
+  />
+
+  <!-- Steps -->
+  <section class="site-shell pb-16 md:pb-24" aria-label="Setup steps">
+    <ol class="m-0 grid list-none gap-4 p-0 sm:grid-cols-2">
+      {
+        steps.map((step) => (
+          <li
+            id={step.id}
+            class="rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft md:p-7"
+          >
+            <span class="block font-mono text-[0.75rem] font-medium text-faint">
+              {step.number}
+            </span>
+            <h2 class="mt-2 mb-2 text-[1.125rem] font-semibold tracking-[-0.015em] text-ink">
+              {step.title}
+            </h2>
+            <p class="m-0 text-[0.9375rem] leading-relaxed text-muted">
+              {step.body}
+            </p>
+            <pre
+              class="mt-4 mb-0 overflow-x-auto rounded-[0.85rem] bg-night p-4 font-mono text-[0.75rem] leading-relaxed text-[#f5f5f7]/90 whitespace-pre"
+            ><code>{step.code}</code></pre>
+          </li>
+        ))
+      }
+    </ol>
+  </section>
+
+  <!-- Workflow -->
+  <section
+    class="relative left-1/2 right-1/2 w-screen -ml-[50vw] -mr-[50vw] bg-[#efeff1]"
+    aria-labelledby="workflow-title"
+  >
+    <div class="site-shell py-24 md:py-32">
+      <div class="max-w-2xl">
+        <p class="eyebrow">The audit workflow</p>
+        <h2 id="the-audit-workflow" class="section-title mb-5">
+          Six phases, one mandate.
+        </h2>
+        <p class="lede">
+          The recommended sequence keeps scans bounded, guidance stack-aware,
+          and findings confirmed before they reach a human.
+        </p>
+      </div>
+
+      <ul class="mt-14 grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
+        {
+          workflowPhases.map((item) => (
+            <li class="rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft">
+              <span class="block text-[0.6875rem] font-semibold tracking-[0.08em] text-muted uppercase">
+                {item.phase}
+              </span>
+              <h3 class="mt-2.5 mb-2 text-[1.125rem] font-semibold tracking-[-0.015em] text-ink">
+                {item.title}
+              </h3>
+              <p class="m-0 text-[0.9375rem] leading-relaxed text-muted">
+                {item.body}
+              </p>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- Coverage -->
+  <section class="site-shell py-24 md:py-32" aria-labelledby="coverage-title">
+    <div class="max-w-2xl">
+      <p class="eyebrow">Coverage honesty</p>
+      <h2 id="reading-coverage-reports" class="section-title mb-5">
+        “Not observed” never means “not scanned”.
+      </h2>
+      <p class="lede">
+        Every bounded scan returns structured coverage: which paths were
+        included, ignored, excluded, or truncated — and why.
+      </p>
+      <div
+        class="mt-8 rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft md:p-7"
+      >
+        <p class="mt-0 mb-3 text-[0.9375rem] leading-relaxed text-muted">
+          Coverage distinguishes three situations that scanners usually blur
+          together:
+        </p>
+        <ul class="m-0 grid list-none gap-3 p-0 text-[0.9375rem] text-ink">
+          <li class="flex items-start gap-3">
+            <span
+              class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+              aria-hidden="true"
+            />
+            <span class="text-muted">
+              <strong class="text-ink">No candidate found</strong> — every
+              reviewed file was checked and nothing matched.
+            </span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span
+              class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+              aria-hidden="true"
+            />
+            <span class="text-muted">
+              <strong class="text-ink">Scan truncated</strong> — caps were hit
+              and the remaining scope was not reviewed.
+            </span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span
+              class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+              aria-hidden="true"
+            />
+            <span class="text-muted">
+              <strong class="text-ink">Candidate pending</strong> — heuristics
+              stay candidates until the data flow is confirmed in code.
+            </span>
+          </li>
+        </ul>
+        <p class="mb-0 mt-5 text-[0.9375rem] leading-relaxed text-muted">
+          An empty finding list is never presented as proof that a whole tree
+          was clean. That keeps the report trustworthy — and actionable.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Defensive use -->
+  <section
+    class="site-shell pb-24 md:pb-32"
+    aria-labelledby="defensive-title"
+  >
+    <div class="max-w-2xl">
+      <p class="eyebrow">Defensive use policy</p>
+      <h2 id="defensive-use-policy" class="section-title mb-5">
+        Hardening only. By design.
+      </h2>
+      <p class="lede">
+        secure-mcp is a defensive, remediation-focused review tool. Its
+        mandate is to identify potential weaknesses, classify them, and
+        recommend concrete remediation.
+      </p>
+      <div
+        class="mt-8 rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft md:p-7"
+      >
+        <h3 class="mt-0 mb-3 text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
+          The server and its skills never do these
+        </h3>
+        <ul class="m-0 grid list-none gap-3 border-t border-line p-0 pt-5 text-[0.9375rem] text-muted">
+          <li class="flex items-start gap-3">
+            <span
+              class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+              aria-hidden="true"
+            />
+            Generate exploit code or proof-of-concept attack code
+          </li>
+          <li class="flex items-start gap-3">
+            <span
+              class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+              aria-hidden="true"
+            />
+            Offer offensive bypass or weaponization guidance
+          </li>
+          <li class="flex items-start gap-3">
+            <span
+              class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+              aria-hidden="true"
+            />
+            Use discovered secrets against any system
+          </li>
+          <li class="flex items-start gap-3">
+            <span
+              class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+              aria-hidden="true"
+            />
+            Execute target-project code, scripts, or binaries
+            <span class="text-faint">— review is read-only</span>
+          </li>
+        </ul>
+        <p class="mb-0 mt-5 text-[0.9375rem] leading-relaxed text-muted">
+          Use it only on code you own or are explicitly authorized to review.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section
+    class="relative left-1/2 right-1/2 w-screen -ml-[50vw] -mr-[50vw] bg-[#efeff1]"
+    aria-labelledby="help-faq-title"
+  >
+    <div class="site-shell py-24 md:py-32">
+      <div class="max-w-2xl">
+        <p class="eyebrow">Common questions</p>
+        <h2 id="help-faq-title" class="section-title mb-5">
+          The details that matter.
+        </h2>
+      </div>
+
+      <div class="mt-12 max-w-3xl border-t border-line">
+        <details class="faq-item group border-b border-line" id="development-key-for-evaluation">
+          <summary class="flex min-h-[4.25rem] cursor-pointer items-center justify-between gap-6 py-4 text-left text-[1.0625rem] font-medium tracking-[-0.01em] text-ink">
+            <span>What is the development key for evaluation?</span>
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink transition group-open:hidden"
+              aria-hidden="true"
+            >
+              +
+            </span>
+            <span
+              class="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink group-open:flex"
+              aria-hidden="true"
+            >
+              −
+            </span>
+          </summary>
+          <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
+            <p class="m-0">
+              The documented dev key (<code class="rounded bg-[#e8e8ed] px-1.5 py-0.5 font-mono text-[0.85em] text-ink">smcp_dev_local_testing_key_v1</code>)
+              works only with <code class="rounded bg-[#e8e8ed] px-1.5 py-0.5 font-mono text-[0.85em] text-ink">SECURE_MCP_DEV_MODE=1</code>,
+              is for local and CI testing only, and prints a clear warning. It
+              must never be used with production data or deployments.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq-item group border-b border-line" id="confirming-findings-in-code">
+          <summary class="flex min-h-[4.25rem] cursor-pointer items-center justify-between gap-6 py-4 text-left text-[1.0625rem] font-medium tracking-[-0.01em] text-ink">
+            <span>How do I confirm a finding in code?</span>
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink transition group-open:hidden"
+              aria-hidden="true"
+            >
+              +
+            </span>
+            <span
+              class="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink group-open:flex"
+              aria-hidden="true"
+            >
+              −
+            </span>
+          </summary>
+          <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
+            <p class="m-0">
+              Open the cited file at the cited line, trace the data flow from
+              source to sink, and check runtime configuration. High and
+              critical findings are never reported as confirmed until the
+              evidence is verified this way.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq-item group border-b border-line" id="request-a-stack-pack">
+          <summary class="flex min-h-[4.25rem] cursor-pointer items-center justify-between gap-6 py-4 text-left text-[1.0625rem] font-medium tracking-[-0.01em] text-ink">
+            <span>Can I request a stack pack or a tool?</span>
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink transition group-open:hidden"
+              aria-hidden="true"
+            >
+              +
+            </span>
+            <span
+              class="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink group-open:flex"
+              aria-hidden="true"
+            >
+              −
+            </span>
+          </summary>
+          <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
+            <p class="m-0">
+              Yes — stack packs and tool coverage evolve on a roadmap. Open a
+              support request with the category “Feature Request” and the
+              stack or surface you need.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq-item group border-b border-line" id="report-a-product-issue">
+          <summary class="flex min-h-[4.25rem] cursor-pointer items-center justify-between gap-6 py-4 text-left text-[1.0625rem] font-medium tracking-[-0.01em] text-ink">
+            <span>How do I report a product issue?</span>
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink transition group-open:hidden"
+              aria-hidden="true"
+            >
+              +
+            </span>
+            <span
+              class="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink group-open:flex"
+              aria-hidden="true"
+            >
+              −
+            </span>
+          </summary>
+          <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
+            <p class="m-0">
+              Provide a minimal reproducible local fixture, the tool and input
+              shape, and the structured coverage report. No live credentials,
+              sensitive source, or exploit code — keep reports focused on
+              containment, read-only behavior, and misleading audit results.
+            </p>
+          </div>
+        </details>
+
+        <details class="faq-item group border-b border-line" id="which-stacks-are-supported">
+          <summary class="flex min-h-[4.25rem] cursor-pointer items-center justify-between gap-6 py-4 text-left text-[1.0625rem] font-medium tracking-[-0.01em] text-ink">
+            <span>Which stacks are supported?</span>
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink transition group-open:hidden"
+              aria-hidden="true"
+            >
+              +
+            </span>
+            <span
+              class="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink group-open:flex"
+              aria-hidden="true"
+            >
+              −
+            </span>
+          </summary>
+          <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
+            <p class="m-0">
+              In v1: TypeScript and Next.js (App Router, Server Actions,
+              middleware) and Swift and SwiftUI, with Expo and React Native
+              detection. More surfaces are planned.
+            </p>
+          </div>
+        </details>
+      </div>
+
+      <p class="mt-8 text-[0.9375rem] text-muted">
+        Stuck on something specific?{" "}
+        <a
+          class="font-medium text-ink underline decoration-line underline-offset-[0.2em] transition-colors hover:decoration-ink"
+          href={`${base}support/`}
+        >
+          Contact support
+        </a>
+        . Or read the{" "}
+        <a
+          class="font-medium text-ink underline decoration-line underline-offset-[0.2em] transition-colors hover:decoration-ink"
+          href={`${base}docs/`}
+        >
+          full documentation
+        </a>
+        .
+      </p>
+    </div>
+  </section>
+</LandingLayout>

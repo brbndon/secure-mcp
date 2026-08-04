@@ -1,4 +1,10 @@
-# Architecture
+---
+title: Architecture
+description: Understand secure-mcp's stdio process boundary, filesystem safety policy, progressive knowledge packs, and the layers that keep audits read-only.
+sidebar:
+  label: Architecture
+  order: 6
+---
 
 ## Overview
 
@@ -53,7 +59,7 @@ On startup, `requireValidLicense()` resolves:
 1. `SECURE_MCP_LICENSE_KEY`, or
 2. first non-comment line of `SECURE_MCP_LICENSE_FILE`
 
-Validation is local format checking (`smcp_<token>`). Invalid/missing keys exit with code `1`.
+Validation is local format checking (`smcp_<token>`). The documented development key is accepted only when `SECURE_MCP_DEV_MODE=1` is set; startup emits a warning in that mode. Invalid/missing keys exit with code `1`, and production keys should be used without DEV_MODE.
 
 ## Filesystem policy
 

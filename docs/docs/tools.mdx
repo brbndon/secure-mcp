@@ -1,0 +1,58 @@
+---
+title: Tools
+description: Reference the secure-mcp tool surface, shared inputs, progressive knowledge packs, and structured finding contract used by defensive audits.
+sidebar:
+  label: Tools
+  order: 4
+---
+
+## Tools
+
+Every tool is read-only, idempotent, and scoped to defensive review. Category tools return candidate findings; `secure_mcp_produce_findings` turns confirmed items into a concise report.
+
+| Tool | Use it for |
+| --- | --- |
+| `secure_mcp_list_project_structure` | Inventory files and establish review scope |
+| `secure_mcp_analyze_architecture` | Detect stacks, trust boundaries, and knowledge-pack batches |
+| `secure_mcp_get_knowledge_pack` | Load capped, stack-specific remediation guidance |
+| `secure_mcp_get_audit_guidance` | Retrieve the agent workflow and review guardrails on demand |
+| `secure_mcp_check_authentication` | Review authentication and authorization controls |
+| `secure_mcp_analyze_injection_risks` | Find injection-class and unsafe boundary candidates |
+| `secure_mcp_review_secrets` | Identify secret hygiene issues and rotation needs |
+| `secure_mcp_build_remediation_threat_model` | Map trust boundaries to hardening controls |
+| `secure_mcp_produce_findings` | Dedupe, prioritize, and render the final report |
+
+## Shared inputs
+
+Most scanning tools accept the same bounded inputs:
+
+```json
+{
+  "project_root": "/absolute/path/to/target",
+  "stack": "auto",
+  "max_files": 400,
+  "focus_paths": ["src/app"],
+  "response_format": "json"
+}
+```
+
+`stack` can be `auto`, `common`, `typescript`, `nextjs`, `swift`, or `expo`. `focus_paths` narrows the scan to path prefixes for follow-up work. `response_format` defaults to JSON; use Markdown when a category result is ready for a person to read.
+
+## Knowledge packs are progressive
+
+Do not load every checklist up front. Architecture recommends packs and returns batches of up to six ids. Start with the first batch, then request more only when the evidence calls for it. Each item includes impact, remediation, and verification language so the agent can preserve a consistent finding narrative.
+
+The shipped packs cover `core`, `threat-model`, `web-next`, `web-api`, `auth-web`, `swift-ios`, `apple-desktop`, `expo-rn`, and `secrets`.
+
+## Finding contract
+
+Before calling the report tool, each finding should include:
+
+1. `evidence`
+2. `severity`, `confidence`, `category`, and optional `cwe`
+3. `impact_if_unremediated`
+4. `remediation`
+5. `residual_risk`
+6. `verification_suggestion`
+
+The contract is intentionally stable: agents can pass findings between phases without converting prose into a new shape each time. See [Tool design](/docs/tool-design) for registration patterns and response envelopes.

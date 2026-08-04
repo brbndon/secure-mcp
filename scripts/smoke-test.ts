@@ -2,7 +2,7 @@
  * Smoke test: spawn secure-mcp over stdio, list tools, call core tools on fixtures.
  *
  * Usage:
- *   SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1 pnpm smoke
+ *   SECURE_MCP_DEV_MODE=1 SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1 pnpm smoke
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -23,6 +23,7 @@ const REQUIRED_TOOLS = [
   "secure_mcp_list_project_structure",
   "secure_mcp_analyze_architecture",
   "secure_mcp_get_knowledge_pack",
+  "secure_mcp_get_audit_guidance",
   "secure_mcp_check_authentication",
   "secure_mcp_analyze_injection_risks",
   "secure_mcp_review_secrets",
@@ -51,6 +52,7 @@ function parseJsonPayload(result: { content?: unknown; structuredContent?: unkno
 async function main(): Promise<void> {
   const license = process.env.SECURE_MCP_LICENSE_KEY ?? DEV_LICENSE_KEY;
   process.env.SECURE_MCP_LICENSE_KEY = license;
+  process.env.SECURE_MCP_DEV_MODE = "1";
 
   console.log("[smoke] Starting secure-mcp via tsx…");
   console.log(`[smoke] Fixture: ${fixture}`);
@@ -62,6 +64,7 @@ async function main(): Promise<void> {
     env: {
       ...process.env,
       SECURE_MCP_LICENSE_KEY: license,
+      SECURE_MCP_DEV_MODE: "1",
     } as Record<string, string>,
   });
 
@@ -208,6 +211,20 @@ async function main(): Promise<void> {
       "Expected error for invalid pack id",
     );
     console.log("[smoke] get_knowledge_pack invalid id OK");
+    const guidance = await client.callTool({
+      name: "secure_mcp_get_audit_guidance",
+      arguments: { section: "overview", response_format: "json" },
+    });
+    assert(!guidance.isError, "get_audit_guidance failed");
+    console.log("[smoke] get_audit_guidance OK");
+
+    const focusedArch = await client.callTool({
+      name: "secure_mcp_analyze_architecture",
+      arguments: { project_root: fixture, focus_paths: ["app"], response_format: "json" },
+    });
+    assert(!focusedArch.isError, "focused arch failed");
+    console.log("[smoke] analyze_architecture with focus_paths OK");
+
 
     const expoArch = await client.callTool({
       name: "secure_mcp_analyze_architecture",
