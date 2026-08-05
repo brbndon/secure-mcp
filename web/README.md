@@ -49,8 +49,10 @@ gallery renders these verbatim. Regenerate whenever the server output changes:
 node scripts/capture-output.mjs   # writes src/captures/01–05 from a live session
 ```
 
-The hero terminal and the finding-anatomy diagram are illustrative CSS
-markup; only the gallery uses real captured output.
+The hero is an illustrative **pi / ACP session** mockup (skill banner, tool
+calls, composer, status strip) — not a live capture. The gallery reuses the
+same pi window chrome with expanded `[tool]` headers around real captured
+output. The finding-anatomy diagram is separate illustrative CSS markup.
 
 ## Placeholders to replace before launch
 

@@ -1,0 +1,120 @@
+---
+/**
+ * Pi / ACP session window chrome — macOS terminal frame matching the
+ * pi coding-agent TUI (title bar, body, optional status footer).
+ * Illustrative marketing chrome; body content is a slot.
+ */
+interface Props {
+  /** Project / session title after the π mark */
+  title: string;
+  /** Accessible label for the whole window */
+  label: string;
+  /** Show the bottom git/MCP status strip (hero uses full; gallery often skips) */
+  showStatus?: boolean;
+  /** cwd label in the status strip */
+  cwd?: string;
+  /** git branch label */
+  branch?: string;
+  class?: string;
+}
+
+const {
+  title,
+  label,
+  showStatus = false,
+  cwd = "acme-web",
+  branch = "main",
+  class: className = "",
+} = Astro.props;
+---
+
+<div
+  class:list={[
+    "pi-window flex w-full flex-col overflow-hidden rounded-[0.9rem] shadow-device ring-1 ring-black/25",
+    className,
+  ]}
+  role="img"
+  aria-label={label}
+  style="background: #3f4149; color: #c8c8ce;"
+>
+  <!-- Title bar -->
+  <div
+    class="relative flex shrink-0 items-center gap-2 px-3.5 py-2.5"
+    style="background: #454850;"
+  >
+    <span class="flex gap-1.5" aria-hidden="true">
+      <i class="h-2.5 w-2.5 rounded-full bg-[#ff5f57]"></i>
+      <i class="h-2.5 w-2.5 rounded-full bg-[#febc2e]"></i>
+      <i class="h-2.5 w-2.5 rounded-full bg-[#28c840]"></i>
+    </span>
+    <span
+      class="ml-1 flex min-w-0 items-center gap-1.5 font-mono text-[0.7rem] tracking-tight"
+      style="color: #d0d0d6;"
+    >
+      <svg
+        class="h-3 w-3 shrink-0"
+        viewBox="0 0 16 16"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M2.5 4.5h4.2l1.2 1.3H13.5v6.7H2.5V4.5Z"
+          stroke="#7ec8c0"
+          stroke-width="1.2"
+          stroke-linejoin="round"></path>
+      </svg>
+      <span class="truncate">
+        <span style="color: #9a9aa3;">π</span>
+        <span style="color: #6e6e78;"> - </span>
+        {title}
+      </span>
+    </span>
+    <!-- Active tab accent -->
+    <span
+      class="pointer-events-none absolute right-4 bottom-0 h-[2px] w-16 rounded-full"
+      style="background: #5b9fd4;"
+      aria-hidden="true"></span>
+  </div>
+
+  <!-- Body -->
+  <div class="min-h-0 flex-1 overflow-hidden">
+    <slot />
+  </div>
+
+  {
+    showStatus && (
+      <div
+        class="shrink-0 border-t px-3.5 py-2 font-mono text-[0.62rem] leading-relaxed"
+        style="border-color: #555861; color: #9a9aa3;"
+        aria-hidden="true"
+      >
+        <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          <span style="color: #c8c8ce;">{cwd}</span>
+          <span>on</span>
+          <span style="color: #61afef;"> {branch}</span>
+          <span style="color: #e06c75;">[↑]</span>
+          <span>via</span>
+          <span class="inline-flex items-center gap-1">
+            <span
+              class="inline-block h-1.5 w-1.5 rounded-full"
+              style="background: #98c379;"
+            />
+            <span style="color: #98c379;">v25.1.0</span>
+          </span>
+        </div>
+        <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5">
+          <span aria-hidden="true">🔌</span>
+          <span>
+            MCP: <span style="color: #98c379;">secure-mcp enabled</span>
+          </span>
+          <span style="color: #6e6e78;">|</span>
+          <span>0.5%/1.0M (auto)</span>
+          <span style="color: #6e6e78;">|</span>
+          <span>↑0 ↓0</span>
+          <span style="color: #6e6e78;">|</span>
+          <span style="color: #e5c07b;">$0.000</span>
+        </div>
+      </div>
+    )
+  }
+</div>

@@ -15,33 +15,41 @@ import remediationReport from "../captures/05-report.md?raw";
 const screens = [
   {
     src: inventory,
-    windowTitle: "secure_mcp_list_project_structure",
+    sessionTitle: "acme-web",
+    header: "secure_mcp_list_project_structure",
+    headerKind: "tool" as const,
     label:
-      "Real output of the inventory tool: a bounded scan of the fixture repository reporting stacks, file counts, sample paths, and the exact coverage — included, excluded, and capped",
+      "pi session expanded tool result: real inventory output from a bounded scan of the fixture repository — stacks, file counts, sample paths, and coverage",
     title: "Inventory",
     caption: "A bounded scan: stacks, paths, caps — and exactly what was covered.",
   },
   {
     src: knowledgePack,
-    windowTitle: "secure_mcp_get_knowledge_pack",
+    sessionTitle: "acme-web",
+    header: "secure_mcp_get_knowledge_pack",
+    headerKind: "tool" as const,
     label:
-      "Real output of the knowledge pack tool: five stack-aware packs loaded as eight checklist items, each with a category, severity hint, and remediation",
+      "pi session expanded tool result: real knowledge-pack output — five stack-aware packs loaded as eight checklist items with remediation",
     title: "Guidance",
     caption: "Stack-aware checklists on demand — five packs, eight items, fixes included.",
   },
   {
     src: secretsFindings,
-    windowTitle: "secure_mcp_review_secrets",
+    sessionTitle: "acme-web",
+    header: "secure_mcp_review_secrets",
+    headerKind: "tool" as const,
     label:
-      "Real output of the secrets review tool: structured findings with severity, confidence, redacted evidence, CWE, remediation, and residual risk",
+      "pi session expanded tool result: real secrets review — structured findings with severity, confidence, redacted evidence, and remediation",
     title: "Findings",
     caption: "A structured finding — severity, confidence, redacted evidence, remediation.",
   },
   {
     src: remediationReport,
-    windowTitle: "secure_mcp_produce_findings",
+    sessionTitle: "acme-web",
+    header: "secure_mcp_produce_findings",
+    headerKind: "tool" as const,
     label:
-      "Real output of the findings report tool: a markdown remediation report with summary by severity and each finding's classification, evidence, and verification",
+      "pi session expanded tool result: real remediation report — severity summary plus each finding's classification, evidence, and verification",
     title: "Report",
     caption: "The final remediation report — priorities first, verification with every fix.",
   },
@@ -155,7 +163,7 @@ const faqs = [
 >
   <!-- Hero -->
   <section
-    class="site-shell grid items-center gap-12 pt-10 pb-6 sm:pt-14 sm:pb-8 md:grid-cols-[minmax(0,1fr)_minmax(17rem,0.95fr)] md:gap-10 md:pt-8 md:pb-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(18rem,0.95fr)] lg:gap-16 lg:pt-12 lg:pb-6"
+    class="site-shell grid items-center gap-12 pt-10 pb-6 sm:pt-14 sm:pb-8 md:grid-cols-[minmax(0,1fr)_minmax(20rem,1.15fr)] md:gap-10 md:pt-8 md:pb-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(24rem,1.2fr)] lg:gap-14 lg:pt-12 lg:pb-6"
     aria-labelledby="hero-title"
   >
     <div class="relative z-10 max-w-xl md:py-10 lg:py-14">
@@ -218,28 +226,30 @@ const faqs = [
         One server, four honest outputs.
       </h2>
       <p class="lede">
-        Real output from the current build, captured from a live audit of the
-        bundled fixture app — inventory, guidance, findings, and the final
-        report.
+        Real tool output from a live audit of the bundled fixture app, shown
+        the way it appears when pi expands a secure-mcp tool call — inventory,
+        guidance, findings, and the final report.
       </p>
     </div>
 
     <ul
-      class="mt-14 -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-5 sm:overflow-visible sm:p-0 sm:snap-none lg:grid-cols-4"
-      aria-label="Real secure-mcp output"
+      class="mt-14 -mx-4 flex snap-x snap-mandatory gap-5 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-5 sm:overflow-visible sm:p-0 sm:snap-none lg:gap-6"
+      aria-label="Real secure-mcp output in a pi session"
     >
       {
         screens.map((screen) => (
           <li
-            class="w-[82vw] max-w-[20rem] shrink-0 snap-center sm:w-auto sm:max-w-none sm:shrink"
+            class="w-[88vw] max-w-[28rem] shrink-0 snap-center sm:w-auto sm:max-w-none sm:shrink"
           >
             <figure class="m-0">
               <TerminalFrame
-                title={screen.windowTitle}
+                title={screen.sessionTitle}
+                header={screen.header}
+                headerKind={screen.headerKind}
                 label={screen.label}
-                maxHeightClass="max-h-[24rem]"
+                maxHeightClass="max-h-[16rem] sm:max-h-[17rem] lg:max-h-[18rem]"
               >
-                <pre class="m-0 whitespace-pre"><code>{screen.src}</code></pre>
+                <pre class="m-0 whitespace-pre" style="color: #b8b8c0;"><code>{screen.src}</code></pre>
               </TerminalFrame>
               <figcaption class="mt-4 px-0.5">
                 <strong class="block text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
