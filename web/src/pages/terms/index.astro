@@ -1,0 +1,82 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import PageIntro from "../../components/PageIntro.astro";
+import LegalProse from "../../components/LegalProse.astro";
+---
+
+<BaseLayout
+  title="Terms of service — secure-mcp"
+  description="Terms for using secure-mcp: license-gated access, authorized defensive review only, findings as candidates, and no warranty."
+  path="/terms/"
+>
+  <PageIntro
+    eyebrow="Terms"
+    title="Clear terms for a defensive tool."
+    titleId="terms-title"
+    lede="Short and factual — what the product is, how it may be used, and what it does not promise."
+  />
+
+  <LegalProse>
+    <h2>The service</h2>
+    <p>
+      secure-mcp is a local Model Context Protocol server that helps coding
+      agents perform defensive, remediation-focused security review of source
+      repositories. It is a proprietary product and is licensed, not sold.
+    </p>
+
+    <h2>License and keys</h2>
+    <p>
+      The server requires a valid license key and refuses to start without
+      one. A documented development key is available for local evaluation and
+      CI testing only. You are responsible for keeping keys private and for
+      using them in line with the license you were granted.
+    </p>
+
+    <h2>Authorized use</h2>
+    <p>
+      Use secure-mcp only on codebases you own or are explicitly authorized to
+      review. The product is defensive by mandate: it identifies potential
+      weaknesses, classifies them, and recommends remediation. You agree not
+      to use it, its output, or its skills to generate exploit or attack code,
+      to bypass or weaponize discovered weaknesses, or to misuse discovered
+      credentials.
+    </p>
+
+    <h2>Findings are candidates</h2>
+    <p>
+      Findings are evidence-oriented candidates produced by bounded static
+      inspection. They are not guarantees, vulnerability declarations, or
+      permission to act. Confirm findings in code and understand the runtime
+      context before remediating. Coverage reports state what was and was not
+      reviewed — read them before relying on an empty result.
+    </p>
+
+    <h2>No warranty</h2>
+    <p>
+      The product is provided “as is” without warranty of any kind, express or
+      implied, including fitness for a particular purpose. In no event shall
+      the authors be liable for any claim, damages, or other liability arising
+      from or in connection with the product or its output.
+    </p>
+
+    <h2>Intellectual property</h2>
+    <p>
+      The product, its source code, documentation, and skills are proprietary
+      and all rights are reserved. Nothing in these terms grants you a
+      license to the product's source code or the rights to redistribute it.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      These terms may be updated from time to time; the version on this page
+      always applies to current use.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      Questions about these terms? Use the{" "}
+      <a href="/support/">support form</a> — it opens an email draft on your
+      device and sends nothing until you choose Send.
+    </p>
+  </LegalProse>
+</BaseLayout>

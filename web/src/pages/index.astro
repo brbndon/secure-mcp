@@ -1,0 +1,521 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import TerminalMockup from "../components/TerminalMockup.astro";
+import TerminalFrame from "../components/TerminalFrame.astro";
+import TrustStrip from "../components/TrustStrip.astro";
+import FindingAnatomy from "../components/FindingAnatomy.astro";
+
+// Real output captured from the current build (v1, fixtures/tiny-app).
+// Regenerate with scripts/capture-output.mjs — see web/README.md.
+import inventory from "../captures/01-inventory.json?raw";
+import knowledgePack from "../captures/03-knowledge-pack.json?raw";
+import secretsFindings from "../captures/04-secrets.json?raw";
+import remediationReport from "../captures/05-report.md?raw";
+
+const screens = [
+  {
+    src: inventory,
+    windowTitle: "secure_mcp_list_project_structure",
+    label:
+      "Real output of the inventory tool: a bounded scan of the fixture repository reporting stacks, file counts, sample paths, and the exact coverage — included, excluded, and capped",
+    title: "Inventory",
+    caption: "A bounded scan: stacks, paths, caps — and exactly what was covered.",
+  },
+  {
+    src: knowledgePack,
+    windowTitle: "secure_mcp_get_knowledge_pack",
+    label:
+      "Real output of the knowledge pack tool: five stack-aware packs loaded as eight checklist items, each with a category, severity hint, and remediation",
+    title: "Guidance",
+    caption: "Stack-aware checklists on demand — five packs, eight items, fixes included.",
+  },
+  {
+    src: secretsFindings,
+    windowTitle: "secure_mcp_review_secrets",
+    label:
+      "Real output of the secrets review tool: structured findings with severity, confidence, redacted evidence, CWE, remediation, and residual risk",
+    title: "Findings",
+    caption: "A structured finding — severity, confidence, redacted evidence, remediation.",
+  },
+  {
+    src: remediationReport,
+    windowTitle: "secure_mcp_produce_findings",
+    label:
+      "Real output of the findings report tool: a markdown remediation report with summary by severity and each finding's classification, evidence, and verification",
+    title: "Report",
+    caption: "The final remediation report — priorities first, verification with every fix.",
+  },
+] as const;
+
+const benefits = [
+  {
+    kicker: "Bounded",
+    title: "Reviews that stay in scope",
+    body: "File, depth, and size caps with structured coverage — scans are finite, and what was not covered is said out loud.",
+  },
+  {
+    kicker: "Stack-aware",
+    title: "Guidance for your actual stack",
+    body: "Knowledge packs for TypeScript, Next.js, Swift, and Expo load only what the detected stack needs — never a generic checklist dump.",
+  },
+  {
+    kicker: "Structured",
+    title: "Findings built to act on",
+    body: "Every finding carries evidence, severity and confidence, category and CWE, remediation, residual risk, and a verification step.",
+  },
+  {
+    kicker: "Honest",
+    title: "Coverage you can trust",
+    body: "“Not observed” never means “not scanned”: coverage records reviewed, ignored, excluded, and truncated scope, and candidates stay unconfirmed until proven.",
+  },
+  {
+    kicker: "Portable",
+    title: "Works in every agent",
+    body: "A plain stdio MCP server — the same tools connect to Claude, Codex, Cursor, pi, and any MCP client.",
+  },
+  {
+    kicker: "Remediation-first",
+    title: "Defensive, by mandate",
+    body: "Findings recommend rotation, hardening, and verification. No exploit guidance, no attack code, no misuse of discovered secrets.",
+  },
+] as const;
+
+// PLACEHOLDER — replace with real quotes, names, and contexts after launch.
+const testimonialPlaceholders = [
+  {
+    quote:
+      "The findings arrive with the fix half-written — evidence, impact, remediation, and how to verify. Our review loops got dramatically shorter.",
+    name: "Mara",
+    context: "Founder, fintech startup",
+    initial: "M",
+    bg: "#e8d5cf",
+  },
+  {
+    quote:
+      "It scoped a large monorepo without drama and told us exactly which paths it had not covered. That honesty is rare in security tooling.",
+    name: "Dev",
+    context: "Platform engineer",
+    initial: "D",
+    bg: "#d4e0d8",
+  },
+  {
+    quote:
+      "The Swift packs caught Keychain and deep-link issues our checklist had missed. Remediation-first, exactly how we like to work.",
+    name: "Ana",
+    context: "iOS team lead",
+    initial: "A",
+    bg: "#d9e2ea",
+  },
+] as const;
+
+const clarityPoints = [
+  "Severity and confidence on every finding",
+  "CWE classification with stable instance IDs",
+  "Evidence redacted where sensitive",
+  "Remediation with a verification step",
+] as const;
+
+const pricingPoints = [
+  "Nine tools in one server: inventory, architecture, packs, guidance, and category reviews",
+  "Stack-aware knowledge packs for TypeScript, Next.js, Swift, and Expo",
+  "Structured findings with remediation and verification steps",
+  "Runs locally — read-only, no network, no telemetry",
+] as const;
+
+const faqs = [
+  {
+    q: "What is secure-mcp?",
+    a: "A local MCP server that gives coding agents a structured, defensive toolkit for code review: bounded inventory, stack-aware guidance, category checks, and a final remediation report — all over stdio, on your machine.",
+  },
+  {
+    q: "Does it run my code?",
+    a: "No. Every tool is read-only: files under the project root are read within size and count caps, and project code, build scripts, and binaries are never executed.",
+  },
+  {
+    q: "Does my code leave my machine?",
+    a: "No. secure-mcp is a local process with no network calls — in v1, license validation is a local format check. Logs go to stderr only, and stdout stays reserved for MCP messages.",
+  },
+  {
+    q: "Which stacks does it support?",
+    a: "In v1: TypeScript and Next.js (App Router, Server Actions, middleware) and Swift and SwiftUI, with Expo and React Native detection. More surfaces are planned.",
+  },
+  {
+    q: "Is this an offensive tool?",
+    a: "No. It is remediation-focused by mandate: findings recommend rotation, hardening, and verification — never exploit guidance or attack code.",
+  },
+] as const;
+---
+
+<BaseLayout
+  title="secure-mcp — Defensive security review for coding agents"
+  description="secure-mcp is a local MCP server that helps coding agents inventory repositories, classify weaknesses, and produce remediation-focused findings — read-only, over stdio, on your machine."
+  path="/"
+  ogTitle="secure-mcp — defensive code review for coding agents"
+  ogDescription="Local, read-only MCP tools that turn likely weaknesses into remediation-ready findings."
+>
+  <!-- Hero -->
+  <section
+    class="site-shell grid items-center gap-12 pt-10 pb-6 sm:pt-14 sm:pb-8 md:grid-cols-[minmax(0,1fr)_minmax(17rem,0.95fr)] md:gap-10 md:pt-8 md:pb-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(18rem,0.95fr)] lg:gap-16 lg:pt-12 lg:pb-6"
+    aria-labelledby="hero-title"
+  >
+    <div class="relative z-10 max-w-xl md:py-10 lg:py-14">
+      <p class="eyebrow">Defensive security review for coding agents</p>
+      <h1 id="hero-title" class="display-title mb-6">
+        Find the weaknesses.<br />Fix the right ones.
+      </h1>
+      <p class="lede text-[1.125rem] md:text-[1.1875rem]">
+        secure-mcp inventories your repository, detects its stack, and turns
+        likely weaknesses into structured, remediation-focused findings —
+        without ever executing your code.
+      </p>
+
+      <div class="mt-9 flex w-full max-w-md flex-col items-stretch gap-3 sm:max-w-none sm:flex-row sm:flex-wrap sm:items-center">
+        <span
+          class="btn btn-coming-soon w-full sm:w-auto"
+          role="status"
+          aria-describedby="license-note"
+        >
+          License key required
+        </span>
+        <a
+          class="btn btn-secondary w-full sm:w-auto"
+          href="#screens"
+        >
+          See it in action
+        </a>
+        <a
+          class="inline-flex min-h-11 items-center justify-center px-1 text-[0.9375rem] font-medium text-ink underline decoration-line underline-offset-[0.35rem] transition-colors hover:decoration-ink sm:justify-start"
+          href="/help/"
+        >
+          Read the quickstart
+        </a>
+      </div>
+      <p class="microcopy" id="license-note">
+        The development key covers local evaluation. Production keys are issued
+        separately.
+      </p>
+    </div>
+
+    <div class="relative flex justify-center md:justify-end md:pr-2 lg:pr-4">
+      <TerminalMockup />
+    </div>
+  </section>
+
+  <div class="site-shell">
+    <div class="border-t border-line"></div>
+  </div>
+  <TrustStrip />
+
+  <!-- Screens -->
+  <section
+    class="site-shell py-24 md:py-32"
+    aria-labelledby="screens-title"
+    id="screens"
+  >
+    <div class="max-w-2xl">
+      <p class="eyebrow">See it in action</p>
+      <h2 id="screens-title" class="section-title mb-5">
+        One server, four honest outputs.
+      </h2>
+      <p class="lede">
+        Real output from the current build, captured from a live audit of the
+        bundled fixture app — inventory, guidance, findings, and the final
+        report.
+      </p>
+    </div>
+
+    <ul
+      class="mt-14 -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-5 sm:overflow-visible sm:p-0 sm:snap-none lg:grid-cols-4"
+      aria-label="Real secure-mcp output"
+    >
+      {
+        screens.map((screen) => (
+          <li
+            class="w-[82vw] max-w-[20rem] shrink-0 snap-center sm:w-auto sm:max-w-none sm:shrink"
+          >
+            <figure class="m-0">
+              <TerminalFrame
+                title={screen.windowTitle}
+                label={screen.label}
+                maxHeightClass="max-h-[24rem]"
+              >
+                <pre class="m-0 whitespace-pre"><code>{screen.src}</code></pre>
+              </TerminalFrame>
+              <figcaption class="mt-4 px-0.5">
+                <strong class="block text-[0.9375rem] font-semibold tracking-[-0.01em] text-ink">
+                  {screen.title}
+                </strong>
+                <span class="mt-1 block text-[0.8125rem] leading-snug text-muted">
+                  {screen.caption}
+                </span>
+              </figcaption>
+            </figure>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <!-- Benefits -->
+  <section
+    class="relative left-1/2 right-1/2 w-screen -ml-[50vw] -mr-[50vw] bg-[#efeff1]"
+    aria-labelledby="benefits-title"
+  >
+    <div class="site-shell py-24 md:py-32">
+      <div class="max-w-2xl">
+        <p class="eyebrow">What you get</p>
+        <h2 id="benefits-title" class="section-title mb-5">
+          Everything a serious review needs, in one local server.
+        </h2>
+        <p class="lede">
+          Built for the practical moments — scoping the work, guiding the
+          agent, and handing a fix plan to a human.
+        </p>
+      </div>
+
+      <ul class="mt-14 grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
+        {
+          benefits.map((benefit) => (
+            <li
+              class="rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft"
+            >
+              <span class="block text-[0.6875rem] font-semibold tracking-[0.08em] text-muted uppercase">
+                {benefit.kicker}
+              </span>
+              <h3 class="mt-2.5 mb-2 text-[1.125rem] font-semibold tracking-[-0.015em] text-ink">
+                {benefit.title}
+              </h3>
+              <p class="m-0 text-[0.9375rem] leading-relaxed text-muted">
+                {benefit.body}
+              </p>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- Finding clarity -->
+  <section
+    class="site-shell grid items-center gap-14 py-24 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] md:gap-16 md:py-32 lg:gap-24"
+    aria-labelledby="clarity-title"
+  >
+    <div class="order-2 md:order-1">
+      <FindingAnatomy />
+    </div>
+
+    <div class="order-1 md:order-2">
+      <p class="eyebrow">Finding clarity</p>
+      <h2 id="clarity-title" class="section-title mb-5 max-w-lg">
+        Structured underneath. Actionable on top.
+      </h2>
+      <p class="lede">
+        Every finding carries the fields a developer needs to act — and the
+        honesty to say what is not yet proven.
+      </p>
+      <ul class="mt-8 grid list-none gap-3.5 p-0">
+        {
+          clarityPoints.map((item) => (
+            <li class="flex items-center gap-3 text-[1rem] text-muted">
+              <span
+                class="mt-px h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+                aria-hidden="true"
+              />
+              {item}
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- Social proof -->
+  <section
+    class="relative left-1/2 right-1/2 w-screen -ml-[50vw] -mr-[50vw] bg-[#efeff1]"
+    aria-labelledby="praise-title"
+  >
+    <div class="site-shell py-24 md:py-32">
+      <div class="max-w-2xl">
+        <p class="eyebrow">From the beta</p>
+        <h2 id="praise-title" class="section-title mb-5">
+          What early testers say
+        </h2>
+        <p class="lede">
+          Sample quotes for now — replaced with real feedback after launch.
+        </p>
+      </div>
+
+      <ul class="mt-14 grid list-none gap-4 p-0 md:grid-cols-3">
+        {
+          testimonialPlaceholders.map((testimonial) => (
+            <li
+              class="flex flex-col justify-between gap-7 rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft md:p-7"
+            >
+              <blockquote class="m-0">
+                <p class="m-0 text-[1.0625rem] leading-relaxed text-ink">
+                  “{testimonial.quote}”
+                </p>
+              </blockquote>
+              <footer class="flex items-center gap-3">
+                <span
+                  class="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[0.8125rem] font-semibold text-[#1d1d1f]"
+                  style={`background: ${testimonial.bg}`}
+                  aria-hidden="true"
+                >
+                  {testimonial.initial}
+                </span>
+                <span class="min-w-0">
+                  <strong class="block truncate text-[0.875rem] font-semibold tracking-[-0.01em] text-ink">
+                    {testimonial.name}
+                  </strong>
+                  <span class="block text-[0.8125rem] text-muted">
+                    {testimonial.context}
+                  </span>
+                </span>
+              </footer>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section
+    class="site-shell py-24 md:py-32"
+    aria-labelledby="pricing-title"
+    id="pricing"
+  >
+    <div class="mx-auto max-w-2xl text-center">
+      <p class="eyebrow">Pricing</p>
+      <h2 id="pricing-title" class="section-title mb-5">
+        Licensed per team. Honest by default.
+      </h2>
+      <p class="lede mx-auto">
+        secure-mcp is closed-source and license-gated. No public pricing has
+        been announced yet — and every claim on this page matches what the
+        server actually does.
+      </p>
+    </div>
+
+    <div
+      class="mx-auto mt-14 max-w-md rounded-[1.5rem] border border-line bg-surface p-8 shadow-soft md:p-10"
+    >
+      <div class="flex items-baseline justify-between gap-4">
+        <h3 class="m-0 text-lg font-semibold tracking-[-0.01em] text-ink">
+          secure-mcp
+        </h3>
+        <span class="text-[2rem] font-semibold tracking-[-0.03em] text-ink">
+          By license
+        </span>
+      </div>
+      <p class="mt-2 mb-0 text-[0.9375rem] text-muted">
+        All nine tools, stack-aware packs, and remediation reports.
+      </p>
+      <ul class="mt-6 grid list-none gap-3 border-t border-line p-0 pt-6 text-[0.9375rem] text-ink">
+        {
+          pricingPoints.map((point) => (
+            <li class="flex items-start gap-3">
+              <span
+                class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
+                aria-hidden="true"
+              />
+              {point}
+            </li>
+          ))
+        }
+      </ul>
+      <span class="btn btn-coming-soon mt-8 w-full" role="status">
+        Pricing to be announced
+      </span>
+      <p class="microcopy text-center">
+        No payment is required to evaluate with the documented development key.
+      </p>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="site-shell pb-24 md:pb-32" aria-labelledby="faq-title" id="faq">
+    <div class="max-w-2xl">
+      <p class="eyebrow">FAQ</p>
+      <h2 id="faq-title" class="section-title mb-5">
+        Common questions, straight answers.
+      </h2>
+      <p class="lede">
+        Short answers about what the server does — and what it deliberately
+        does not do.
+      </p>
+    </div>
+
+    <div class="mt-12 max-w-3xl border-t border-line">
+      {
+        faqs.map((faq) => (
+          <details class="faq-item group border-b border-line">
+            <summary class="flex min-h-[4.25rem] cursor-pointer items-center justify-between gap-6 py-4 text-left text-[1.0625rem] font-medium tracking-[-0.01em] text-ink">
+              <span>{faq.q}</span>
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink transition group-open:hidden"
+                aria-hidden="true"
+              >
+                +
+              </span>
+              <span
+                class="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink group-open:flex"
+                aria-hidden="true"
+              >
+                −
+              </span>
+            </summary>
+            <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
+              <p class="m-0">{faq.a}</p>
+            </div>
+          </details>
+        ))
+      }
+    </div>
+
+    <p class="mt-8 text-[0.9375rem] text-muted">
+      Looking for something specific?{" "}
+      <a
+        class="font-medium text-ink underline decoration-line underline-offset-[0.2em] transition-colors hover:decoration-ink"
+        href="/help/"
+      >
+        Browse the Getting Started guide
+      </a>
+      .
+    </p>
+  </section>
+
+  <!-- Final CTA / privacy band -->
+  <section class="site-shell pb-24 md:pb-32" aria-labelledby="final-title">
+    <div
+      class="grid items-center gap-10 rounded-[1.5rem] bg-night px-8 py-12 text-on-night sm:px-10 md:grid-cols-[1fr_auto] md:gap-14 md:px-16 md:py-16"
+    >
+      <div>
+        <p class="eyebrow !text-[#a1a1a6]">Local by default</p>
+        <h2
+          id="final-title"
+          class="section-title mb-4 max-w-xl text-on-night"
+        >
+          Your code never leaves your machine.
+        </h2>
+        <p class="m-0 max-w-xl text-[1.0625rem] leading-relaxed text-[#a1a1a6]">
+          secure-mcp runs entirely on your machine: read-only tools, stdio
+          transport, no network, no telemetry — and findings that tell you
+          what to fix and how to verify it.
+        </p>
+      </div>
+      <div class="flex flex-col items-start gap-2 md:items-end">
+        <a class="btn btn-on-dark" href="#screens">
+          See it in action
+        </a>
+        <a
+          class="inline-flex min-h-11 items-center justify-center px-1 text-[0.9375rem] font-medium text-[#d2d2d7] underline decoration-[#6e6e73] underline-offset-[0.35rem] transition-colors hover:decoration-white hover:text-white"
+          href="/privacy/"
+        >
+          Read privacy details
+        </a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

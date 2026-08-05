@@ -1,0 +1,31 @@
+---
+interface Props {
+  class?: string;
+}
+
+const { class: className = "" } = Astro.props;
+---
+
+<span
+  class:list={[
+    "inline-grid h-6 w-6 place-items-center rounded-md bg-ink",
+    className,
+  ]}
+  aria-hidden="true"
+>
+  <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none">
+    <path
+      d="M12 3.2 19 5.7v5.6c0 4.3-2.9 7.4-7 8.9-4.1-1.5-7-4.6-7-8.9V5.7l7-2.5Z"
+      stroke="white"
+      stroke-width="1.7"
+      stroke-linejoin="round"
+    />
+    <path
+      d="m8.9 12 2.1 2.1 4.1-4.2"
+      stroke="white"
+      stroke-width="1.7"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </svg>
+</span>

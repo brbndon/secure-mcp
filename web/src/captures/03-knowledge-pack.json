@@ -1,0 +1,86 @@
+{
+  "ok": true,
+  "summary": "Loaded 5 pack(s) → 8 item(s) (detail=summary).",
+  "applied_pack_ids": [
+    "core",
+    "secrets",
+    "web-next",
+    "auth-web",
+    "web-api"
+  ],
+  "detail": "summary",
+  "max_items": 8,
+  "item_count": 8,
+  "truncated_by_max_items": true,
+  "items_per_pack": {
+    "core": 2,
+    "secrets": 2,
+    "web-next": 2,
+    "auth-web": 1,
+    "web-api": 1
+  },
+  "items": [
+    {
+      "id": "CMN-AUTH-SESSION",
+      "title": "Session and token handling",
+      "category": "authentication",
+      "severityHint": "high",
+      "remediation": "Store sessions in httpOnly Secure cookies or platform Keychain-equivalents"
+    },
+    {
+      "id": "SEC-NO-HARDCODE",
+      "title": "No hardcoded credentials",
+      "category": "secrets",
+      "severityHint": "critical",
+      "remediation": "Move secrets to env or a secret manager"
+    },
+    {
+      "id": "NEXT-MIDDLEWARE-AUTH",
+      "title": "Middleware alone is not complete authorization",
+      "category": "authentication",
+      "severityHint": "high",
+      "remediation": "Call shared requireUser/requireRole helpers inside Server Actions, Route Handlers, and data loaders—not only middleware."
+    },
+    {
+      "id": "AUTHWEB-COOKIE-FLAGS",
+      "title": "Secure session cookie flags",
+      "category": "authentication",
+      "severityHint": "high",
+      "remediation": "Set HttpOnly + Secure + appropriate SameSite on session cookies in production."
+    },
+    {
+      "id": "API-AUTHZ-PER-METHOD",
+      "title": "Authorize every HTTP method",
+      "category": "authorization",
+      "severityHint": "high",
+      "remediation": "Apply shared auth helpers in each exported method"
+    },
+    {
+      "id": "CMN-AUTHZ-IDOR",
+      "title": "Object-level authorization",
+      "category": "authorization",
+      "severityHint": "critical",
+      "remediation": "Derive identity from the authenticated session and enforce ownership checks on every object operation."
+    },
+    {
+      "id": "SEC-ROTATE-ON-EXPOSURE",
+      "title": "Rotate on exposure",
+      "category": "secrets",
+      "severityHint": "critical",
+      "remediation": "Revoke/rotate in the provider console"
+    },
+    {
+      "id": "NEXT-SERVER-ACTIONS",
+      "title": "Server Actions input trust",
+      "category": "authorization",
+      "severityHint": "high",
+      "remediation": "Schema-validate all Server Action arguments and enforce object-level authorization using the session."
+    }
+  ],
+  "notes": [
+    "Do not request all packs — load only recommended_packs / pack_batches for the detected stacks.",
+    "Items are fair-sampled (round-robin) across pack_ids so stack packs are not starved under max_items.",
+    "truncated_by_max_items: raise max_items (up to 60), filter categories, or load packs individually for full text.",
+    "Defensive checklists only; confirm findings in real source files before reporting."
+  ]
+}

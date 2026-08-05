@@ -1,0 +1,76 @@
+---
+/**
+ * Calm finding-anatomy diagram for the homepage clarity section.
+ * Flat cards — the shape of every finding secure-mcp returns.
+ * Illustrative markup, not a live capture.
+ */
+const steps = [
+  {
+    kicker: "1 · Evidence",
+    title: "What was observed",
+    body: "A concrete snippet and file location, redacted where sensitive.",
+  },
+  {
+    kicker: "2 · Classification",
+    title: "How bad, how sure",
+    body: "Severity, confidence, category, and CWE — kept separate on purpose.",
+  },
+  {
+    kicker: "3 · Remediation",
+    title: "What to change",
+    body: "Concrete fix guidance with the control it restores.",
+  },
+  {
+    kicker: "4 · Verification",
+    title: "How to confirm",
+    body: "A suggested check and the residual risk that remains.",
+  },
+] as const;
+---
+
+<div
+  class="relative mx-auto w-full max-w-[23rem] md:mx-0 md:max-w-[25rem]"
+  aria-hidden="true"
+>
+  <div
+    class="rounded-[1.35rem] border border-line bg-surface p-5 shadow-soft md:p-6"
+  >
+    <div class="mb-5 flex items-baseline justify-between gap-3">
+      <div>
+        <p class="m-0 text-[0.7rem] font-semibold tracking-[0.08em] text-muted uppercase">
+          Finding shape
+        </p>
+        <p class="mt-1 m-0 text-lg font-semibold tracking-tight text-ink">
+          Every finding, four steps
+        </p>
+      </div>
+      <span
+        class="shrink-0 rounded-full bg-[#f0f0f2] px-2.5 py-1 text-xs font-medium text-muted"
+      >
+        Structured
+      </span>
+    </div>
+
+    <ul class="m-0 grid list-none gap-2.5 p-0">
+      {
+        steps.map((step) => (
+          <li class="rounded-[1rem] bg-canvas px-4 py-3.5">
+            <p class="m-0 text-[0.7rem] font-medium text-faint">
+              {step.kicker}
+            </p>
+            <p class="mt-1 m-0 text-[0.95rem] font-medium text-ink">
+              {step.title}
+            </p>
+            <p class="mt-1 m-0 text-[0.8125rem] leading-relaxed text-muted">
+              {step.body}
+            </p>
+          </li>
+        ))
+      }
+    </ul>
+
+    <p class="mt-5 mb-0 text-center text-xs text-faint">
+      Confirmed in code before it is reported — heuristics stay candidates
+    </p>
+  </div>
+</div>

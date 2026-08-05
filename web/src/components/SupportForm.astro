@@ -1,0 +1,213 @@
+---
+// PLACEHOLDER — replace with the real support address before going live.
+const supportAddress = "support@securemcp.dev";
+
+const categories = [
+  "Installation & Setup",
+  "License Key",
+  "Tool Results",
+  "Feature Request",
+  "Security Concern",
+  "General Question",
+] as const;
+---
+
+<section
+  class="site-shell grid gap-12 pb-24 md:grid-cols-[minmax(0,1.2fr)_minmax(17rem,0.8fr)] md:gap-16 md:pb-32 lg:gap-20"
+  aria-label="Contact support"
+>
+  <form class="max-w-xl" data-support-form novalidate>
+    <div class="grid gap-0 sm:grid-cols-2 sm:gap-x-4">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" required autocomplete="name" />
+        <span class="error">Enter your name.</span>
+      </div>
+      <div class="field">
+        <label for="email">Email address</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          required
+          autocomplete="email"
+        />
+        <span class="error">Enter a valid email address.</span>
+      </div>
+    </div>
+    <div class="grid gap-0 sm:grid-cols-2 sm:gap-x-4">
+      <div class="field">
+        <label for="version">
+          Server version <span class="font-normal text-faint">(optional)</span>
+        </label>
+        <input
+          id="version"
+          name="version"
+          placeholder="For example, 1.0.0"
+        />
+      </div>
+      <div class="field">
+        <label for="category">Issue category</label>
+        <select id="category" name="category" required>
+          <option value="">Choose a category</option>
+          {categories.map((c) => <option>{c}</option>)}
+        </select>
+        <span class="error">Choose the closest category.</span>
+      </div>
+    </div>
+    <div class="field">
+      <label for="description">Description</label>
+      <textarea
+        id="description"
+        name="description"
+        required
+        placeholder="What happened, what did you expect, and what have you tried?"
+      ></textarea>
+      <span class="error">Describe the issue so we can help.</span>
+    </div>
+    <button class="btn" type="submit">Prepare support email</button>
+    <p class="microcopy">
+      This opens your email app. Nothing is sent until you choose Send.
+    </p>
+  </form>
+
+  <aside
+    class="order-first rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft md:order-none md:self-start md:p-7"
+  >
+    <p class="eyebrow">Before you send</p>
+    <h2 class="m-0 mb-2 text-[1.35rem] font-semibold tracking-[-0.02em] md:text-[1.5rem]">
+      Related answers
+    </h2>
+    <p class="m-0 text-[0.9375rem] leading-relaxed text-muted">
+      These topics update as you choose a category.
+    </p>
+    <ul
+      class="my-6 grid list-none gap-3 border-t border-line p-0 pt-5 text-[0.9375rem]"
+      data-suggestions
+    >
+    </ul>
+    <a class="btn btn-secondary w-full sm:w-auto" href="/help/">Read the Getting Started guide</a>
+  </aside>
+</section>
+
+<div
+  class="fixed right-5 bottom-5 z-20 hidden max-w-xs rounded-2xl bg-night p-5 text-on-night shadow-device"
+  data-form-toast
+  hidden
+  tabindex="-1"
+  role="status"
+>
+  <strong class="text-[0.975rem] font-semibold tracking-tight">Email draft ready</strong>
+  <p class="my-1.5 mb-3 text-sm leading-relaxed text-[#a1a1a6]">
+    Review it in your email app, then send it when you’re ready.
+  </p>
+  <a
+    class="text-sm font-medium text-white underline underline-offset-[0.2em]"
+    data-email-draft
+    href=""
+  >
+    Open email draft
+  </a>
+</div>
+
+<script define:vars={{ supportAddress }}>
+  const suggestions = {
+    "Installation & Setup": [
+      "Install and build the server",
+      "Connect from MCP clients",
+    ],
+    "License Key": [
+      "Get a license key",
+      "Development key for evaluation",
+    ],
+    "Tool Results": [
+      "Reading coverage reports",
+      "Confirming findings in code",
+    ],
+    "Feature Request": [
+      "Request a stack pack",
+      "Request a tool",
+    ],
+    "Security Concern": ["Report a product issue"],
+    "General Question": [
+      "The audit workflow",
+      "Defensive use policy",
+    ],
+  };
+
+  const slug = (title) =>
+    title
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9]+/g, "-")
+      .replace(/-$/g, "");
+
+  const form = document.querySelector("[data-support-form]");
+  if (form instanceof HTMLFormElement) {
+    const category = form.elements.namedItem("category");
+    const suggestionList = document.querySelector("[data-suggestions]");
+    const toast = document.querySelector("[data-form-toast]");
+    const emailDraft = toast?.querySelector("[data-email-draft]");
+
+    const renderSuggestions = () => {
+      if (!(category instanceof HTMLSelectElement) || !suggestionList) return;
+      const items = suggestions[category.value] ?? [];
+      if (items.length === 0) {
+        suggestionList.innerHTML =
+          '<li class="text-faint">Choose a category to see related help.</li>';
+        return;
+      }
+      suggestionList.innerHTML = items
+        .map(
+          (article) =>
+            `<li><a class="font-medium text-ink underline decoration-line underline-offset-[0.2em] transition-colors hover:decoration-ink" href="/help/#${slug(article)}">${article}</a></li>`,
+        )
+        .join("");
+    };
+
+    category?.addEventListener("change", renderSuggestions);
+    renderSuggestions();
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const fields = [
+        ...form.querySelectorAll(
+          "input[required], select[required], textarea[required]",
+        ),
+      ];
+      let firstInvalid = null;
+      fields.forEach((field) => {
+        if (
+          !(
+            field instanceof HTMLInputElement ||
+            field instanceof HTMLSelectElement ||
+            field instanceof HTMLTextAreaElement
+          )
+        )
+          return;
+        const invalid = !field.checkValidity();
+        field.closest(".field")?.classList.toggle("has-error", invalid);
+        if (invalid && !firstInvalid) firstInvalid = field;
+      });
+      if (firstInvalid) {
+        firstInvalid.focus();
+        return;
+      }
+
+      const values = Object.fromEntries(new FormData(form));
+      const subject = encodeURIComponent(
+        `secure-mcp support: ${values.category}`,
+      );
+      const body = encodeURIComponent(
+        `Name: ${values.name}\nEmail: ${values.email}\nServer version: ${values.version || "Not provided"}\nCategory: ${values.category}\n\nDescription:\n${values.description}`,
+      );
+      if (emailDraft instanceof HTMLAnchorElement) {
+        emailDraft.href = `mailto:${supportAddress}?subject=${subject}&body=${body}`;
+      }
+      if (toast instanceof HTMLElement) {
+        toast.hidden = false;
+        toast.classList.remove("hidden");
+        toast.focus();
+      }
+    });
+  }
+</script>

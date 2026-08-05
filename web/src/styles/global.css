@@ -1,0 +1,389 @@
+@import "tailwindcss";
+
+/*
+  Design tokens — monochrome, light-first, Apple-inspired.
+  Re-theme: change these variables (and optional @theme mapping) for a new product site.
+*/
+@theme {
+  --color-canvas: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-ink: #1d1d1f;
+  --color-muted: #6e6e73;
+  --color-faint: #86868b;
+  --color-line: #d2d2d7;
+  --color-night: #1d1d1f;
+  --color-on-night: #f5f5f7;
+  --color-on-accent: #ffffff;
+
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", sans-serif;
+
+  --shadow-device:
+    0 50px 100px -28px rgb(0 0 0 / 0.32),
+    0 22px 44px -20px rgb(0 0 0 / 0.2),
+    0 0 0 1px rgb(0 0 0 / 0.06);
+  --shadow-soft: 0 16px 48px rgb(0 0 0 / 0.07);
+
+  --radius-control: 0.75rem;
+  --radius-card: 1.25rem;
+  --radius-pill: 9999px;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  body {
+    min-width: 320px;
+    margin: 0;
+    overflow-x: clip;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    line-height: 1.55;
+  }
+
+  /* Help deep links clear the sticky header area */
+  [id] {
+    scroll-margin-top: 5.5rem;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 3px;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+@layer components {
+  .site-shell {
+    width: min(1120px, calc(100% - 2.5rem));
+    margin-inline: auto;
+  }
+
+  @media (min-width: 768px) {
+    .site-shell {
+      width: min(1120px, calc(100% - 3rem));
+    }
+  }
+
+  .skip-link {
+    position: fixed;
+    z-index: 50;
+    top: 0.75rem;
+    left: 0.75rem;
+    padding: 0.5rem 0.85rem;
+    border-radius: var(--radius-control);
+    background: var(--color-ink);
+    color: var(--color-on-accent);
+    text-decoration: none;
+    transform: translateY(-160%);
+  }
+
+  .skip-link:focus {
+    transform: translateY(0);
+  }
+
+  .btn {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0 1.15rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    background: var(--color-ink);
+    color: var(--color-on-accent);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    text-decoration: none;
+    transition: background-color 0.2s ease, color 0.2s ease,
+      border-color 0.2s ease, opacity 0.2s ease;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .btn:active:not(.btn-coming-soon) {
+      transform: scale(0.98);
+    }
+  }
+
+  .btn:hover {
+    background: #000;
+  }
+
+  .btn-secondary {
+    border-color: var(--color-line);
+    background: transparent;
+    color: var(--color-ink);
+  }
+
+  .btn-secondary:hover {
+    background: var(--color-surface);
+  }
+
+  .btn-on-dark {
+    background: var(--color-on-night);
+    color: var(--color-night);
+  }
+
+  .btn-on-dark:hover {
+    background: #fff;
+  }
+
+  /* Intentional status control — not a faded disabled button */
+  .btn-coming-soon {
+    cursor: default;
+    border-color: transparent;
+    background: #e8e8ed;
+    color: var(--color-ink);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+  }
+
+  .btn-coming-soon:hover {
+    background: #e8e8ed;
+  }
+
+  .eyebrow {
+    margin: 0 0 1rem;
+    color: var(--color-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .display-title {
+    margin: 0;
+    font-size: clamp(2.85rem, 7.5vw, 5rem);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.01;
+  }
+
+  .section-title {
+    margin: 0;
+    font-size: clamp(2.05rem, 4.2vw, 3.15rem);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.08;
+  }
+
+  .lede {
+    margin: 0;
+    max-width: 34rem;
+    color: var(--color-muted);
+    font-size: 1.125rem;
+    line-height: 1.62;
+  }
+
+  .microcopy {
+    margin: 0.65rem 0 0;
+    color: var(--color-faint);
+    font-size: 0.8125rem;
+  }
+
+  .field {
+    display: grid;
+    gap: 0.45rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .field label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+
+  .field input,
+  .field select,
+  .field textarea {
+    width: 100%;
+    min-height: 2.85rem;
+    padding: 0.7rem 0.95rem;
+    border: 1px solid var(--color-line);
+    border-radius: 0.85rem;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus {
+    border-color: var(--color-ink);
+    outline: none;
+    box-shadow: 0 0 0 3px rgb(29 29 31 / 0.08);
+  }
+
+  .field textarea {
+    min-height: 10rem;
+    resize: vertical;
+  }
+
+  .field .error {
+    display: none;
+    color: #b42318;
+    font-size: 0.8125rem;
+  }
+
+  .field.has-error input:invalid,
+  .field.has-error select:invalid,
+  .field.has-error textarea:invalid {
+    border-color: #b42318;
+  }
+
+  .field.has-error .error {
+    display: block;
+  }
+
+  /* Long-form legal / policy prose */
+  .legal-prose h2 {
+    margin: 2.75rem 0 0.85rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+    color: var(--color-ink);
+  }
+
+  .legal-prose h2:first-child {
+    margin-top: 0;
+  }
+
+  .legal-prose p {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--color-muted);
+    font-size: 1.0625rem;
+    line-height: 1.75;
+  }
+
+  .legal-prose a {
+    color: var(--color-ink);
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  .legal-prose a:hover {
+    color: #000;
+  }
+
+  /* Help topic cards */
+  .help-card {
+    position: relative;
+    display: flex;
+    min-height: 9.5rem;
+    flex-direction: column;
+    justify-content: center;
+    padding: 1.5rem 1.75rem 1.5rem 0;
+    border-bottom: 1px solid var(--color-line);
+    color: var(--color-ink);
+    text-decoration: none;
+    transition: opacity 0.18s ease;
+  }
+
+  .help-card:hover h3 {
+    color: var(--color-muted);
+  }
+
+  .help-card h3 {
+    margin: 0 0 0.45rem;
+    max-width: 16rem;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+    transition: color 0.18s ease;
+  }
+
+  .help-card p {
+    margin: 0;
+    max-width: 18rem;
+    color: var(--color-muted);
+    font-size: 0.9375rem;
+    line-height: 1.55;
+  }
+
+  .help-card .help-card-arrow {
+    position: absolute;
+    right: 0.15rem;
+    bottom: 1.5rem;
+    color: var(--color-faint);
+    font-size: 1rem;
+    opacity: 0;
+    transition: opacity 0.18s ease, transform 0.18s ease, color 0.18s ease;
+    transform: translate(-0.15rem, 0.15rem);
+  }
+
+  .help-card:hover .help-card-arrow,
+  .help-card:focus-visible .help-card-arrow {
+    color: var(--color-ink);
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+
+  @media (max-width: 767px) {
+    .help-card {
+      min-height: 8rem;
+      padding-right: 2rem;
+    }
+
+    .help-card .help-card-arrow {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* FAQ accordion */
+  .faq-item summary {
+    list-style: none;
+  }
+
+  .faq-item summary::-webkit-details-marker {
+    display: none;
+  }
+}

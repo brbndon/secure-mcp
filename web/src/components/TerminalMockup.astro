@@ -1,0 +1,96 @@
+---
+/**
+ * CSS-only terminal mockup for the hero — illustrative marketing content,
+ * not a live capture. Real product output lives in the screenshots section.
+ */
+const session = [
+  {
+    tool: "secure_mcp_list_project_structure",
+    result: "8 files · stacks: nextjs + swift",
+  },
+  {
+    tool: "secure_mcp_analyze_architecture",
+    result: "5 packs recommended · 1 batch",
+  },
+  {
+    tool: "secure_mcp_get_knowledge_pack",
+    result: "8 checklist items, stack-scoped",
+  },
+  {
+    tool: "secure_mcp_review_secrets",
+    result: "3 candidates · evidence redacted",
+  },
+  {
+    tool: "secure_mcp_produce_findings",
+    result: "remediation report · 2 high",
+  },
+] as const;
+---
+
+<div
+  class="relative mx-auto w-full max-w-[24rem] md:max-w-[26rem]"
+  role="img"
+  aria-label="secure-mcp running an audit session in a terminal: inventory, architecture, knowledge packs, secrets review, and a remediation report, with a finding card showing severity, evidence, and remediation"
+>
+  <div
+    class="overflow-hidden rounded-[1.25rem] bg-night shadow-device ring-1 ring-black/20"
+  >
+    <div class="flex items-center gap-2 border-b border-white/10 px-4 py-3">
+      <span class="flex gap-1.5" aria-hidden="true">
+        <i class="h-2.5 w-2.5 rounded-full bg-[#ff5f57]"></i>
+        <i class="h-2.5 w-2.5 rounded-full bg-[#febc2e]"></i>
+        <i class="h-2.5 w-2.5 rounded-full bg-[#28c840]"></i>
+      </span>
+      <span class="ml-1.5 font-mono text-[0.7rem] text-[#a1a1a6]">
+        secure-mcp — review session
+      </span>
+    </div>
+
+    <div class="px-5 pt-4 pb-5 font-mono text-[0.72rem] leading-[1.7] md:px-6 md:text-[0.75rem]">
+      <p class="m-0 text-[#86868b]">
+        <span class="text-white/60">$</span> agent audit
+        --project-root ~/code/acme-web
+      </p>
+
+      <ul class="mt-4 grid list-none gap-2.5 p-0">
+        {
+          session.map((step) => (
+            <li class="grid grid-cols-[1fr_auto] items-baseline gap-3">
+              <span class="truncate text-[#f5f5f7]/85">
+                <span class="text-white/40" aria-hidden="true">→</span>{" "}
+                {step.tool}
+              </span>
+              <span class="shrink-0 text-[#86868b]">{step.result}</span>
+            </li>
+          ))
+        }
+      </ul>
+
+      <!-- Illustrative finding card -->
+      <div
+        class="mt-5 rounded-[0.95rem] border border-white/10 bg-white/[0.06] p-4"
+      >
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-[0.62rem] font-semibold tracking-[0.08em] text-[#a1a1a6] uppercase">
+            Finding · SEC-001
+          </span>
+          <span
+            class="rounded-full bg-[#f5f5f7] px-2 py-0.5 text-[0.62rem] font-semibold tracking-wide text-[#1d1d1f] uppercase"
+          >
+            high
+          </span>
+        </div>
+        <p class="mt-2.5 mb-1 text-[0.78rem] font-medium text-[#f5f5f7]">
+          Possible secret: API key assignment
+        </p>
+        <p class="m-0 text-[0.68rem] leading-relaxed text-[#a1a1a6]">
+          ios/Secrets.swift:5 · CWE-798 · evidence redacted
+        </p>
+        <p class="mt-2.5 m-0 border-t border-white/10 pt-2.5 text-[0.68rem] leading-relaxed text-[#f5f5f7]/80">
+          Remediation: rotate the key, load from a secret manager, remove from
+          source and history.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,19 @@
+---
+/**
+ * Shared legal/long-form article shell. Content only — no copy changes inside pages.
+ */
+interface Props {
+  class?: string;
+}
+
+const { class: className = "" } = Astro.props;
+---
+
+<article
+  class:list={[
+    "legal-prose site-shell max-w-[40rem] pb-24 md:pb-32",
+    className,
+  ]}
+>
+  <slot />
+</article>

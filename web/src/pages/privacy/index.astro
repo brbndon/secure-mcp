@@ -1,0 +1,74 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import PageIntro from "../../components/PageIntro.astro";
+import LegalProse from "../../components/LegalProse.astro";
+---
+
+<BaseLayout
+  title="Privacy policy — secure-mcp"
+  description="secure-mcp runs locally: read-only tools, no network, no telemetry. What this site and the server collect, and what they never do."
+  path="/privacy/"
+>
+  <PageIntro
+    eyebrow="Privacy"
+    title="Local by design."
+    titleId="privacy-title"
+    lede="secure-mcp is a local process. This page states what the site and the server do with your information — and what they deliberately never do."
+  />
+
+  <LegalProse>
+    <h2>The short version</h2>
+    <p>
+      The server runs on your machine, reads files you point it at, and makes
+      no network requests. This website is static — no analytics, no cookies,
+      no third-party scripts.
+    </p>
+
+    <h2>This website</h2>
+    <p>
+      The marketing site is a static page built with Astro. It sets no
+      tracking cookies, runs no analytics, and loads no third-party scripts.
+      Standard hosting logs (IP address, requested page, timestamp) may be
+      kept by the hosting provider for operational purposes.
+    </p>
+
+    <h2>The server</h2>
+    <p>
+      secure-mcp is a local subprocess of your agent client. It communicates
+      over stdio only, and in v1 performs no network calls: license
+      validation is a local format check of the key you provide. Logs and
+      diagnostics go to stderr only; stdout is reserved for MCP protocol
+      messages.
+    </p>
+
+    <h2>Code you review</h2>
+    <p>
+      Files under the requested project root are read within documented size,
+      count, and depth caps. Project code is never executed, never modified,
+      and never transmitted anywhere. Secret-like evidence is redacted before
+      findings are returned, and review output should still be handled
+      carefully — it describes weaknesses in your own codebase.
+    </p>
+
+    <h2>License keys</h2>
+    <p>
+      Your license key is provided through an environment variable or a file
+      on your machine. It is validated locally by format. Do not commit real
+      keys to repositories.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      If this policy changes, the updated version will appear on this page.
+      Because the product ships no telemetry, there is nothing to opt out of —
+      and nothing about your usage is ever collected.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      Questions about this policy? Use the{" "}
+      <a href="/support/">support form</a> — it opens an email draft on your
+      device and sends nothing until you choose Send.
+    </p>
+  </LegalProse>
+</BaseLayout>

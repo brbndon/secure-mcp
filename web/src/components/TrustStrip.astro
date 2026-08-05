@@ -1,0 +1,30 @@
+---
+const items = [
+  "Read-only tools — never executes your code",
+  "Runs locally over stdio — no network",
+  "Remediation-first — no exploit guidance",
+] as const;
+---
+
+<section
+  class="site-shell py-10 md:py-12"
+  aria-label="secure-mcp operating commitments"
+>
+  <ul
+    class="m-0 flex list-none flex-col items-start gap-4 p-0 text-[0.9375rem] text-muted md:flex-row md:flex-wrap md:items-center md:justify-center md:gap-0"
+  >
+    {
+      items.map((item, index) => (
+        <li class="flex items-center md:px-5 lg:px-7">
+          {index > 0 && (
+            <span
+              class="mr-5 hidden h-1 w-1 shrink-0 rounded-full bg-line md:mr-7 md:inline-block lg:mr-9"
+              aria-hidden="true"
+            />
+          )}
+          <span class="tracking-[-0.01em]">{item}</span>
+        </li>
+      ))
+    }
+  </ul>
+</section>
