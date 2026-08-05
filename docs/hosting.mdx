@@ -1,14 +1,14 @@
 ---
-title: GitHub Pages
-description: Publish this Blume documentation site to GitHub Pages with a static build, project-site base path, local search, and AI-readable documentation artifacts.
+title: Docs hosting
+description: Build this Blume documentation site for Cloudflare Pages, Cloudflare Workers, or another static host.
 sidebar:
-  label: GitHub Pages
+  label: Docs hosting
   order: 5
 ---
 
-## GitHub Pages
+## Docs hosting
 
-This repository is ready to publish its Blume docs site as a static GitHub Pages deployment. The workflow at `.github/workflows/deploy-docs.yml` builds the site and uploads the generated artifact whenever `main` changes.
+The workflow at `.github/workflows/deploy-docs.yml` builds and checks the Blume site whenever `main` changes. It does not deploy the result, so the repository can remain independent of a hosting provider and its account requirements.
 
 ## Local build
 
@@ -19,18 +19,18 @@ pnpm docs:preview
 
 The docs build uses `.blume-verify/dist` so it does not collide with the MCP server's TypeScript output in `dist/`.
 
-## Enable Pages once
+## Cloudflare deployment
 
-1. Push the repository to GitHub with `main` as its default branch.
-2. Open **Settings → Pages**.
-3. Set **Source** to **GitHub Actions**.
-4. Push a change or run **Deploy docs** manually from the Actions tab.
+For a host that builds directly from the repository, use:
 
-The workflow derives the project-site base path and canonical URL from GitHub's `GITHUB_REPOSITORY` value. A repository named `owner.github.io` is treated as a root user site; other repositories publish under `/<repo>`.
+- Build command: `pnpm docs:build`
+- Output directory: `.blume-verify/dist`
+
+Cloudflare Pages can use these settings for a static deployment. A Cloudflare Workers site can consume the same static output through its chosen Workers Static Assets configuration.
 
 ## Custom domains and forks
 
-Set `BLUME_SITE` and `BLUME_BASE_PATH` in the workflow if you use a custom domain or a different mount point:
+Set `BLUME_SITE` and `BLUME_BASE_PATH` in the hosting build environment if you use a custom domain or a different mount point:
 
 ```yaml
 env:

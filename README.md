@@ -201,7 +201,7 @@ fixtures/rn-lib-no-expo/ # react-native dep + non-Expo app.json (detection guard
 
 ### Docs website
 
-The repository includes a Blume-powered docs site and a GitHub Pages workflow:
+The repository includes a Blume-powered docs site and a GitHub Actions workflow that builds and checks it:
 
 ```bash
 pnpm docs:dev
@@ -209,7 +209,7 @@ pnpm docs:build
 pnpm docs:preview
 ```
 
-Local docs verification uses `.blume-verify/dist` so it stays separate from the MCP server's compiled `dist/` output. The GitHub Pages workflow builds the production artifact in a clean runner and publishes it through `.github/workflows/deploy-docs.yml`.
+Local docs verification uses `.blume-verify/dist` so it stays separate from the MCP server's compiled `dist/` output. The workflow at `.github/workflows/deploy-docs.yml` runs the same build, type-check, and link validation steps on pushes to `main`; deployment is intentionally handled separately by the eventual Cloudflare Pages or Workers configuration.
 
 ## Security notes
 

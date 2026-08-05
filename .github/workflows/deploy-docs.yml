@@ -1,4 +1,4 @@
-name: Deploy docs
+name: Verify docs
 
 on:
   push:
@@ -7,11 +7,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: docs
   cancel-in-progress: true
 
 jobs:
@@ -26,27 +24,19 @@ jobs:
         with:
           node-version: 22.12.0
 
-      - name: Install dependencies
-        run: corepack enable && pnpm install --frozen-lockfile
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.20.0
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Build Blume site
-        run: pnpm exec blume build
+        run: pnpm docs:build
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: dist
+      - name: Check docs
+        run: pnpm docs:check
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Validate docs links
+        run: pnpm docs:validate
