@@ -1,14 +1,16 @@
 ---
-import BaseLayout from "../../layouts/BaseLayout.astro";
-import PageIntro from "../../components/PageIntro.astro";
-import LegalProse from "../../components/LegalProse.astro";
+import LandingLayout from "../_home/LandingLayout.astro";
+import PageIntro from "../_home/components/PageIntro.astro";
+import LegalProse from "../_home/components/LegalProse.astro";
+
+const base = import.meta.env.BASE_URL;
+
+const pageTitle = "Privacy policy — secure-mcp";
+const pageDescription =
+  "secure-mcp runs locally: read-only tools, no network, no telemetry. What this site and the server collect, and what they never do.";
 ---
 
-<BaseLayout
-  title="Privacy policy — secure-mcp"
-  description="secure-mcp runs locally: read-only tools, no network, no telemetry. What this site and the server collect, and what they never do."
-  path="/privacy/"
->
+<LandingLayout title={pageTitle} description={pageDescription} route="/privacy">
   <PageIntro
     eyebrow="Privacy"
     title="Local by design."
@@ -26,7 +28,7 @@ import LegalProse from "../../components/LegalProse.astro";
 
     <h2>This website</h2>
     <p>
-      The marketing site is a static page built with Astro. It sets no
+      The site is a static page built with Astro and Blume. It sets no
       tracking cookies, runs no analytics, and loads no third-party scripts.
       Standard hosting logs (IP address, requested page, timestamp) may be
       kept by the hosting provider for operational purposes.
@@ -67,8 +69,8 @@ import LegalProse from "../../components/LegalProse.astro";
     <h2>Contact</h2>
     <p>
       Questions about this policy? Use the{" "}
-      <a href="/support/">support form</a> — it opens an email draft on your
-      device and sends nothing until you choose Send.
+      <a href={`${base}support/`}>support form</a> — it opens an email draft on
+      your device and sends nothing until you choose Send.
     </p>
   </LegalProse>
-</BaseLayout>
+</LandingLayout>

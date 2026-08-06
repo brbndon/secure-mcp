@@ -2,10 +2,10 @@
  * Capture real secure-mcp output for the marketing site gallery.
  * Spawns the actual server over stdio (dev mode, documented dev key),
  * runs the multi-phase audit tools against fixtures/tiny-app, and
- * writes verbatim output into web/src/captures/.
+ * writes verbatim output into pages/_home/captures/.
  *
  * Usage (from the repo root):
- *   node web/scripts/capture-output.mjs
+ *   node scripts/capture-output.mjs
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..", "..");
 const fixture = path.join(root, "fixtures", "tiny-app");
-const outDir = path.join(root, "web", "src", "captures");
+const outDir = path.join(root, "pages", "_home", "captures");
 mkdirSync(outDir, { recursive: true });
 
 const env = {

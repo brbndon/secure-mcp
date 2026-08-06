@@ -1,13 +1,17 @@
 ---
 import BrandMark from "./BrandMark.astro";
 
+// Root-relative links are prefixed with the deployment base (GitHub Pages
+// serves the site under /secure-mcp/; Vercel uses /).
+const base = import.meta.env.BASE_URL;
 const year = new Date().getFullYear();
 
 const links = [
-  { href: "/help/", label: "Getting Started" },
-  { href: "/support/", label: "Contact Support" },
-  { href: "/privacy/", label: "Privacy Policy" },
-  { href: "/terms/", label: "Terms of Service" },
+  { href: `${base}docs/`, label: "Documentation" },
+  { href: `${base}help/`, label: "Getting Started" },
+  { href: `${base}support/`, label: "Contact Support" },
+  { href: `${base}privacy/`, label: "Privacy Policy" },
+  { href: `${base}terms/`, label: "Terms of Service" },
 ] as const;
 ---
 
@@ -16,7 +20,7 @@ const links = [
 >
   <div>
     <a
-      href="/"
+      href={base}
       class="inline-flex min-h-11 items-center gap-2.5 text-[0.9375rem] font-medium tracking-[-0.01em] text-ink no-underline"
     >
       <BrandMark />

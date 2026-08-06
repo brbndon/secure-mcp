@@ -9,6 +9,10 @@ const base = process.env.BLUME_BASE_PATH ?? (repo && !repo.endsWith(".github.io"
 export default defineConfig({
   title: "secure-mcp",
   description: "Defensive, agent-first security audits over the Model Context Protocol.",
+  logo: {
+    // Brand mark in the header — dark tile for light mode, inverted for dark.
+    image: { light: "/logo.svg", dark: "/logo-dark.svg", alt: "secure-mcp" },
+  },
   theme: {
     accent: { light: "#0f8f85", dark: "#4de1c4" },
     action: "#f27745",
@@ -23,6 +27,9 @@ export default defineConfig({
   },
   navigation: {
     sidebar: { display: "group" },
+    // Header tab: the marketing pages (pages/) sit outside the content tree,
+    // so point the tab at the docs section. The site title links home.
+    tabs: [{ label: "Docs", path: "/docs" }],
   },
   ai: {
     llmsTxt: true,

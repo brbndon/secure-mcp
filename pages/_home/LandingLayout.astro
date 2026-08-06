@@ -1,0 +1,37 @@
+---
+// Shared shell for marketing pages: Blume's PageLayout chrome (site header
+// with search + theme toggle, fonts, favicon, generated OG card) plus the
+// landing design system (canvas background, sticky footer).
+import PageLayout from "blume/components/layout/PageLayout.astro";
+import data from "blume:data";
+import Footer from "./components/Footer.astro";
+import "./styles/landing.css";
+
+interface Props {
+  /** Used verbatim as the document <title> (no "- siteTitle" suffix). */
+  title: string;
+  description: string;
+  /** Route path without trailing slash — drives header tab state + OG slug. */
+  route: string;
+}
+
+const { title, description, route } = Astro.props;
+---
+
+<PageLayout
+  site={{ title: data.config.title, description: data.config.description }}
+  logo={data.config.logo}
+  favicon={data.config.favicon}
+  navigation={data.navigation}
+  themeMode={data.config.theme.mode}
+  fontCssVars={data.fontCssVars}
+  searchEnabled={data.config.search.enabled}
+  siteUrl={data.config.site}
+  ogEnabled={data.config.og.enabled}
+  page={{ title, description, route }}
+>
+  <div class="landing">
+    <slot />
+    <Footer />
+  </div>
+</PageLayout>
