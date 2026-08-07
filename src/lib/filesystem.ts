@@ -7,7 +7,7 @@
  * - Cap file size, tree depth, and total files to keep agents usable on large repos
  */
 
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs, type Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -20,6 +20,7 @@ import type {
   StackFocus,
 } from "./types.js";
 import { CANDIDATE_DISPOSITIONS } from "./types.js";
+import { redactValue, redactedEvidence } from "./redact.js";
 
 /** Default directories/files to skip when walking a project. */
 export const DEFAULT_IGNORE_DIRS = new Set([
@@ -171,19 +172,40 @@ export async function normalizeProjectRoot(projectRoot: string): Promise<string>
     );
   }
   const absolute = path.resolve(projectRoot.trim());
-  let stat;
+  let handle: FileHandle | undefined;
   try {
-    stat = await fs.stat(absolute);
-  } catch {
+    const initialRealPath = await fs.realpath(absolute);
+    // Open first and take metadata from the descriptor. The follow-enabled
+    // root open preserves the supported behavior where the requested root
+    // itself is a symlink, while the identity check rejects a root replacement
+    // between validation and canonicalization.
+    handle = await fs.open(
+      absolute,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NONBLOCK,
+    );
+    const opened = await handle.stat();
+    if (!opened.isDirectory()) {
+      throw new Error(`project_root is not a directory: ${absolute}`);
+    }
+    const current = await fs.stat(absolute);
+    if (!sameFilesystemObject(opened, current)) {
+      throw changedPathError(absolute);
+    }
+    const finalRealPath = await fs.realpath(absolute);
+    if (finalRealPath !== initialRealPath) {
+      throw changedPathError(absolute);
+    }
+    return finalRealPath;
+  } catch (error) {
+    if (error instanceof Error && /not a directory|changed while/i.test(error.message)) {
+      throw error;
+    }
     throw new Error(
       `project_root does not exist: ${absolute}. Check the path and that the MCP process can access it.`,
     );
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
-  if (!stat.isDirectory()) {
-    throw new Error(`project_root is not a directory: ${absolute}`);
-  }
-  // Use the real root for every later containment comparison.
-  return await fs.realpath(absolute);
 }
 
 function toPosix(p: string): string {
@@ -274,40 +296,100 @@ export async function walkProject(
     else markCoverageEventsTruncated("coverage_events_cap");
   };
 
+  /**
+   * Classify and record a directory that could not be opened or verified.
+   * Reporting is pathname-based (realpath for the reason) but the directory is
+   * never enumerated through an unverified handle.
+   */
+  const recordDirWalkFailure = async (dir: string, error: unknown): Promise<void> => {
+    const rel = toPosix(path.relative(root, dir)) || ".";
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === CONTAINMENT_CODE) {
+      addEvent(excludedPaths, {
+        path: rel,
+        kind: "directory",
+        reason: "symlink_target_outside_root",
+      });
+      truncationReasons.add("symlink_containment");
+      return;
+    }
+    if (code === PATH_CHANGED_CODE) {
+      addEvent(excludedPaths, {
+        path: rel,
+        kind: "directory",
+        reason: "directory_replaced_during_walk",
+      });
+      truncationReasons.add("directory_replaced_during_walk");
+      return;
+    }
+    if (code === "ELOOP" || code === "EMLINK" || code === "EPERM" || code === "ENOTDIR") {
+      const realTarget = await fs.realpath(dir).catch(() => null);
+      const reason =
+        realTarget !== null && !isWithinRoot(root, realTarget)
+          ? "symlink_target_outside_root"
+          : "symlink_not_followed";
+      addEvent(excludedPaths, { path: rel, kind: "directory", reason });
+      if (reason === "symlink_target_outside_root") truncationReasons.add("symlink_containment");
+      return;
+    }
+    addEvent(excludedPaths, {
+      path: rel,
+      kind: "directory",
+      reason: "directory_realpath_error",
+    });
+  };
+
   async function walk(dir: string, depth: number): Promise<void> {
     if (truncated) return;
     if (depth > maxDepth) return;
 
+    // Open the directory and verify the OPENED object stays in-root before any
+    // enumeration. A raced symlink or swapped intermediate directory is rejected
+    // here; enumeration never runs against an unverified pathname.
+    let dirHandle: FileHandle | undefined;
     try {
-      const realDir = await fs.realpath(dir);
-      if (!isWithinRoot(root, realDir)) {
-        truncationReasons.add("symlink_containment");
-        addEvent(excludedPaths, {
-          path: toPosix(path.relative(root, dir)) || ".",
-          kind: "directory",
-          reason: "symlink_target_outside_root",
-        });
-        return;
-      }
-    } catch {
-      addEvent(excludedPaths, {
-        path: toPosix(path.relative(root, dir)) || ".",
-        kind: "directory",
-        reason: "directory_realpath_error",
-      });
+      dirHandle = await fs.open(dir, openDirFlags());
+      await verifyOpenedDirHandle(dirHandle, dir, root);
+    } catch (error) {
+      await dirHandle?.close().catch(() => undefined);
+      await recordDirWalkFailure(dir, error);
+      return;
+    }
+
+    let verifiedDir: string;
+    try {
+      // Use the canonical path of the already-verified directory object for
+      // enumeration. The original mutable pathname is checked again after the
+      // read and the entire entry set is discarded if its object changed.
+      verifiedDir = await verifyOpenedDirHandle(dirHandle, dir, root);
+    } catch (error) {
+      await dirHandle?.close().catch(() => undefined);
+      await recordDirWalkFailure(dir, error);
       return;
     }
 
     let entries;
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      entries = await fs.readdir(verifiedDir, { withFileTypes: true });
     } catch {
+      await dirHandle?.close().catch(() => undefined);
       addEvent(excludedPaths, {
         path: toPosix(path.relative(root, dir)) || ".",
         kind: "directory",
         reason: "directory_read_error",
       });
       return;
+    }
+
+    // Re-verify after enumeration: if the directory was replaced while entries
+    // were being read, the names are not trustworthy and are discarded.
+    try {
+      await verifyOpenedDirHandle(dirHandle, dir, root);
+    } catch (error) {
+      await recordDirWalkFailure(dir, error);
+      return;
+    } finally {
+      await dirHandle?.close().catch(() => undefined);
     }
 
     // Stable order for reproducible agent output
@@ -377,21 +459,8 @@ export async function walkProject(
           addEvent(excludedPaths, { path: rel, kind: "directory", reason: "max_depth" });
           continue;
         }
-        try {
-          const realDirectory = await fs.realpath(abs);
-          if (!isWithinRoot(root, realDirectory)) {
-            truncationReasons.add("symlink_containment");
-            addEvent(excludedPaths, {
-              path: rel,
-              kind: "directory",
-              reason: "symlink_target_outside_root",
-            });
-            continue;
-          }
-        } catch {
-          addEvent(excludedPaths, { path: rel, kind: "directory", reason: "directory_realpath_error" });
-          continue;
-        }
+        // walk() opens and verifies the directory itself; a raced symlink or
+        // swapped directory is recorded there and never descended into.
         await walk(abs, depth + 1);
         continue;
       }
@@ -413,11 +482,13 @@ export async function walkProject(
         }
       }
 
-      // lstat avoids following a raced symlink between readdir and size check.
+      // Size and containment are taken from a verified, opened descriptor so a
+      // raced swap cannot report metadata for an object outside the root.
       let size = 0;
       try {
-        const st = await fs.lstat(abs);
-        if (st.isSymbolicLink()) {
+        const realFile = await fs.realpath(abs);
+        if (!isWithinRoot(root, realFile)) throw containmentError(abs);
+        if (realFile !== path.normalize(abs)) {
           addEvent(excludedPaths, {
             path: rel,
             kind: "symlink",
@@ -425,27 +496,42 @@ export async function walkProject(
           });
           continue;
         }
-        if (!st.isFile()) {
-          addEvent(excludedPaths, { path: rel, kind: "other", reason: "not_a_regular_file" });
-          continue;
+        const opened = await openCanonicalPath(root, realFile, openReadFlags(), "file");
+        try {
+          size = opened.stat.size;
+        } finally {
+          await opened.handle.close().catch(() => undefined);
         }
-        const realFile = await fs.realpath(abs);
-        if (!isWithinRoot(root, realFile)) {
-          truncationReasons.add("symlink_containment");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === PATH_CHANGED_CODE) {
           addEvent(excludedPaths, {
             path: rel,
             kind: "file",
-            reason: "symlink_target_outside_root",
+            reason: "file_replaced_during_walk",
           });
+          truncationReasons.add("file_replaced_during_walk");
           continue;
         }
-        size = st.size;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
+        if (
+          code === CONTAINMENT_CODE ||
+          code === "ELOOP" ||
+          code === "EMLINK" ||
+          code === "EPERM"
+        ) {
+          const realTarget = await fs.realpath(abs).catch(() => null);
+          const reason =
+            realTarget !== null && !isWithinRoot(root, realTarget)
+              ? "symlink_target_outside_root"
+              : "symlink_unresolvable";
+          addEvent(excludedPaths, { path: rel, kind: "symlink", reason });
+          if (reason === "symlink_target_outside_root") truncationReasons.add("symlink_containment");
+          continue;
+        }
         addEvent(excludedPaths, {
           path: rel,
           kind: "file",
-          reason: code === "ELOOP" ? "symlink_unresolvable" : "file_stat_error",
+          reason: code === "EACCES" ? "file_read_error" : "file_stat_error",
         });
         continue;
       }
@@ -510,9 +596,12 @@ export async function walkProject(
       candidate_dispositions: [],
       candidate_disposition_counts: candidateDispositionCounts,
       scan_status,
+      // The walk is inventory only: contents are never opened here. Content-review
+      // finalizers (finalizeCoverage) upgrade this; inventory finalizers keep it.
+      review_basis: "inventory_only",
       not_observed_means:
         scan_status === "complete"
-          ? "no_candidate_in_files_reviewed"
+          ? "inventory_only_contents_not_reviewed"
           : "scope_was_truncated_or_partial",
     },
   };
@@ -580,48 +669,251 @@ export function finalizeCoverage(
     CANDIDATE_DISPOSITIONS.map((disposition) => [disposition, 0]),
   ) as Record<CandidateDisposition, number>;
   for (const candidate of dispositions) counts[candidate.disposition]++;
-  coverage.files_reviewed = [...new Set(filesReviewed)];
+  const reviewed = [...new Set(filesReviewed)];
+  coverage.files_reviewed = reviewed;
+
+  // A caller can only claim content coverage for files it actually opened and
+  // evaluated. An empty receipt set is inventory-only, even when the walk had
+  // no path exclusions. Likewise, a partial receipt set must not inherit a
+  // clean inventory's `complete` status.
+  const included = new Set(coverage.included_paths);
+  const allIncludedReviewed =
+    reviewed.length > 0 && [...included].every((file) => reviewed.includes(file));
+  if (reviewed.length === 0) {
+    coverage.review_basis = "inventory_only";
+    coverage.scan_status = coverage.truncation.truncated ? "truncated" : "partial";
+    coverage.not_observed_means = "inventory_only_contents_not_reviewed";
+  } else {
+    coverage.review_basis = "content_review";
+    if (!allIncludedReviewed && coverage.scan_status === "complete") {
+      coverage.scan_status = "partial";
+    }
+    coverage.not_observed_means =
+      coverage.scan_status === "complete"
+        ? "no_candidate_in_files_reviewed"
+        : "scope_was_truncated_or_partial";
+  }
   coverage.candidate_dispositions = dispositions;
   coverage.candidate_disposition_counts = counts;
   return coverage;
 }
 
-/** Finalize a metadata-only inventory without implying that file contents were reviewed. */
+/**
+ * Finalize a metadata-only inventory without implying that file contents were
+ * reviewed. Inventory never proves complete content coverage or an absent
+ * candidate: scan_status is forced to partial/truncated and
+ * `not_observed_means` states that contents were not reviewed.
+ */
 export function finalizeInventoryCoverage(
   coverage: CoverageReport,
   filesInventoried: readonly string[],
 ): CoverageReport {
-  coverage.files_reviewed = [];
-  coverage.not_observed_means =
-    coverage.truncation.truncated || coverage.truncation.reasons.length > 0
-      ? "scope_was_truncated_or_partial"
-      : "no_candidate_in_files_reviewed";
-  coverage.scan_status = coverage.truncation.truncated
-    ? "truncated"
-    : coverage.excluded_paths.length > 0 || coverage.ignored_paths.length > 0
-      ? "partial"
-      : "complete";
-  coverage.not_observed_means =
-    coverage.scan_status === "complete"
-      ? "no_candidate_in_files_reviewed"
-      : "scope_was_truncated_or_partial";
   coverage.included_paths = [...new Set(filesInventoried)];
+  coverage.files_reviewed = [];
+  coverage.review_basis = "inventory_only";
+  coverage.not_observed_means = "inventory_only_contents_not_reviewed";
+  coverage.scan_status = coverage.truncation.truncated ? "truncated" : "partial";
   return coverage;
 }
 
 /** Open flags: prefer no-follow so the final path component cannot race into a symlink. */
 function openReadFlags(): number {
-  const noFollow =
-    "O_NOFOLLOW" in fsConstants
-      ? (fsConstants as typeof fsConstants & { O_NOFOLLOW: number }).O_NOFOLLOW
-      : 0;
-  return fsConstants.O_RDONLY | noFollow;
+  if (!("O_NOFOLLOW" in fsConstants)) {
+    throw new Error("Filesystem traversal cannot be proven safe: O_NOFOLLOW is unavailable.");
+  }
+  const noFollow = (fsConstants as typeof fsConstants & { O_NOFOLLOW: number }).O_NOFOLLOW;
+  // O_NONBLOCK keeps a raced FIFO/device from blocking the scanner's open().
+  return fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK;
+}
+
+/** Open flags for directory handles: no-follow, directory-only, non-blocking. */
+function openDirFlags(): number {
+  if (!("O_DIRECTORY" in fsConstants)) {
+    throw new Error("Filesystem traversal cannot be proven safe: O_DIRECTORY is unavailable.");
+  }
+  return openReadFlags() | fsConstants.O_DIRECTORY;
+}
+
+interface OpenedCanonicalPath {
+  handle: FileHandle;
+  realPath: string;
+  stat: Stats;
+}
+
+/**
+ * Resolve a requested path once, then open every canonical component with
+ * no-follow semantics. Node does not expose POSIX openat(2), so the nearest
+ * safe primitive available here is component-wise opening plus post-open
+ * descriptor identity checks. A raced component is either rejected by
+ * O_NOFOLLOW or fails the opened-object containment/identity check before its
+ * descriptor is used.
+ */
+async function openCanonicalPath(
+  root: string,
+  target: string,
+  finalFlags: number,
+  expectedFinal: "file" | "directory" | "any",
+): Promise<OpenedCanonicalPath> {
+  const relative = path.relative(root, target);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw containmentError(target);
+  }
+
+  const components = relative.split(path.sep).filter(Boolean);
+  let current = root;
+  for (let index = 0; index < components.length; index++) {
+    current = path.join(current, components[index]);
+    const isFinal = index === components.length - 1;
+    const handle = await fs.open(current, isFinal ? finalFlags : openDirFlags());
+    try {
+      const stat = await handle.stat();
+      if (isFinal) {
+        if (expectedFinal === "file" && !stat.isFile()) {
+          throw new Error(`Not a regular file: "${target}".`);
+        }
+        if (expectedFinal === "directory" && !stat.isDirectory()) {
+          throw new Error(`Not a directory: "${target}".`);
+        }
+      } else if (!stat.isDirectory()) {
+        throw new Error(`Not a directory: "${current}".`);
+      }
+
+      // This validates the object returned by open(), not merely the path
+      // that was checked before it. The identity comparison also detects a
+      // component being replaced while it was being opened.
+      const realPath = await verifyOpenedFileHandle(handle, current, root);
+      if (isFinal) {
+        return { handle, realPath, stat };
+      }
+      await handle.close();
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+  }
+  throw containmentError(target);
+}
+
+/** Resolve a requested path and reject a target that resolves outside root. */
+async function resolveContainedPath(root: string, requested: string): Promise<string> {
+  const lexical = path.isAbsolute(requested)
+    ? resolveSafePath(root, path.relative(root, requested))
+    : resolveSafePath(root, requested);
+  const realPath = await fs.realpath(lexical);
+  if (!isWithinRoot(root, realPath)) throw containmentError(requested);
+  return realPath;
+}
+
+/** Do two stat results refer to the same filesystem object? */
+export function sameFilesystemObject(
+  a: Pick<Stats, "dev" | "ino">,
+  b: Pick<Stats, "dev" | "ino">,
+): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/** Error marker codes used by containment verification. */
+const CONTAINMENT_CODE = "SECURE_MCP_CONTAINMENT";
+const PATH_CHANGED_CODE = "SECURE_MCP_PATH_CHANGED";
+
+function containmentError(absPath: string): NodeJS.ErrnoException {
+  const err = new Error(
+    `Path escapes project root through a symlink: "${absPath}". Provide a file inside the project root.`,
+  ) as NodeJS.ErrnoException;
+  err.code = CONTAINMENT_CODE;
+  return err;
+}
+
+function changedPathError(absPath: string): NodeJS.ErrnoException {
+  const err = new Error(
+    `Path changed while it was being opened and can no longer be proven inside the project root: "${absPath}".`,
+  ) as NodeJS.ErrnoException;
+  err.code = PATH_CHANGED_CODE;
+  return err;
+}
+
+/**
+ * Verify an already-opened file handle against the pathname it was opened from.
+ *
+ * The verification happens strictly AFTER `open`, and it validates the object
+ * actually accessed: the current realpath must stay inside the root, and the
+ * opened descriptor must still be the object the pathname currently names.
+ * A concurrent intermediate-directory replacement either resolves outside the
+ * root (containment failure) or makes the pathname name a different object than
+ * the opened descriptor (identity failure). Either way the read is rejected.
+ */
+export async function verifyOpenedFileHandle(
+  handle: FileHandle,
+  absPath: string,
+  realRoot: string,
+): Promise<string> {
+  const realFile = await fs.realpath(absPath);
+  if (!isWithinRoot(realRoot, realFile)) throw containmentError(absPath);
+  const current = await fs.lstat(absPath);
+  const opened = await handle.stat();
+  if (!sameFilesystemObject(opened, current)) throw changedPathError(absPath);
+  return realFile;
+}
+
+/** Directory variant of {@link verifyOpenedFileHandle}. */
+export async function verifyOpenedDirHandle(
+  handle: FileHandle,
+  dirPath: string,
+  realRoot: string,
+): Promise<string> {
+  const realDir = await fs.realpath(dirPath);
+  if (!isWithinRoot(realRoot, realDir)) throw containmentError(dirPath);
+  const current = await fs.lstat(dirPath);
+  const opened = await handle.stat();
+  if (!sameFilesystemObject(opened, current)) throw changedPathError(dirPath);
+  return realDir;
+}
+
+/**
+ * Run a global regex over untrusted content with a bounded number of executions.
+ *
+ * Detector patterns must still use bounded spans; this is the outer per-detector
+ * work budget so a pathological pattern cannot monopolize the scanner.
+ */
+export const MAX_REGEX_EXECS_PER_DETECTOR = 5_000;
+
+export interface DetectorMatch {
+  /** Full matched text. */
+  match: string;
+  /** 0-based index of the match in the scanned content. */
+  index: number;
+}
+
+export function detectWithBudget(
+  regex: RegExp,
+  content: string,
+  maxExecs: number = MAX_REGEX_EXECS_PER_DETECTOR,
+): DetectorMatch[] {
+  if (!regex.global) {
+    throw new Error("detectWithBudget requires a global regex");
+  }
+  regex.lastIndex = 0;
+  const matches: DetectorMatch[] = [];
+  const budget = Number.isFinite(maxExecs) ? Math.max(0, Math.floor(maxExecs)) : 0;
+  let execs = 0;
+  while (execs < budget) {
+    const match = regex.exec(content);
+    if (match === null) break;
+    execs++;
+    matches.push({ match: match[0], index: match.index });
+    // Prevent a future detector with a zero-width global match from spinning
+    // forever. Existing detectors are non-empty, but this keeps the shared
+    // engine fail-safe for any repository-controlled pattern added later.
+    if (match[0].length === 0) regex.lastIndex++;
+  }
+  return matches;
 }
 
 /**
  * Read a file with a hard byte limit without buffering the whole file.
  * Opens without following the final path component when O_NOFOLLOW is available,
- * then verifies the opened path remains inside the project root.
+ * then verifies the OPENED object stays inside the project root before reading.
+ * Containment is never proven from a mutable pathname checked before open.
  */
 export async function readProjectFile(
   projectRoot: string,
@@ -629,45 +921,18 @@ export async function readProjectFile(
   maxBytes: number = DEFAULT_MAX_FILE_BYTES,
 ): Promise<ReadFileResult> {
   const root = await normalizeProjectRoot(projectRoot);
-  const abs = path.isAbsolute(relativeOrAbsolute)
-    ? resolveSafePath(root, path.relative(root, relativeOrAbsolute))
-    : resolveSafePath(root, relativeOrAbsolute);
-
   const realRoot = await fs.realpath(root);
-
-  // Reject final-component symlinks even when O_NOFOLLOW is unavailable.
-  let lstat;
-  try {
-    lstat = await fs.lstat(abs);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") throw err;
-    throw err;
-  }
-  if (lstat.isSymbolicLink()) {
-    throw new Error(
-      `Path escapes project root through a symlink: "${relativeOrAbsolute}". Provide a file inside ${realRoot}.`,
-    );
-  }
-  if (!lstat.isFile()) {
-    throw new Error(`Not a regular file: "${relativeOrAbsolute}".`);
-  }
 
   let handle: FileHandle | undefined;
   try {
-    handle = await fs.open(abs, openReadFlags());
-    const st = await handle.stat();
-    if (!st.isFile()) {
-      throw new Error(`Not a regular file: "${relativeOrAbsolute}".`);
-    }
-
-    // Verify the opened path (and any intermediate resolution) stays in-root.
-    const realFile = await fs.realpath(abs);
-    if (!isWithinRoot(realRoot, realFile)) {
-      throw new Error(
-        `Path escapes project root through a symlink: "${relativeOrAbsolute}". Provide a file inside ${realRoot}.`,
-      );
-    }
+    // Resolve an in-root symlink chain before opening. The canonical path is
+    // then opened component by component with O_NOFOLLOW, so replacing an
+    // intermediate directory with an external symlink cannot redirect the
+    // descriptor outside the requested root.
+    const realFile = await resolveContainedPath(realRoot, relativeOrAbsolute);
+    const opened = await openCanonicalPath(realRoot, realFile, openReadFlags(), "file");
+    handle = opened.handle;
+    const st = opened.stat;
 
     const size = st.size;
     const toRead = Math.min(maxBytes, size);
@@ -713,39 +978,59 @@ export async function readProjectFileIfExists(
 /** Stream top-level entries while retaining only a bounded preview. */
 async function inspectTopLevel(projectRoot: string, maxEntries: number): Promise<TopLevelInspection> {
   const root = await normalizeProjectRoot(projectRoot);
-  const directory = await fs.opendir(root);
-  const entries: string[] = [];
-  let entryCount = 0;
-  let hasXcodeProject = false;
-  let hasAndroidDirectory = false;
-  let hasIosDirectory = false;
-  let hasAppDirectory = false;
-  let hasPagesDirectory = false;
+  // Bind enumeration to a verified root object: open the root, then confirm the
+  // pathname still names that same directory after opendir finished.
+  const rootHandle = await fs.open(root, openDirFlags());
+  try {
+    const before = await rootHandle.stat();
+    const verifiedRoot = await verifyOpenedDirHandle(rootHandle, root, root);
+    const directory = await fs.opendir(verifiedRoot);
+    const entries: string[] = [];
+    let entryCount = 0;
+    let hasXcodeProject = false;
+    let hasAndroidDirectory = false;
+    let hasIosDirectory = false;
+    let hasAppDirectory = false;
+    let hasPagesDirectory = false;
 
-  for await (const entry of directory) {
-    entryCount++;
-    const isDirectory = entry.isDirectory();
-    if (entries.length < maxEntries) {
-      entries.push(isDirectory ? `${entry.name}/` : entry.name);
+    try {
+      for await (const entry of directory) {
+        entryCount++;
+        const isDirectory = entry.isDirectory();
+        if (entries.length < maxEntries) {
+          entries.push(isDirectory ? `${entry.name}/` : entry.name);
+        }
+        if (!isDirectory) continue;
+        hasXcodeProject ||= entry.name.endsWith(".xcodeproj") || entry.name.endsWith(".xcworkspace");
+        hasAndroidDirectory ||= entry.name === "android";
+        hasIosDirectory ||= entry.name === "ios";
+        hasAppDirectory ||= entry.name === "app";
+        hasPagesDirectory ||= entry.name === "pages";
+      }
+    } finally {
+      await directory.close().catch(() => undefined);
     }
-    if (!isDirectory) continue;
-    hasXcodeProject ||= entry.name.endsWith(".xcodeproj") || entry.name.endsWith(".xcworkspace");
-    hasAndroidDirectory ||= entry.name === "android";
-    hasIosDirectory ||= entry.name === "ios";
-    hasAppDirectory ||= entry.name === "app";
-    hasPagesDirectory ||= entry.name === "pages";
-  }
 
-  entries.sort((a, b) => a.localeCompare(b));
-  return {
-    entries,
-    truncated: entryCount > maxEntries,
-    hasXcodeProject,
-    hasAndroidDirectory,
-    hasIosDirectory,
-    hasAppDirectory,
-    hasPagesDirectory,
-  };
+    // The root was replaced while it was being enumerated: the names above may
+    // belong to a different directory and must not be trusted.
+    const after = await fs.lstat(root);
+    if (!sameFilesystemObject(before, after)) {
+      throw new Error(`project_root changed during inspection: ${root}`);
+    }
+
+    entries.sort((a, b) => a.localeCompare(b));
+    return {
+      entries,
+      truncated: entryCount > maxEntries,
+      hasXcodeProject,
+      hasAndroidDirectory,
+      hasIosDirectory,
+      hasAppDirectory,
+      hasPagesDirectory,
+    };
+  } finally {
+    await rootHandle.close().catch(() => undefined);
+  }
 }
 
 /** List top-level directory names/files for architecture overview. */
@@ -821,7 +1106,9 @@ export async function profileProject(
 
   const exists = async (rel: string): Promise<boolean> => {
     try {
-      await fs.access(path.join(root, rel));
+      const target = await resolveContainedPath(root, rel);
+      const opened = await openCanonicalPath(root, target, openReadFlags(), "any");
+      await opened.handle.close();
       return true;
     } catch {
       return false;
@@ -980,16 +1267,30 @@ export function toolError(
   isError: true;
   structuredContent: { ok: false; error: string; hint?: string };
 } {
-  const message = error instanceof Error ? error.message : String(error);
-  const text = hint ? `Error: ${message}\n\nHint: ${hint}` : `Error: ${message}`;
+  // Error text can embed caller-controlled values (paths, snippets); route it
+  // through the same secret policy so fallback/error responses stay safe.
+  const message = truncateText(
+    redactedEvidence(error instanceof Error ? error.message : String(error)),
+    4_000,
+  ).text;
+  const safeHint = hint ? truncateText(redactedEvidence(hint), 2_000).text : undefined;
+  const base = {
+    ok: false as const,
+    error: message,
+    ...(safeHint ? { hint: safeHint } : {}),
+  };
+  const bounded = boundStructuredPayload(base).data as {
+    ok: false;
+    error: string;
+    hint?: string;
+  };
+  const text = bounded.hint
+    ? `Error: ${bounded.error}\n\nHint: ${bounded.hint}`
+    : `Error: ${bounded.error}`;
   return {
     isError: true,
     content: [{ type: "text", text }],
-    structuredContent: {
-      ok: false,
-      error: message,
-      ...(hint ? { hint } : {}),
-    },
+    structuredContent: bounded,
   };
 }
 
@@ -1052,6 +1353,7 @@ function hardCappedCoverageStub(coverage: CoverageReport | undefined): CoverageR
     files_reviewed: [],
     candidate_dispositions: [],
     candidate_disposition_counts: coverage.candidate_disposition_counts,
+    ...(coverage.review_basis ? { review_basis: coverage.review_basis } : {}),
     scan_status: "truncated",
     not_observed_means: "scope_was_truncated_or_partial",
   };
@@ -1077,6 +1379,18 @@ function markResponseSizeTruncation<T extends object>(data: T): T & { truncated:
         }
       : {}),
   } as T & { truncated: boolean };
+}
+
+/** Bounded fragments for the last-resort envelope. */
+const MAX_ENVELOPE_PROJECT_ROOT_CHARS = 200;
+const MAX_ENVELOPE_SUMMARY_CHARS = 600;
+const ENVELOPE_TRUNCATION_MARKER = "…[truncated]";
+
+/** Deterministic truncation that keeps the result at or under the budget. */
+function truncateToBudget(text: string, budget: number): string {
+  if (text.length <= budget) return text;
+  if (budget <= ENVELOPE_TRUNCATION_MARKER.length) return text.slice(0, budget);
+  return `${text.slice(0, budget - ENVELOPE_TRUNCATION_MARKER.length)}${ENVELOPE_TRUNCATION_MARKER}`;
 }
 
 /**
@@ -1121,17 +1435,22 @@ export function boundStructuredPayload<T extends object>(
 
   encoded = JSON.stringify(current);
   if (encoded.length > limit) {
-    // Last resort: keep summary envelope only; hard-cap or drop bulk coverage.
+    // Last resort: keep a summary envelope only. Every caller-controlled field
+    // (project_root, summary) is redacted and truncated up front so the
+    // envelope cannot stay oversized no matter what the caller supplied.
     const base = current as Record<string, unknown>;
     const coverageStub = hardCappedCoverageStub(
       (base.coverage as CoverageReport | undefined) ?? undefined,
     );
     let envelope: Record<string, unknown> = markResponseSizeTruncation({
       ok: base.ok ?? true,
-      project_root: base.project_root ?? null,
+      project_root:
+        typeof base.project_root === "string"
+          ? redactedEvidence(truncateToBudget(base.project_root, MAX_ENVELOPE_PROJECT_ROOT_CHARS))
+          : (base.project_root ?? null),
       summary:
         typeof base.summary === "string"
-          ? base.summary
+          ? truncateToBudget(base.summary, MAX_ENVELOPE_SUMMARY_CHARS)
           : "Response truncated to stay within the MCP character budget.",
       truncated: true,
       notes: [
@@ -1140,16 +1459,23 @@ export function boundStructuredPayload<T extends object>(
       ],
       ...(coverageStub ? { coverage: coverageStub } : {}),
     });
-    if (JSON.stringify(envelope).length > limit) {
-      // Drop coverage entirely if the stub still exceeds the budget.
-      const { coverage: _drop, ...withoutCoverage } = envelope;
-      envelope = withoutCoverage;
-    }
-    if (JSON.stringify(envelope).length > limit && typeof envelope.summary === "string") {
-      // Trim summary as a final squeeze so JSON stays at or under the limit.
-      const overhead = JSON.stringify({ ...envelope, summary: "" }).length;
-      const maxSummary = Math.max(0, limit - overhead - 2);
-      envelope = { ...envelope, summary: envelope.summary.slice(0, maxSummary) };
+
+    // Final serialized-size assertion: drop pieces until the envelope is
+    // guaranteed to fit, so no caller-controlled field can keep it oversized.
+    let encodedEnvelope = JSON.stringify(envelope);
+    while (encodedEnvelope.length > limit) {
+      if (envelope.coverage !== undefined) {
+        const { coverage: _drop, ...rest } = envelope;
+        envelope = rest;
+      } else if (envelope.notes !== undefined) {
+        const { notes: _drop, ...rest } = envelope;
+        envelope = rest;
+      } else if (envelope.project_root !== null && envelope.project_root !== undefined) {
+        envelope = { ...envelope, project_root: null };
+      } else {
+        envelope = { ...envelope, summary: "" };
+      }
+      encodedEnvelope = JSON.stringify(envelope);
     }
     current = envelope;
   }
@@ -1165,22 +1491,27 @@ export function toolSuccess<T extends object>(
   content: { type: "text"; text: string }[];
   structuredContent: T;
 } {
-  const { data: bounded, truncated: structuredTruncated } = boundStructuredPayload(data);
+  // Keep this as the final output boundary as well as the finding-specific
+  // redaction callers. Static tools add caller/repository strings in more than
+  // one place, and a new caller must not be able to bypass the central policy.
+  const safeData = redactValue(data) as T;
+  const { data: bounded, truncated: structuredTruncated } = boundStructuredPayload(safeData);
   const format = options.responseFormat ?? "json";
+  const safeMarkdown = options.markdown ? redactedEvidence(options.markdown) : undefined;
   let text: string;
-  if (format === "markdown" && options.markdown && !structuredTruncated) {
-    text = options.markdown;
-  } else if (format === "markdown" && options.markdown && structuredTruncated) {
+  if (format === "markdown" && safeMarkdown && !structuredTruncated) {
+    text = safeMarkdown;
+  } else if (format === "markdown" && safeMarkdown && structuredTruncated) {
     // Re-serialize from bounded structured data so markdown cannot reintroduce bulk.
     text = JSON.stringify(bounded, null, 2);
   } else {
     text = JSON.stringify(bounded, null, 2);
   }
   const { text: limited, truncated: textTruncated } = truncateText(text);
-  const structured =
-    structuredTruncated || textTruncated
-      ? markResponseSizeTruncation(bounded)
-      : bounded;
+  let structured = bounded;
+  if (structuredTruncated || textTruncated) {
+    structured = boundStructuredPayload(markResponseSizeTruncation(bounded)).data as T;
+  }
   return {
     content: [{ type: "text", text: limited }],
     structuredContent: structured as T,
@@ -1204,5 +1535,7 @@ export function snippetAround(content: string, index: number, radius = 80): stri
   let snip = content.slice(start, end).replace(/\s+/g, " ").trim();
   if (start > 0) snip = "…" + snip;
   if (end < content.length) snip = snip + "…";
-  return snip;
+  // Snippets are untrusted source context. Redact at construction time so a
+  // future detector caller cannot accidentally bypass the finding serializer.
+  return redactedEvidence(snip);
 }

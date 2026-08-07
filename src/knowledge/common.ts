@@ -128,8 +128,12 @@ export const INJECTION_PATTERNS: {
   {
     id: "INJ-SQL-CONCAT",
     title: "Possible SQL string concatenation",
+    // Bounded spans only: at most 400 chars between the opening quote and an
+    // interpolation marker (${ or + word), and at most 300 chars between a SQL
+    // keyword and a quote followed by +. No unbounded greedy wildcards, so
+    // repository-controlled text cannot cause superlinear regex work.
     regex:
-      /(?:query|sql|execute)\s*(?:=|\()\s*[`'"].*(?:\$\{|\+\s*\w+).*[`'"]|(?:SELECT|INSERT|UPDATE|DELETE)\s+[^;]*['"`]\s*\+/gi,
+      /(?:query|sql|execute)\s*(?:=|\()\s*[`'"][^`'"\n]{0,400}(?:\$\{|\+\s*[A-Za-z_$][A-Za-z0-9_$]*)|(?:SELECT|INSERT|UPDATE|DELETE)\s+[^;'"`\n]{0,300}['"`]\s*\+/gi,
     severity: "high",
     cwe: "CWE-89",
     stack: "common",

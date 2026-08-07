@@ -5,6 +5,9 @@ import {
   createFindingInstanceId,
   ensureFindingTraceability,
   FindingSchema,
+  MAX_FINDING_NARRATIVE,
+  MAX_FINDING_TITLE,
+  ProjectRootInput,
 } from "./findings-schema.js";
 
 function sampleFinding(line: number) {
@@ -101,4 +104,57 @@ describe("finding traceability", () => {
     assert.ok(enriched.validation?.length);
   });
 
+});
+
+describe("bounded finding payloads", () => {
+  function oversizedFinding(overrides: Record<string, unknown> = {}) {
+    return {
+      ...sampleFinding(1),
+      ...overrides,
+    };
+  }
+
+  it("rejects oversized narrative strings at schema validation", () => {
+    const result = FindingSchema.safeParse(
+      oversizedFinding({ description: "d".repeat(MAX_FINDING_NARRATIVE + 1) }),
+    );
+    assert.equal(result.success, false);
+  });
+
+  it("rejects oversized title strings at schema validation", () => {
+    const result = FindingSchema.safeParse(
+      oversizedFinding({ title: "t".repeat(MAX_FINDING_TITLE + 1) }),
+    );
+    assert.equal(result.success, false);
+  });
+
+  it("rejects oversized nested string arrays", () => {
+    const result = FindingSchema.safeParse(
+      oversizedFinding({
+        counterevidence: Array.from({ length: 21 }, (_, i) => `item-${i}`),
+      }),
+    );
+    assert.equal(result.success, false);
+  });
+
+  it("rejects oversized tags arrays and tag strings", () => {
+    const tooMany = FindingSchema.safeParse(
+      oversizedFinding({ tags: Array.from({ length: 51 }, (_, i) => `tag-${i}`) }),
+    );
+    assert.equal(tooMany.success, false);
+    const tooLong = FindingSchema.safeParse(oversizedFinding({ tags: ["x".repeat(201)] }));
+    assert.equal(tooLong.success, false);
+  });
+
+  it("rejects oversized project_root and focus paths", () => {
+    const rootResult = ProjectRootInput.safeParse({
+      project_root: `/p/${"x".repeat(5_000)}`,
+    });
+    assert.equal(rootResult.success, false);
+    const focusResult = ProjectRootInput.safeParse({
+      project_root: "/tmp/repo",
+      focus_paths: ["y".repeat(501)],
+    });
+    assert.equal(focusResult.success, false);
+  });
 });

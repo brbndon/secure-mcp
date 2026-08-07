@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createServer } from "../server.js";
 import { threatEvidencePaths, threatModelPackIds } from "./buildRemediationThreatModel.js";
 
 describe("threat model provenance", () => {
@@ -55,5 +61,57 @@ describe("threat model provenance", () => {
       ),
       ["app/api/search/route.ts"],
     );
+  });
+});
+
+describe("threat-model inventory coverage", () => {
+  it("never reports complete content coverage for inventory-only threat models", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-threat-model-"));
+    try {
+      await fs.mkdir(path.join(root, "lib"), { recursive: true });
+      await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+      await fs.writeFile(path.join(root, "lib", "auth.ts"), "export const auth = 1;\n", "utf8");
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const server = createServer({
+        name: "secure-mcp-test",
+        version: "test",
+        defaultMaxFiles: 20,
+        maxFileBytes: 1024,
+        maxDepth: 12,
+      });
+      const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        const result = await client.callTool({
+          name: "secure_mcp_build_remediation_threat_model",
+          arguments: { project_root: root },
+        });
+        assert.equal(result.isError, undefined);
+        const structured = result.structuredContent as {
+          coverage?: {
+            scan_status: string;
+            not_observed_means: string;
+            review_basis?: string;
+            files_reviewed: unknown[];
+          };
+        };
+        const coverage = structured.coverage;
+        assert.ok(coverage, "threat model must return coverage");
+        // Inventory-only tool: coverage must never claim complete content review
+        // (the response may additionally be response-size-truncated, which is
+        // reported honestly as truncated rather than complete).
+        assert.notEqual(coverage.scan_status, "complete");
+        assert.equal(coverage.review_basis, "inventory_only");
+        assert.deepEqual(coverage.files_reviewed, []);
+        assert.notEqual(coverage.not_observed_means, "no_candidate_in_files_reviewed");
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

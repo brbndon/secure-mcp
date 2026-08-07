@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { toolError, toolSuccess } from "../lib/filesystem.js";
-import { redactFindings } from "../lib/redact.js";
+import { redactFindings, redactedEvidence } from "../lib/redact.js";
 import { escapeMarkdown, markdownCode } from "../lib/markdown.js";
 import {
   CANDIDATE_DISPOSITIONS,
@@ -15,19 +15,54 @@ import {
   type Finding,
   type Severity,
 } from "../lib/types.js";
-import { ensureFindingTraceability, FindingSchema } from "../knowledge/findings-schema.js";
+import {
+  ensureFindingTraceability,
+  FindingSchema,
+  MAX_FINDINGS,
+  MAX_FINDINGS_DECODED_BYTES,
+  MAX_FINDING_CATEGORY,
+  MAX_FINDING_DISPOSITION_REASON,
+  MAX_FINDING_ID,
+  MAX_FINDING_LABEL,
+  MAX_FINDING_LIST_ITEM,
+  MAX_FINDING_LIST_ITEMS,
+  MAX_FINDING_NARRATIVE,
+  MAX_FINDING_PATH,
+  MAX_FINDING_TAG,
+  MAX_FINDING_TAGS,
+  MAX_FINDING_TITLE,
+  MAX_PROJECT_ROOT_LENGTH,
+  MAX_REPORT_TITLE,
+} from "../knowledge/findings-schema.js";
 
 const InputSchema = z
   .object({
     findings: z
       .array(FindingSchema)
       .min(1)
-      .max(500)
+      .max(MAX_FINDINGS)
+      .superRefine((findings, ctx) => {
+        // Total decoded-request budget: enforced before hashing, deduplication,
+        // redaction, or Markdown construction so processing stays bounded even
+        // when every individual field is within its own cap.
+        let decodedBytes = 0;
+        for (const finding of findings) {
+          decodedBytes += Buffer.byteLength(JSON.stringify(finding), "utf8");
+          if (decodedBytes > MAX_FINDINGS_DECODED_BYTES) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `findings exceed the total decoded size budget of ${MAX_FINDINGS_DECODED_BYTES} bytes`,
+            });
+            return;
+          }
+        }
+      })
       .describe(
         "Finding objects from prior defensive review tools and agent analysis. Each must include evidence, impact_if_unremediated, remediation, residual_risk, and verification_suggestion.",
       ),
     project_root: z
       .string()
+      .max(MAX_PROJECT_ROOT_LENGTH)
       .optional()
       .describe("Optional project root for report metadata"),
     min_severity: z
@@ -43,7 +78,7 @@ const InputSchema = z
       .default(true)
       .describe("Merge findings with same title+file+category"),
     response_format: z.enum(["json", "markdown"]).default("json"),
-    report_title: z.string().max(200).optional(),
+    report_title: z.string().max(MAX_REPORT_TITLE).optional(),
   })
   .strict();
 
@@ -76,7 +111,9 @@ function mergeFindings(a: Finding, b: Finding): Finding {
     CONFIDENCE_ORDER[a.confidence] >= CONFIDENCE_ORDER[b.confidence]
       ? a.confidence
       : b.confidence;
-  const tags = [...new Set([...(a.tags ?? []), ...(b.tags ?? [])])];
+  const mergeList = (left: string[] | undefined, right: string[] | undefined, limit: number) =>
+    [...new Set([...(left ?? []), ...(right ?? [])])].slice(0, limit);
+  const tags = mergeList(a.tags, b.tags, MAX_FINDING_TAGS);
   return {
     ...a,
     severity,
@@ -107,10 +144,89 @@ function mergeFindings(a: Finding, b: Finding): Finding {
     source: a.source ?? b.source,
     control: a.control ?? b.control,
     sink: a.sink ?? b.sink,
-    counterevidence: [...new Set([...(a.counterevidence ?? []), ...(b.counterevidence ?? [])])],
-    proof_gap: [...new Set([...(a.proof_gap ?? []), ...(b.proof_gap ?? [])])],
-    validation: [...new Set([...(a.validation ?? []), ...(b.validation ?? [])])],
+    counterevidence: mergeList(a.counterevidence, b.counterevidence, MAX_FINDING_LIST_ITEMS),
+    proof_gap: mergeList(a.proof_gap, b.proof_gap, MAX_FINDING_LIST_ITEMS),
+    validation: mergeList(a.validation, b.validation, MAX_FINDING_LIST_ITEMS),
     tags: tags.length ? tags : undefined,
+  };
+}
+
+const OUTPUT_TRUNCATION_MARKER = "…[truncated]";
+
+function boundString(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  if (limit <= OUTPUT_TRUNCATION_MARKER.length) return value.slice(0, limit);
+  return `${value.slice(0, limit - OUTPUT_TRUNCATION_MARKER.length)}${OUTPUT_TRUNCATION_MARKER}`;
+}
+
+/** Keep post-redaction/merge fields within the same deterministic budgets as input. */
+function boundFinding(finding: Finding): Finding {
+  return {
+    ...finding,
+    id: boundString(finding.id, MAX_FINDING_ID),
+    title: boundString(finding.title, MAX_FINDING_TITLE),
+    description: boundString(finding.description, MAX_FINDING_NARRATIVE),
+    category: boundString(finding.category, MAX_FINDING_CATEGORY),
+    ...(finding.file !== undefined
+      ? { file: boundString(finding.file, MAX_FINDING_PATH) }
+      : {}),
+    evidence: boundString(finding.evidence, MAX_FINDING_NARRATIVE),
+    impact_if_unremediated: boundString(finding.impact_if_unremediated, MAX_FINDING_NARRATIVE),
+    remediation: boundString(finding.remediation, MAX_FINDING_NARRATIVE),
+    residual_risk: boundString(finding.residual_risk, MAX_FINDING_NARRATIVE),
+    verification_suggestion: boundString(
+      finding.verification_suggestion,
+      MAX_FINDING_NARRATIVE,
+    ),
+    ...(finding.cwe !== undefined ? { cwe: boundString(finding.cwe, MAX_FINDING_LABEL) } : {}),
+    ...(finding.owasp !== undefined
+      ? { owasp: boundString(finding.owasp, MAX_FINDING_LABEL) }
+      : {}),
+    ...(finding.tags !== undefined
+      ? { tags: finding.tags.slice(0, MAX_FINDING_TAGS).map((tag) => boundString(tag, MAX_FINDING_TAG)) }
+      : {}),
+    ...(finding.rule_family !== undefined
+      ? { rule_family: boundString(finding.rule_family, MAX_FINDING_LABEL) }
+      : {}),
+    ...(finding.root_control !== undefined
+      ? { root_control: boundString(finding.root_control, MAX_FINDING_LABEL) }
+      : {}),
+    ...(finding.instance_id !== undefined
+      ? { instance_id: boundString(finding.instance_id, MAX_FINDING_LABEL) }
+      : {}),
+    ...(finding.disposition_reason !== undefined
+      ? { disposition_reason: boundString(finding.disposition_reason, MAX_FINDING_DISPOSITION_REASON) }
+      : {}),
+    ...(finding.source !== undefined
+      ? { source: boundString(finding.source, MAX_FINDING_NARRATIVE) }
+      : {}),
+    ...(finding.control !== undefined
+      ? { control: boundString(finding.control, MAX_FINDING_NARRATIVE) }
+      : {}),
+    ...(finding.sink !== undefined
+      ? { sink: boundString(finding.sink, MAX_FINDING_NARRATIVE) }
+      : {}),
+    ...(finding.counterevidence !== undefined
+      ? {
+          counterevidence: finding.counterevidence
+            .slice(0, MAX_FINDING_LIST_ITEMS)
+            .map((item) => boundString(item, MAX_FINDING_LIST_ITEM)),
+        }
+      : {}),
+    ...(finding.proof_gap !== undefined
+      ? {
+          proof_gap: finding.proof_gap
+            .slice(0, MAX_FINDING_LIST_ITEMS)
+            .map((item) => boundString(item, MAX_FINDING_LIST_ITEM)),
+        }
+      : {}),
+    ...(finding.validation !== undefined
+      ? {
+          validation: finding.validation
+            .slice(0, MAX_FINDING_LIST_ITEMS)
+            .map((item) => boundString(item, MAX_FINDING_LIST_ITEM)),
+        }
+      : {}),
   };
 }
 
@@ -255,18 +371,20 @@ export function registerProduceFindings(server: McpServer): void {
         });
 
         // Redact after identity/dedupe so stable keys use unredacted location metadata.
-        list = redactFindings(list).map((f, i) => ({
-          ...f,
-          tags: [
-            ...new Set([
-              ...(f.tags ?? []),
-              `source-id:${f.id}`,
-              ...(f.instance_id ? [`instance-id:${f.instance_id}`] : []),
-              "remediation-report",
-            ]),
-          ],
-          id: `F-${String(i + 1).padStart(3, "0")}`,
-        }));
+        list = redactFindings(list).map((f, i) =>
+          boundFinding({
+            ...f,
+            tags: [
+              ...new Set([
+                ...(f.tags ?? []),
+                `source-id:${f.id}`,
+                ...(f.instance_id ? [`instance-id:${f.instance_id}`] : []),
+                "remediation-report",
+              ]),
+            ],
+            id: `F-${String(i + 1).padStart(3, "0")}`,
+          }),
+        );
 
         const counts: Record<Severity, number> = {
           critical: 0,
@@ -277,7 +395,13 @@ export function registerProduceFindings(server: McpServer): void {
         };
         for (const f of list) counts[f.severity]++;
 
-        const title = params.report_title ?? "Secure code review — remediation findings";
+        const title = boundString(
+          redactedEvidence(params.report_title ?? "Secure code review — remediation findings"),
+          MAX_REPORT_TITLE,
+        );
+        const projectRoot = params.project_root
+          ? boundString(redactedEvidence(params.project_root), MAX_PROJECT_ROOT_LENGTH)
+          : undefined;
         const risk_score =
           counts.critical * 10 + counts.high * 5 + counts.medium * 2 + counts.low * 1;
 
@@ -302,7 +426,7 @@ export function registerProduceFindings(server: McpServer): void {
 
         const data = {
           ok: true as const,
-          project_root: params.project_root ?? null,
+          project_root: projectRoot ?? null,
           summary: `${title}: ${list.length} finding(s); critical=${counts.critical}, high=${counts.high}, medium=${counts.medium}, low=${counts.low}, info=${counts.info}. Prioritise remediation.`,
           executive_summary,
           findings: list,
@@ -315,7 +439,7 @@ export function registerProduceFindings(server: McpServer): void {
 
         return toolSuccess(data, {
           responseFormat: params.response_format,
-          markdown: buildMarkdown(title, params.project_root, list, counts),
+          markdown: buildMarkdown(title, projectRoot, list, counts),
         });
       } catch (error) {
         return toolError(

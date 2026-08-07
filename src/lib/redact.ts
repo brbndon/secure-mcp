@@ -7,22 +7,57 @@ const SECRET_PATH_NAME_RE =
 const LOCATION_SUFFIX_RE = /^(.*?)(:\d+(?::\d+)?)?$/;
 
 /**
+ * Secret-like key names, longest-first so compound keys (access_token,
+ * client_secret, aws_secret_access_key) match before their shorter parts.
+ * Deliberately unanchored on the left: `api_token` must still redact through
+ * its `token` substring, the same way `password` inside `dbpassword` does.
+ */
+const SECRET_KEYS =
+  "(?:aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|session[_-]?token|auth[_-]?token|secret[_-]?key|private[_-]?key|api[_-]?key|apikey|proxy[_-]?authorization|authorization|password|passwd|pwd|secret|token|credential)";
+
+/**
+ * Separator between a secret key and its value: optional whitespace, an
+ * optional closing quote (quoted JSON/YAML keys such as "password":), then
+ * `:` or `=`. The original sanitizer missed the quoted-key form because the
+ * closing quote sits between the key and the colon.
+ */
+const SECRET_KEY_SEPARATOR = '\\s*["\'`]?\\s*[:=]\\s*';
+
+/**
  * Secret-value patterns. Whole PEM blocks must run before any BEGIN-only match
- * so key material between BEGIN/END is not left in the clear.
+ * so key material between BEGIN/END is not left in the clear. Structured
+ * formats (YAML block scalars, quoted JSON/YAML values, URI userinfo) run
+ * before the generic single-line fallback.
  */
 const SECRET_VALUE_PATTERNS: RegExp[] = [
-  /-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g,
-  /-----BEGIN [^-]+-----[\s\S]*$/g,
+  /-----BEGIN [^-]+-----[^]*?-----END [^-]+-----/g,
+  /-----BEGIN [^-]+-----[^]*$/g,
   /((?:authorization|proxy-authorization)\s*[:=]\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
-  /((?:password|passwd|secret|token|api[_-]?key|private[_-]?key|credential|authorization)\s*[:=]\s*["'`]?)([^\s"'`,;}]+)(["'`]*)/gi,
+  // YAML block scalars: labeled key, `|`/`>` indicator, indented body lines.
+  new RegExp(
+    `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}[|>][^\\n]*\\n)((?:[ \\t]+[^\\n]*\\n){1,64})`,
+    "gi",
+  ),
+  // Quoted JSON/YAML/code values (single, double, or template quotes), bounded,
+  // including escaped quotes and multi-line template literals.
+  new RegExp(
+    `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])((?:[^\\\\"'\\\`]|\\\\.){0,2048}?)\\2`,
+    "gi",
+  ),
+  // Unquoted single-line values (env files, URLs' query tokens, config).
+  // `&` is an RFC 3986 query separator, so values stop there and sibling
+  // parameters are preserved.
+  new RegExp(
+    `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}["'\`]?)([^\\s"'\\\`,;&}]+)(["'\`]*)`,
+    "gi",
+  ),
+  // URI userinfo credentials: scheme://user:pass@host (also redis://:pass@).
+  /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\/@\s]+)@/g,
   /\bAKIA[0-9A-Z]{16}\b/gi,
   /\b(Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
   /\b(?:sk|pk|ghp|github_pat|xox[baprs]-)[A-Za-z0-9_\-]{12,}\b/gi,
 ];
-
-/** Index of the labeled password/secret capture pattern (prefix + value + suffix). */
-const LABELED_SECRET_PATTERN = SECRET_VALUE_PATTERNS[3];
 
 /** Redact a path whose name commonly identifies credential material. */
 export function redactedSecretPath(relativePath: string): string {
@@ -46,24 +81,43 @@ export function redactedSecretPaths(paths: readonly string[]): string[] {
 export function redactedEvidence(raw: string): string {
   const marker = "[REDACTED:****]";
   let output = raw;
-  for (const pattern of SECRET_VALUE_PATTERNS) {
+  for (let i = 0; i < SECRET_VALUE_PATTERNS.length; i++) {
+    const pattern = SECRET_VALUE_PATTERNS[i];
     pattern.lastIndex = 0;
     output = output.replace(pattern, (...args: unknown[]) => {
       const match = args[0];
       if (typeof match !== "string") return marker;
-      // Labeled secrets keep key name + quotes; PEM/token patterns replace wholly.
-      if (pattern === LABELED_SECRET_PATTERN) {
-        const prefix = typeof args[1] === "string" ? args[1] : "";
-        const suffix = typeof args[3] === "string" ? args[3] : "";
-        return `${prefix}${marker}${suffix}`;
+      switch (i) {
+        case 2: {
+          // Authorization header: keep the label.
+          const prefix = typeof args[1] === "string" ? args[1] : "";
+          return `${prefix}${marker}`;
+        }
+        case 3: {
+          // YAML block scalar: keep the key line, replace the body.
+          const prefix = typeof args[1] === "string" ? args[1] : "";
+          return `${prefix}${marker}\n`;
+        }
+        case 4: {
+          // Quoted labeled value: keep key + surrounding quotes.
+          const prefix = typeof args[1] === "string" ? args[1] : "";
+          const quote = typeof args[2] === "string" ? args[2] : "";
+          return `${prefix}${quote}${marker}${quote}`;
+        }
+        case 5: {
+          // Unquoted labeled value: keep key + optional trailing quote.
+          const prefix = typeof args[1] === "string" ? args[1] : "";
+          const suffix = typeof args[3] === "string" ? args[3] : "";
+          return `${prefix}${marker}${suffix}`;
+        }
+        case 6: {
+          // URI userinfo: keep the scheme, redact user:pass.
+          const scheme = typeof args[1] === "string" ? args[1] : "";
+          return `${scheme}${marker}@`;
+        }
+        default:
+          return marker;
       }
-      if (
-        pattern === SECRET_VALUE_PATTERNS[2] &&
-        typeof args[1] === "string"
-      ) {
-        return `${args[1]}${marker}`;
-      }
-      return marker;
     });
   }
 
@@ -72,44 +126,53 @@ export function redactedEvidence(raw: string): string {
 }
 
 /**
- * Redact secret-like strings on a finding before it crosses an MCP output boundary.
- * Stable identity fields are generated from non-secret metadata, but are still
- * passed through the same boundary redaction for compatibility with external
- * callers that supply legacy metadata.
+ * Recursively redact every string in a caller- or repository-controlled
+ * structure. This is the single structural policy for finding metadata,
+ * Markdown, structuredContent, and SARIF-shaped output: any nested object or
+ * array field still passes through the same secret-value policy, and any value
+ * stored under a secret-like KEY is redacted wholesale (field-aware), so
+ * `{ token: "abc" }` cannot leak through object serialization even when the
+ * value alone would not match a value pattern.
+ */
+const SECRET_KEY_NAME_RE = new RegExp(SECRET_KEYS, "i");
+/**
+ * Some response objects are keyed by identifiers rather than field names.
+ * Their keys must not be interpreted as secret-bearing fields (for example,
+ * the `secrets` pack id inside `items_per_pack`). Values in those maps still
+ * recurse through the ordinary string redactor, including nested objects.
+ */
+const DYNAMIC_OBJECT_FIELDS = new Set([
+  "by_extension",
+  "candidate_disposition_counts",
+  "counts",
+  "items_per_pack",
+]);
+
+export function redactValue(value: unknown, parentField?: string): unknown {
+  if (typeof value === "string") return redactedEvidence(value);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, parentField));
+  if (value !== null && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const isDynamicMapKey = DYNAMIC_OBJECT_FIELDS.has(parentField ?? "");
+      next[key] =
+        !isDynamicMapKey && SECRET_KEY_NAME_RE.test(key)
+          ? "[REDACTED:****]"
+          : redactValue(item, key);
+    }
+    return next;
+  }
+  return value;
+}
+
+/**
+ * Redact secret-like strings on a finding before it crosses an MCP output
+ * boundary. Every field — including category, CWE, OWASP, stack, tags, paths,
+ * and auxiliary evidence — is routed through the same recursive policy, so no
+ * caller-supplied field can carry an unredacted secret into output.
  */
 export function redactFinding(finding: Finding): Finding {
-  return {
-    ...finding,
-    id: redactedEvidence(finding.id),
-    title: redactedEvidence(finding.title),
-    file: finding.file !== undefined ? redactedSecretPath(finding.file) : undefined,
-    evidence: redactedEvidence(finding.evidence),
-    description: redactedEvidence(finding.description),
-    source: finding.source !== undefined ? redactedEvidence(finding.source) : undefined,
-    control: finding.control !== undefined ? redactedEvidence(finding.control) : undefined,
-    sink:
-      finding.sink !== undefined
-        ? redactedEvidence(redactedSecretPath(finding.sink))
-        : undefined,
-    counterevidence: finding.counterevidence?.map(redactedEvidence),
-    proof_gap: finding.proof_gap?.map(redactedEvidence),
-    validation: finding.validation?.map(redactedEvidence),
-    impact_if_unremediated: redactedEvidence(finding.impact_if_unremediated),
-    remediation: redactedEvidence(finding.remediation),
-    residual_risk: redactedEvidence(finding.residual_risk),
-    verification_suggestion: redactedEvidence(finding.verification_suggestion),
-    disposition_reason:
-      finding.disposition_reason !== undefined
-        ? redactedEvidence(finding.disposition_reason)
-        : undefined,
-    rule_family:
-      finding.rule_family !== undefined ? redactedEvidence(finding.rule_family) : undefined,
-    root_control:
-      finding.root_control !== undefined ? redactedEvidence(finding.root_control) : undefined,
-    instance_id:
-      finding.instance_id !== undefined ? redactedEvidence(finding.instance_id) : undefined,
-    tags: finding.tags?.map(redactedEvidence),
-  };
+  return redactValue(finding) as Finding;
 }
 
 /** Redact a list of findings at an output boundary. */
