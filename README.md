@@ -1,22 +1,22 @@
 # secure-mcp
 
-Local **Model Context Protocol (MCP)** server that helps coding agents perform **defensive, remediation-focused secure code review** of source repositories.
+Local **Model Context Protocol (MCP)** server that helps coding agents run defensive, remediation-focused secure code review of source repositories.
 
-**Focus (v1):** TypeScript / Next.js and Swift / SwiftUI  
-**Transport:** stdio only (runs as a local subprocess of the agent client)  
-**License:** private / closed-source (`UNLICENSED`)  
-**Framing:** identify potential weaknesses → classify (CWE / severity / confidence) → recommend concrete remediation. **Not** an offensive toolkit.
+- Focus (v1): TypeScript / Next.js and Swift / SwiftUI
+- Transport: stdio only, runs as a local subprocess of the agent client
+- License: private / closed-source (`UNLICENSED`)
+- Framing: identify potential weaknesses, classify them (CWE / severity / confidence), and recommend concrete remediation. Not an offensive toolkit.
 
 ## Why this exists
 
 Rule-based scanners are useful, but agents still need:
 
 - Portable, agent-first tools that work across Codex, Claude, Cursor, Grok, and similar clients
-- Structured findings (severity + confidence + **required remediation fields**) for multi-phase workflows
-- Stack awareness beyond generic SAST—especially modern Swift and Next.js App Router patterns
+- Structured findings (severity + confidence + required remediation fields) for multi-phase workflows
+- Stack awareness beyond generic SAST, especially modern Swift and Next.js App Router patterns
 - Remediation-oriented threat modeling, not only regex hits
 
-`secure-mcp` is the private implementation of that product surface.
+`secure-mcp` is the private implementation of that.
 
 ## Features (v1)
 
@@ -32,21 +32,21 @@ Rule-based scanners are useful, but agents still need:
 | `secure_mcp_build_remediation_threat_model` | STRIDE fragments for hardening priority |
 | `secure_mcp_produce_findings` | Dedupe, prioritise, remediation report |
 
-All tools are **read-only**, never execute project code, and respect ignore patterns / size caps. Bounded audit tools return structured `coverage` with included/reviewed/excluded paths, ignore reasons, caps, truncation, and candidate dispositions; an empty finding list is not a claim that the whole tree was scanned.
+All tools are read-only, never execute project code, and respect ignore patterns / size caps. Bounded audit tools return structured `coverage` with included/reviewed/excluded paths, ignore reasons, caps, truncation, and candidate dispositions; an empty finding list is not a claim that the whole tree was scanned.
 
 Shared optional argument: `focus_paths` accepts relative path prefixes for scoped drill-down on `secure_mcp_list_project_structure`, `secure_mcp_analyze_architecture`, and the category/remediation tools; omit it for a whole-repository review.
 
 ### Finding structure
 
-Every finding is structured as:
+Every finding follows the same shape:
 
-1. **evidence**
-2. **classification** (severity, confidence, category, optional CWE)
-3. **impact_if_unremediated** (high-level only)
-4. **remediation**
-5. **residual_risk** / **verification_suggestion**
+1. `evidence`
+2. `classification` (severity, confidence, category, optional CWE)
+3. `impact_if_unremediated` (high-level only)
+4. `remediation`
+5. `residual_risk` / `verification_suggestion`
 
-Findings also carry additive traceability when available: stable `rule_family`, `root_control`, and `instance_id`, plus `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and a candidate `disposition`.
+Findings can also include additive traceability when available: stable `rule_family`, `root_control`, and `instance_id`, plus `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and a candidate `disposition`.
 
 ## Requirements
 
@@ -94,18 +94,18 @@ The server refuses to start without a valid key (except in DEV_MODE with the doc
 | Environment | `SECURE_MCP_LICENSE_KEY` |
 | File (single line) | `SECURE_MCP_LICENSE_FILE` |
 
-**Format:** `smcp_<token>` where token is ≥16 characters of `[A-Za-z0-9_-]`.
+The format is `smcp_<token>`, where the token is at least 16 characters drawn from `[A-Za-z0-9_-]`.
 
-**Development / CI key (local/agent testing only):**
+Development / CI key (for local and agent testing only):
 
 ```text
 smcp_dev_local_testing_key_v1
 ```
 
 **To use dev key:** set both `SECURE_MCP_DEV_MODE=1` and `SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1`.
-A clear warning is emitted on stderr. Never use in production or with real data.
+The server emits a clear warning on stderr. Never use the dev key in production or with real data.
 
-v1 performs **local format validation only** (no network). A remote validator can be added later without changing tool names.
+v1 only validates the format locally (no network calls). A remote validator can be added later without changing tool names.
 
 ## Connect from common MCP clients
 
@@ -128,9 +128,31 @@ Use the built entrypoint after `pnpm build`. Always set the license env var in t
 }
 ```
 
+### pi
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+      "env": {
+        "SECURE_MCP_DEV_MODE": "1",
+        "SECURE_MCP_LICENSE_KEY": "smcp_dev_local_testing_key_v1"
+      },
+      "lifecycle": "lazy",
+      "directTools": true,
+      "toolPrefix": "none"
+    }
+  }
+}
+```
+
+`directTools: true` + `toolPrefix: "none"` exposes the tools under their canonical `secure_mcp_*` names (matching the master skill).
+
 ### Cursor
 
-Add a similar server entry in Cursor MCP settings (`command` + `args` + `env`).
+Add a similar server entry in Cursor MCP settings (`command` + `args` + `env`), including both license env vars. See `scripts/install-agents.sh` for the canonical config.
 
 ### Codex / other stdio clients
 
@@ -142,16 +164,39 @@ node /absolute/path/to/secure-mcp/dist/index.js
 
 with `SECURE_MCP_LICENSE_KEY` in the process environment; when using the documented dev key, also set `SECURE_MCP_DEV_MODE=1`.
 
-> **Important:** `project_root` arguments must be paths **visible to the machine running the MCP server** (usually your laptop). Prefer absolute paths.
+> **Important:** `project_root` arguments must be paths visible to the machine running the MCP server (usually your laptop). Prefer absolute paths.
+
+## Install the skill for coding agents
+
+The repository ships a master skill (`.agents/skills/secure-mcp/SKILL.md`) that makes any coding agent run the full defensive audit autonomously: on invocation it creates an audit goal, preflights the repository, routes the bounded multi-phase review through the `secure_mcp_*` tools, and completes the goal only after the remediation report is delivered. Install the skill and the MCP server wiring for every harness with:
+
+```bash
+./scripts/install-agents.sh install    # symlink the skill + configure pi, Claude Code, Cursor, Codex
+./scripts/install-agents.sh check     # verify symlinks, configs, and server startup
+./scripts/install-agents.sh uninstall # remove exactly what install added
+```
+
+| Harness | Skill location | MCP server config |
+| --- | --- | --- |
+| pi | `~/.agents/skills/secure-mcp` → repo | `~/.pi/agent/mcp.json` |
+| Claude Code | `~/.claude/skills/secure-mcp` → repo | `~/.claude/settings.json` |
+| Cursor | `~/.cursor/skills/secure-mcp` → repo | `~/.cursor/mcp.json` |
+| OpenAI Codex | `~/.codex/agents/secure-mcp.toml` (agent manifest) | `~/.codex/config.toml` |
+
+Notes:
+
+- Skill locations are symlinks to the checkout, so edits to the skill propagate to every harness.
+- Every client config must set both `SECURE_MCP_LICENSE_KEY` and `SECURE_MCP_DEV_MODE=1` when using the dev key. Omitting `DEV_MODE` makes the server exit at startup (the license gate is strict).
+- Restart agent sessions after installing. Skills and MCP servers load at session start.
 
 ## Suggested agent workflow (defensive, multi-phase)
 
-1. `secure_mcp_list_project_structure` — inventory (no knowledge packs yet)  
-2. `secure_mcp_analyze_architecture` — stacks, trust boundaries, `recommended_packs`, `pack_batches`  
-3. `secure_mcp_get_knowledge_pack` — load `pack_batches[0]` first (`detail=summary`; max 6 pack ids per call; items fair-sampled across packs, default max 24)  
+1. `secure_mcp_list_project_structure`: inventory (no knowledge packs yet)  
+2. `secure_mcp_analyze_architecture`: stacks, trust boundaries, `recommended_packs`, `pack_batches`  
+3. `secure_mcp_get_knowledge_pack`: load `pack_batches[0]` first (`detail=summary`; max 6 pack ids per call; items fair-sampled across packs, default max 24)  
 4. Category tools: authentication, injection-risks, secrets, threat-model (support focus_paths)
 5. Confirm data flows in code; no exploit generation  
-6. `secure_mcp_produce_findings` — remediation-focused report  
+6. `secure_mcp_produce_findings`: remediation-focused report  
 
 Long multi-phase reviews with intermediate artifacts are expected for thorough hardening work.
 
@@ -182,9 +227,9 @@ fixtures/rn-lib-no-expo/ # react-native dep + non-Expo app.json (detection guard
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `SECURE_MCP_DEV_MODE` | — | Set to `1` to allow the documented dev key for local/agent/CI testing only |
-| `SECURE_MCP_LICENSE_KEY` | — | License key |
-| `SECURE_MCP_LICENSE_FILE` | — | Path to key file |
+| `SECURE_MCP_DEV_MODE` | (none) | Set to `1` to allow the documented dev key for local/agent/CI testing only |
+| `SECURE_MCP_LICENSE_KEY` | (none) | License key |
+| `SECURE_MCP_LICENSE_FILE` | (none) | Path to key file |
 | `SECURE_MCP_MAX_FILES` | `400` | Default walk cap |
 | `SECURE_MCP_MAX_FILE_BYTES` | `262144` | Per-file read cap |
 | `SECURE_MCP_MAX_DEPTH` | `12` | Directory depth cap |
@@ -209,17 +254,17 @@ pnpm docs:build
 pnpm docs:preview
 ```
 
-Local docs verification uses `.blume-verify/dist` so it stays separate from the MCP server's compiled `dist/` output. The workflow at `.github/workflows/deploy-docs.yml` runs the same build, type-check, and link validation steps on pushes to `main`; deployment is intentionally handled separately by the eventual Cloudflare Pages or Workers configuration.
+Local docs verification uses `.blume-verify/dist` so it stays separate from the MCP server's compiled `dist/` output. The workflow at `.github/workflows/deploy-docs.yml` runs the same build, type-check, and link validation steps on pushes to `main`; deployment is a separate step handled by a future Cloudflare Pages or Workers configuration.
 
 ## Security notes
 
-- Tools only **read** paths under the requested `project_root` (path traversal blocked).
+- Tools only read paths under the requested `project_root` (path traversal is blocked).
 - The server does **not** execute target project code.
-- Logs go to **stderr** only (stdout is MCP JSON-RPC).
+- Logs go to stderr only (stdout is MCP JSON-RPC).
 - Secret findings redact evidence where practical; still handle outputs carefully.
 - Secret-like evidence paths and snippets are redacted before return; source file locations remain available for authorized local remediation.
-- `not_observed_means` in coverage distinguishes “no candidate in files reviewed” from a partial or truncated scan.
-- This product is for **authorized defensive review** of codebases you own or are engaged to harden.
+- `not_observed_means` in coverage distinguishes "no candidate in files reviewed" from a partial or truncated scan.
+- This product is for authorized defensive review of codebases you own or are engaged to harden.
 
 ## Extending
 
@@ -227,4 +272,4 @@ Read [skills/development.md](skills/development.md). Keep tool names and the `Fi
 
 ## License
 
-Proprietary — `UNLICENSED`. All rights reserved.
+Proprietary: `UNLICENSED`. All rights reserved.

@@ -10,8 +10,12 @@ export default defineConfig({
   title: "secure-mcp",
   description: "Defensive, agent-first security audits over the Model Context Protocol.",
   logo: {
-    // Brand mark in the header — dark tile for light mode, inverted for dark.
-    image: { light: "/logo.svg", dark: "/logo-dark.svg", alt: "secure-mcp" },
+    // Terminal Window Severity is the repository and site mark.
+    image: {
+      light: "/icons/terminal-window-severity.svg",
+      dark: "/icons/terminal-window-severity.svg",
+      alt: "secure-mcp — Terminal Window Severity",
+    },
   },
   theme: {
     accent: { light: "#0f8f85", dark: "#4de1c4" },
