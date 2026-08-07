@@ -13,7 +13,7 @@
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/server.test.ts src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/knowledge/findings-schema.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/tools/checkAuthentication.test.ts src/tools/produceFindings.test.ts src/tools/reviewSecrets.test.ts src/tools/buildRemediationThreatModel.test.ts",
+    "test": "tsx --test src/server.test.ts src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/knowledge/findings-schema.test.ts src/knowledge/common.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/tools/checkAuthentication.test.ts src/tools/produceFindings.test.ts src/tools/reviewSecrets.test.ts src/tools/buildRemediationThreatModel.test.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "typecheck": "tsc --noEmit",
     "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm smoke",

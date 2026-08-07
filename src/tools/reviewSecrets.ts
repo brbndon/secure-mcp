@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
+  detectWithBudget,
   findLineNumber,
   finalizeCoverage,
   recordCoverageExclusion,
@@ -232,19 +233,18 @@ export function registerReviewSecrets(
 
           for (const pattern of SECRET_PATTERNS) {
             detectorFamiliesRun.add("secrets.secret-patterns");
-            pattern.regex.lastIndex = 0;
-            let match: RegExpExecArray | null;
             let hits = 0;
-            while ((match = pattern.regex.exec(content)) !== null && hits < 10) {
-              const full = match[0];
+            for (const hit of detectWithBudget(pattern.regex, content)) {
+              const full = hit.match;
               if (
                 FALSE_POSITIVE_HINTS.test(full) ||
-                FALSE_POSITIVE_HINTS.test(snippetAround(content, match.index, 40))
+                FALSE_POSITIVE_HINTS.test(snippetAround(content, hit.index, 40))
               ) {
                 if (!pattern.name.includes("Private key") && !pattern.name.includes("AWS")) {
                   continue;
                 }
               }
+              if (hits >= 10) break;
               hits++;
               findings.push(
                 redactFinding(
@@ -258,7 +258,7 @@ export function registerReviewSecrets(
                     rule_family: "secrets.secret-patterns",
                     root_control: `SECRET-PATTERN-${pattern.name.replace(/[^A-Z0-9]+/gi, "-").toUpperCase()}`,
                     file: file.relativePath,
-                    line: findLineNumber(content, match.index),
+                    line: findLineNumber(content, hit.index),
                     evidence: full,
                     source: "Repository or configuration content matched a secret-like pattern.",
                     control: pattern.remediation,
@@ -282,9 +282,10 @@ export function registerReviewSecrets(
             for (const p of NEXTJS_PATTERNS.filter(
               (x) => x.id.includes("PUBLIC") || x.id.includes("USE-CLIENT"),
             )) {
-              p.regex.lastIndex = 0;
-              let match: RegExpExecArray | null;
-              while ((match = p.regex.exec(content)) !== null) {
+              let hits = 0;
+              for (const hit of detectWithBudget(p.regex, content)) {
+                if (hits >= 8) break;
+                hits++;
                 findings.push(
                   redactFinding(
                     buildFinding({
@@ -299,8 +300,8 @@ export function registerReviewSecrets(
                       rule_family: "web-next.client-bundle-secrets",
                       root_control: p.id,
                       file: file.relativePath,
-                      line: findLineNumber(content, match.index),
-                      evidence: snippetAround(content, match.index),
+                      line: findLineNumber(content, hit.index),
+                      evidence: snippetAround(content, hit.index),
                       source: "Next.js client-bundle or public configuration path.",
                       control: p.recommendation,
                       sink: file.relativePath,
@@ -324,16 +325,15 @@ export function registerReviewSecrets(
           ) {
             detectorFamiliesRun.add("swift-ios.secret-handling");
             for (const p of SWIFT_SECRETS_PATTERNS) {
-              p.regex.lastIndex = 0;
-              let match: RegExpExecArray | null;
               let hits = 0;
-              while ((match = p.regex.exec(content)) !== null && hits < 8) {
-                if (p.filter && !p.filter(match[0], content)) continue;
-                const full = match[0];
+              for (const hit of detectWithBudget(p.regex, content)) {
+                if (p.filter && !p.filter(hit.match, content)) continue;
+                const full = hit.match;
                 const nearFp =
                   FALSE_POSITIVE_HINTS.test(full) ||
-                  FALSE_POSITIVE_HINTS.test(snippetAround(content, match.index, 40));
+                  FALSE_POSITIVE_HINTS.test(snippetAround(content, hit.index, 40));
                 if (nearFp && p.id === "SWIFT-HARDCODED-PASSWORD") continue;
+                if (hits >= 8) break;
                 hits++;
                 findings.push(
                   redactFinding(
@@ -348,8 +348,8 @@ export function registerReviewSecrets(
                       rule_family: "swift-ios.secret-handling",
                       root_control: p.id,
                       file: file.relativePath,
-                      line: findLineNumber(content, match.index),
-                      evidence: snippetAround(content, match.index),
+                      line: findLineNumber(content, hit.index),
+                      evidence: snippetAround(content, hit.index),
                       source: "Swift source or Apple configuration matched a secret-handling heuristic.",
                       control: p.recommendation,
                       sink: file.relativePath,

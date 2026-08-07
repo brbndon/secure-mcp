@@ -4,6 +4,7 @@
  */
 
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import { describe, it } from "node:test";
 import {
   AUTH_PATTERNS,
@@ -14,6 +15,7 @@ import {
   shouldScanSwiftAuthFile,
 } from "./checkAuthentication.js";
 import type { StackFocus } from "../lib/types.js";
+import { detectWithBudget } from "../lib/filesystem.js";
 import { redactedEvidence } from "../lib/redact.js";
 
 function patternById(id: string) {
@@ -253,6 +255,34 @@ describe("Expo / React Native auth heuristics", () => {
       ),
     );
     assert.ok(!matches("AUTH-EXPO-PUBLIC-CREDENTIAL", "process.env.EXPO_PUBLIC_API_KEY"));
+  });
+
+  it("keeps EXPO_PUBLIC_ detection linear on adversarial input", () => {
+    const pattern = patternById("AUTH-EXPO-PUBLIC-CREDENTIAL");
+    // Thousands of long candidate names that never resolve to a credential
+    // suffix: the tempered name token is capped at 64 chars, so each candidate
+    // costs a bounded amount of work and real hits are still found.
+    const adversarial = ("process.env.EXPO_PUBLIC_" + "A".repeat(300) + "\n").repeat(1_000);
+    const start = performance.now();
+    const longNameHits = detectWithBudget(pattern.regex, adversarial);
+    const longNameMs = performance.now() - start;
+    assert.equal(longNameHits.length, 0);
+    assert.ok(longNameMs < 1_500, `EXPO detector took ${longNameMs.toFixed(0)}ms on long names`);
+
+    const mixed = adversarial + "process.env.EXPO_PUBLIC_API_SECRET\n";
+    const startMixed = performance.now();
+    const mixedHits = detectWithBudget(pattern.regex, mixed);
+    const mixedMs = performance.now() - startMixed;
+    assert.ok(mixedHits.some((hit) => hit.match.includes("API_SECRET")));
+    assert.ok(mixedMs < 1_500, `EXPO detector took ${mixedMs.toFixed(0)}ms on mixed input`);
+  });
+
+  it("never matches names longer than the bounded identifier token", () => {
+    const pattern = patternById("AUTH-EXPO-PUBLIC-CREDENTIAL");
+    const longName = `EXPO_PUBLIC_${"A".repeat(80)}SECRET`;
+    assert.equal(detectWithBudget(pattern.regex, longName).length, 0);
+    const boundaryName = `EXPO_PUBLIC_${"A".repeat(64)}SECRET`;
+    assert.equal(detectWithBudget(pattern.regex, boundaryName).length, 1);
   });
 
   it("notes SecureStore writes without access-control options only", () => {

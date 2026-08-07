@@ -3,11 +3,13 @@ import { describe, it } from "node:test";
 import {
   redactCoverageReport,
   redactFinding,
+  redactValue,
   redactedEvidence,
   redactedSecretPath,
   redactedSecretPaths,
 } from "./redact.js";
 import type { CoverageReport, Finding } from "./types.js";
+import { snippetAround } from "./filesystem.js";
 
 describe("secret evidence redaction", () => {
   it("removes secret-like values from evidence snippets", () => {
@@ -130,5 +132,147 @@ describe("secret evidence redaction", () => {
     assert.deepEqual(safe.files_reviewed, ["src/app.ts", "[redacted-secret-file]"]);
     assert.equal(safe.candidate_dispositions[0]?.file, "config/[redacted-secret-file]:3");
     assert.ok(!safe.candidate_dispositions[0]?.reason.includes(".env.production"));
+  });
+});
+
+describe("structural and URI secret redaction", () => {
+  it("redacts quoted JSON keys with space-containing values", () => {
+    const safe = redactedEvidence(
+      '{"password": "my secret value 123", "api_key": "another value here", "nested": {"client_secret": "deep value 456"}}',
+    );
+    assert.ok(!safe.includes("my secret value 123"));
+    assert.ok(!safe.includes("another value here"));
+    assert.ok(!safe.includes("deep value 456"));
+  });
+
+  it("redacts single-quoted and template-quoted labeled values", () => {
+    const safe = redactedEvidence(
+      "config = { 'client_secret': 'abc def ghi', `token`: `tpl value 789` }",
+    );
+    assert.ok(!safe.includes("abc def ghi"));
+    assert.ok(!safe.includes("tpl value 789"));
+    assert.ok(safe.includes("client_secret"));
+  });
+
+  it("redacts YAML block scalars", () => {
+    const safe = redactedEvidence(
+      "api:\n  secret: |\n    first-line-value\n    second-line-value\n  other: 1",
+    );
+    assert.ok(!safe.includes("first-line-value"));
+    assert.ok(!safe.includes("second-line-value"));
+  });
+
+  it("redacts URI userinfo credentials and keeps the host", () => {
+    const safe = redactedEvidence(
+      "postgres://app:dbpass123@db.internal:5432/main https://user:webpass456@example.com/x",
+    );
+    assert.ok(!safe.includes("dbpass123"));
+    assert.ok(!safe.includes("webpass456"));
+    assert.match(safe, /postgres:\/\/\[REDACTED:\*\*\*\*\]@db\.internal/);
+    assert.match(safe, /https:\/\/\[REDACTED:\*\*\*\*\]@example\.com/);
+  });
+
+  it("redacts redis-style empty-user userinfo", () => {
+    const safe = redactedEvidence("redis://:redispass789@cache:6379/0");
+    assert.ok(!safe.includes("redispass789"));
+    assert.match(safe, /redis:\/\/\[REDACTED:\*\*\*\*\]@cache/);
+  });
+
+  it("redacts query-string credentials inside URLs", () => {
+    const safe = redactedEvidence(
+      "https://api.example.com/v1?token=querysecret&api_key=keyvalue123&x=1",
+    );
+    assert.ok(!safe.includes("querysecret"));
+    assert.ok(!safe.includes("keyvalue123"));
+    assert.ok(safe.includes("x=1"));
+  });
+
+  it("redacts compound and prefixed keys without over-redacting prose", () => {
+    const safe = redactedEvidence(
+      "api_token=compound1 access_token=compound2 dbpassword=prose-key db_password=prose-key2",
+    );
+    assert.ok(!safe.includes("compound1"));
+    assert.ok(!safe.includes("compound2"));
+    assert.ok(!safe.includes("prose-key"));
+    assert.ok(!safe.includes("prose-key2"));
+  });
+
+  it("does not redact harmless email-like text or mailto links", () => {
+    const safe = redactedEvidence(
+      "contact security@example.com or admin@corp.example; mailto:ops@example.com",
+    );
+    assert.ok(safe.includes("security@example.com"));
+    assert.ok(safe.includes("admin@corp.example"));
+    assert.ok(safe.includes("ops@example.com"));
+  });
+
+  it("recursively redacts nested metadata objects", () => {
+    const value = redactValue({
+      ok: true,
+      count: 3,
+      nested: { auth: { token: "nestedsecret456" } },
+      list: ["api_key=arrsecret789", 5],
+      safe: "src/app.ts",
+    });
+    const encoded = JSON.stringify(value);
+    assert.ok(!encoded.includes("nestedsecret456"));
+    assert.ok(!encoded.includes("arrsecret789"));
+    assert.equal((value as { count: number }).count, 3);
+    assert.ok(encoded.includes("src/app.ts"));
+  });
+
+  it("preserves dynamic identifier keys while redacting secret fields", () => {
+    const value = redactValue({
+      items_per_pack: { secrets: 2, token: 1 },
+      secret: "do-not-return",
+    }) as { items_per_pack: Record<string, unknown>; secret: string };
+    assert.deepEqual(value.items_per_pack, { secrets: 2, token: 1 });
+    assert.equal(value.secret, "[REDACTED:****]");
+  });
+
+  it("redacts every finding metadata field, not only narrative strings", () => {
+    const finding: Finding = {
+      id: "SEC-002",
+      title: "Metadata leak test",
+      description: "Checks category, cwe, owasp and tags redaction.",
+      severity: "high",
+      confidence: "medium",
+      category: 'auth api_key="catleak123"',
+      cwe: "CWE-200 token=owaspleak456",
+      owasp: "A01 token=owaspsecret789",
+      stack: "typescript",
+      file: "src/config.ts",
+      line: 4,
+      evidence: "evidence with token=evsecret000",
+      impact_if_unremediated: "Impact.",
+      remediation: "Remediate.",
+      residual_risk: "Residual.",
+      verification_suggestion: "Verify.",
+      disposition: "needs_review",
+      disposition_reason: 'password = "reasonleak111"',
+      tags: ["api_token=tagleak222", "safe-tag"],
+      counterevidence: ["no token=countersecret333"],
+    };
+    const safe = redactFinding(finding);
+    assert.ok(!safe.category.includes("catleak123"));
+    assert.ok(!safe.cwe?.includes("owaspleak456"));
+    assert.ok(!safe.owasp?.includes("owaspsecret789"));
+    assert.ok(!safe.disposition_reason?.includes("reasonleak111"));
+    assert.ok(!safe.tags?.some((tag) => tag.includes("tagleak222")));
+    assert.ok(!safe.counterevidence?.some((item) => item.includes("countersecret333")));
+    assert.ok(safe.tags?.some((tag) => tag === "safe-tag"));
+    assert.equal(safe.file, "src/config.ts");
+    assert.equal(safe.line, 4);
+    assert.equal(safe.id, "SEC-002");
+  });
+
+  it("redacts source context when snippets are constructed", () => {
+    const snippet = snippetAround(
+      'const config = { "api_key": "snippet-secret-123" }; postgres://app:dbpass123@db.local',
+      20,
+      200,
+    );
+    assert.ok(!snippet.includes("snippet-secret-123"));
+    assert.ok(!snippet.includes("dbpass123"));
   });
 });

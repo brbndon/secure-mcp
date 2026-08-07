@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
+  detectWithBudget,
   findLineNumber,
   finalizeCoverage,
   recordCoverageExclusion,
@@ -255,13 +256,12 @@ export function registerAnalyzeInjectionRisks(
             }
             detectorFamiliesRun.add(pattern.detectorFamily);
 
-            pattern.regex.lastIndex = 0;
-            let match: RegExpExecArray | null;
             let hits = 0;
-            while ((match = pattern.regex.exec(content)) !== null && hits < 8) {
-              if (pattern.filter && !pattern.filter(match[0], content)) {
+            for (const hit of detectWithBudget(pattern.regex, content)) {
+              if (pattern.filter && !pattern.filter(hit.match, content)) {
                 continue;
               }
+              if (hits >= 8) break;
               hits++;
               findings.push(
                 redactFinding(
@@ -276,11 +276,11 @@ export function registerAnalyzeInjectionRisks(
                     rule_family: pattern.detectorFamily,
                     root_control: pattern.id,
                     file: file.relativePath,
-                    line: findLineNumber(content, match.index),
-                    evidence: snippetAround(content, match.index),
+                    line: findLineNumber(content, hit.index),
+                    evidence: snippetAround(content, hit.index),
                     source: "Request, configuration, or other untrusted input is not proven by this heuristic.",
                     control: pattern.remediation,
-                    sink: `${file.relativePath}:${findLineNumber(content, match.index)}`,
+                    sink: `${file.relativePath}:${findLineNumber(content, hit.index)}`,
                     proof_gap: [
                       "Trace the candidate input to this sink and confirm the runtime path is reachable.",
                       "Confirm validation, encoding, parameterization, or allowlisting at the boundary.",

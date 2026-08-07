@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
+  detectWithBudget,
   finalizeCoverage,
   findLineNumber,
   normalizeProjectRoot,
@@ -237,11 +238,13 @@ export const AUTH_PATTERNS: AuthPattern[] = [
   {
     id: "AUTH-EXPO-PUBLIC-CREDENTIAL",
     title: "Credential-like EXPO_PUBLIC_ variable",
-    // Match credential suffixes after EXPO_PUBLIC_. Bare KEY is omitted so intentional
-    // public client keys (API_KEY, MAPS_API_KEY, PUBLISHABLE_KEY) do not fire; also
-    // exclude publishable/anon-shaped names that end in TOKEN/SECRET/etc.
+    // Match credential suffixes after EXPO_PUBLIC_. Bare KEY is omitted so
+    // intentional public client keys (API_KEY, MAPS_API_KEY, PUBLISHABLE_KEY)
+    // do not fire. The name is a bounded tempered token (max 64 chars, and the
+    // identifier may not contain PUBLISHABLE/ANON anywhere), so the check is
+    // linear in input length instead of an unbounded negative lookahead.
     regex:
-      /EXPO_PUBLIC_(?!.*(?:PUBLISHABLE|ANON))[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_KEY)\b/g,
+      /EXPO_PUBLIC_((?:(?!PUBLISHABLE|ANON)[A-Z0-9_]){0,64})(?:SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_KEY)\b/g,
     severity: "critical",
     confidence: "medium",
     description:
@@ -400,13 +403,12 @@ export function registerCheckAuthentication(
             const detectorFamily = authDetectorFamily(pattern.stack);
             detectorFamiliesRun.add(detectorFamily);
 
-            pattern.regex.lastIndex = 0;
-            let match: RegExpExecArray | null;
             let hits = 0;
-            while ((match = pattern.regex.exec(content)) !== null && hits < 5) {
-              if (pattern.filter && !pattern.filter(match[0], content)) continue;
+            for (const hit of detectWithBudget(pattern.regex, content)) {
+              if (pattern.filter && !pattern.filter(hit.match, content)) continue;
+              if (hits >= 5) break;
               hits++;
-              const rawEvidence = snippetAround(content, match.index);
+              const rawEvidence = snippetAround(content, hit.index);
               findings.push(
                 redactFinding(
                   buildFinding({
@@ -420,11 +422,11 @@ export function registerCheckAuthentication(
                   rule_family: detectorFamily,
                   root_control: pattern.id,
                   file: file.relativePath,
-                  line: findLineNumber(content, match.index),
+                  line: findLineNumber(content, hit.index),
                   evidence: rawEvidence,
                   source: "Request, session, credential, or device-storage path identified by the detector.",
                   control: pattern.remediation,
-                  sink: `${file.relativePath}:${findLineNumber(content, match.index)}`,
+                  sink: `${file.relativePath}:${findLineNumber(content, hit.index)}`,
                   proof_gap: [
                     "Confirm the sensitive operation and its authorization/ownership checks in context.",
                   ],

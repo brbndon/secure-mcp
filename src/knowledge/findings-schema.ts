@@ -8,6 +8,30 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 
+/**
+ * Size budgets enforced before any expensive processing (normalization,
+ * deduplication, redaction, Markdown construction). The outer finding array is
+ * capped; these caps bound every individual string and nested array so the
+ * total decoded request stays deterministic.
+ */
+export const MAX_FINDING_ID = 100;
+export const MAX_FINDING_TITLE = 500;
+export const MAX_FINDING_CATEGORY = 200;
+export const MAX_FINDING_LABEL = 200; // cwe, owasp, rule_family, root_control, instance_id
+export const MAX_FINDING_PATH = 500; // file
+export const MAX_FINDING_NARRATIVE = 4_000; // description/evidence/impact/remediation/…/source/control/sink
+export const MAX_FINDING_DISPOSITION_REASON = 2_000;
+export const MAX_FINDING_TAG = 200;
+export const MAX_FINDING_TAGS = 50;
+export const MAX_FINDING_LIST_ITEM = 2_000;
+export const MAX_FINDING_LIST_ITEMS = 20; // counterevidence/proof_gap/validation
+export const MAX_FINDINGS = 500;
+export const MAX_REPORT_TITLE = 200;
+/** Total decoded-size budget for a findings request (before hashing/dedupe/redaction). */
+export const MAX_FINDINGS_DECODED_BYTES = 500_000;
+export const MAX_PROJECT_ROOT_LENGTH = 4_096;
+export const MAX_FOCUS_PATH_LENGTH = 500;
+
 export const ConfidenceSchema = z.enum(["high", "medium", "low"]);
 export const SeveritySchema = z.enum(["critical", "high", "medium", "low", "info"]);
 export const StackFocusSchema = z.enum(["common", "typescript", "nextjs", "swift", "expo"]);
@@ -28,14 +52,17 @@ export const FindingSchema = z
     id: z
       .string()
       .min(1)
+      .max(MAX_FINDING_ID)
       .describe("Stable finding id within the audit session (e.g. AUTH-001, F-003)"),
     title: z
       .string()
       .min(1)
+      .max(MAX_FINDING_TITLE)
       .describe("Short name of the potential weakness to remediate"),
     description: z
       .string()
       .min(1)
+      .max(MAX_FINDING_NARRATIVE)
       .describe(
         "Evidence-oriented description of what was observed; no exploit or attack steps",
       ),
@@ -48,66 +75,92 @@ export const FindingSchema = z
     category: z
       .string()
       .min(1)
+      .max(MAX_FINDING_CATEGORY)
       .describe(
         "Classification family, e.g. authentication, authorization, injection-risk, secrets, configuration",
       ),
     stack: StackFocusSchema.optional().describe("Optional stack focus for filtering"),
-    file: z.string().optional().describe("Path relative to project root when known"),
+    file: z
+      .string()
+      .max(MAX_FINDING_PATH)
+      .optional()
+      .describe("Path relative to project root when known"),
     line: z.number().int().positive().optional().describe("1-based line when known"),
     evidence: z
       .string()
       .min(1)
+      .max(MAX_FINDING_NARRATIVE)
       .describe(
         "Observable evidence: code snippet, config key, or path supporting the finding",
       ),
     impact_if_unremediated: z
       .string()
       .min(1)
+      .max(MAX_FINDING_NARRATIVE)
       .describe(
         "High-level impact on confidentiality, integrity, or availability if not fixed — not exploit instructions",
       ),
     remediation: z
       .string()
       .min(1)
+      .max(MAX_FINDING_NARRATIVE)
       .describe("Concrete steps the development team should take to harden the code"),
     residual_risk: z
       .string()
       .min(1)
+      .max(MAX_FINDING_NARRATIVE)
       .describe("Risk that may remain after the recommended remediation"),
     verification_suggestion: z
       .string()
       .min(1)
+      .max(MAX_FINDING_NARRATIVE)
       .describe(
         "How to verify the fix (unit/integration tests, code review checklist, config audit)",
       ),
-    cwe: z.string().optional().describe('Optional CWE id, e.g. "CWE-89"'),
-    owasp: z.string().optional().describe("Optional OWASP category label"),
-    tags: z.array(z.string()).optional().describe("Free-form tags for filtering"),
+    cwe: z.string().max(MAX_FINDING_LABEL).optional().describe('Optional CWE id, e.g. "CWE-89"'),
+    owasp: z.string().max(MAX_FINDING_LABEL).optional().describe("Optional OWASP category label"),
+    tags: z
+      .array(z.string().min(1).max(MAX_FINDING_TAG))
+      .max(MAX_FINDING_TAGS)
+      .optional()
+      .describe("Free-form tags for filtering"),
     rule_family: z
       .string()
       .min(1)
+      .max(MAX_FINDING_LABEL)
       .optional()
       .describe("Stable detector family, independent of report ordering"),
     root_control: z
       .string()
       .min(1)
+      .max(MAX_FINDING_LABEL)
       .optional()
       .describe("Stable control/rule identity that produced the candidate"),
     instance_id: z
       .string()
       .min(1)
+      .max(MAX_FINDING_LABEL)
       .optional()
       .describe("Stable identity for the same source instance across audit runs"),
     disposition: CandidateDispositionSchema.optional().describe(
       "Candidate disposition before human/data-flow confirmation",
     ),
-    disposition_reason: z.string().min(1).optional(),
-    source: z.string().min(1).optional().describe("Evidence-backed input/source context"),
-    control: z.string().min(1).optional().describe("Expected or observed security control"),
-    sink: z.string().min(1).optional().describe("Evidence-backed sink or boundary"),
-    counterevidence: z.array(z.string().min(1)).optional(),
-    proof_gap: z.array(z.string().min(1)).optional(),
-    validation: z.array(z.string().min(1)).optional(),
+    disposition_reason: z.string().min(1).max(MAX_FINDING_DISPOSITION_REASON).optional(),
+    source: z.string().min(1).max(MAX_FINDING_NARRATIVE).optional().describe("Evidence-backed input/source context"),
+    control: z.string().min(1).max(MAX_FINDING_NARRATIVE).optional().describe("Expected or observed security control"),
+    sink: z.string().min(1).max(MAX_FINDING_NARRATIVE).optional().describe("Evidence-backed sink or boundary"),
+    counterevidence: z
+      .array(z.string().min(1).max(MAX_FINDING_LIST_ITEM))
+      .max(MAX_FINDING_LIST_ITEMS)
+      .optional(),
+    proof_gap: z
+      .array(z.string().min(1).max(MAX_FINDING_LIST_ITEM))
+      .max(MAX_FINDING_LIST_ITEMS)
+      .optional(),
+    validation: z
+      .array(z.string().min(1).max(MAX_FINDING_LIST_ITEM))
+      .max(MAX_FINDING_LIST_ITEMS)
+      .optional(),
   })
   .strict();
 
@@ -118,6 +171,7 @@ export const ProjectRootInput = z
     project_root: z
       .string()
       .min(1)
+      .max(MAX_PROJECT_ROOT_LENGTH)
       .describe(
         "Absolute path (preferred) or path relative to the MCP server process cwd of the codebase to review for defensive hardening",
       ),
@@ -134,7 +188,7 @@ export const ProjectRootInput = z
       .describe("Safety cap on how many files tools may inspect (default ~400)"),
 
     focus_paths: z
-      .array(z.string().min(1))
+      .array(z.string().min(1).max(MAX_FOCUS_PATH_LENGTH))
       .max(50)
       .optional()
       .describe(
@@ -174,11 +228,12 @@ export function buildFinding(
     verification_suggestion?: string;
   },
 ): FindingInput {
-  const ruleFamily = partial.rule_family ?? partial.category;
-  const rootControl =
+  const ruleFamily = (partial.rule_family ?? partial.category).slice(0, MAX_FINDING_LABEL);
+  const rootControl = (
     partial.root_control ??
     partial.tags?.find((tag) => /^[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+$/.test(tag)) ??
-    `${ruleFamily}:unclassified`;
+    `${ruleFamily}:unclassified`
+  ).slice(0, MAX_FINDING_LABEL);
   // Canonicalize identity from detector metadata and source location. Caller-supplied
   // ids are accepted by the input schema for compatibility but never control dedupe.
   const instanceId = createFindingInstanceId({
@@ -243,5 +298,6 @@ export function createFindingInstanceId(input: {
   const seed = [input.rule_family, input.root_control, input.file ?? "", input.line ?? ""].join(
     "\u001f",
   );
-  return `${input.rule_family}:${createHash("sha256").update(seed).digest("hex").slice(0, 16)}`;
+  const digest = createHash("sha256").update(seed).digest("hex").slice(0, 16);
+  return `${input.rule_family.slice(0, MAX_FINDING_LABEL - digest.length - 1)}:${digest}`;
 }

@@ -41,7 +41,7 @@ const InputSchema = ProjectRootInput.extend({
       "Optional feature or module to prioritise for hardening (e.g. 'checkout Server Actions', 'Keychain token storage')",
     ),
   assets: z
-    .array(z.string())
+    .array(z.string().min(1).max(500))
     .max(30)
     .optional()
     .describe(

@@ -64,6 +64,40 @@ async function callProduceFindings(finding: Finding, reportTitle = "Boundary rep
   return (await callProduceResult(finding, reportTitle)).text;
 }
 
+/** Call the tool without asserting success — for schema-rejection tests. */
+async function callProduceRaw(args: Record<string, unknown>): Promise<{
+  isError: boolean | undefined;
+  text: string;
+  structured: any;
+}> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createServer({
+    name: "secure-mcp-test",
+    version: "test",
+    defaultMaxFiles: 20,
+    maxFileBytes: 1024,
+    maxDepth: 12,
+  });
+  const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({
+      name: "secure_mcp_produce_findings",
+      arguments: args,
+    });
+    const textBlock = result.content.find((block) => block.type === "text");
+    return {
+      isError: result.isError,
+      text: textBlock && textBlock.type === "text" ? textBlock.text : "",
+      structured: result.structuredContent,
+    };
+  } finally {
+    await client.close();
+    await server.close();
+  }
+}
+
 describe("produceFindings markdown proof fields", () => {
   it("does not let caller-supplied instance ids merge unrelated findings", async () => {
     const result = await callProduceResult(
@@ -176,5 +210,71 @@ describe("produceFindings markdown proof fields", () => {
     assert.equal((evidenceLine.match(/`/g) ?? []).length, 2);
     assert.ok(evidenceLine.includes("\\u0060"));
     assert.ok(evidenceLine.includes("\\n# not a heading"));
+  });
+});
+
+describe("produceFindings bounded inputs and redaction", () => {
+  it("rejects oversized finding strings at the MCP boundary", async () => {
+    const result = await callProduceRaw({
+      findings: [makeFinding({ title: "t".repeat(4_000) })],
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /too_big|too small|Invalid|Expected|error/i);
+  });
+
+  it("rejects oversized nested arrays at the MCP boundary", async () => {
+    const result = await callProduceRaw({
+      findings: [
+        makeFinding({ counterevidence: Array.from({ length: 21 }, (_, i) => `item-${i}`) }),
+      ],
+    });
+    assert.equal(result.isError, true);
+  });
+
+  it("rejects a request that exceeds the total decoded size budget", async () => {
+    // 300 findings × ~2 KB each exceed the 500 KB decoded budget while every
+    // individual field stays within its own cap.
+    const findings = Array.from({ length: 300 }, () =>
+      makeFinding({ description: "d".repeat(2_000) }),
+    );
+    const result = await callProduceRaw({ findings });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /decoded size budget/i);
+  });
+
+  it("rejects an oversized project_root", async () => {
+    const result = await callProduceRaw({
+      findings: [makeFinding()],
+      project_root: `/p/${"x".repeat(5_000)}`,
+    });
+    assert.equal(result.isError, true);
+  });
+
+  it("redacts caller-supplied metadata from structuredContent and Markdown alike", async () => {
+    const secret = "metasecretvalue999";
+    const finding = makeFinding({
+      category: `authentication api_key=${secret}`,
+      cwe: `CWE-200 token=${secret}`,
+      owasp: `A01 token=${secret}`,
+      tags: [`api_token=${secret}`],
+      source: `connection postgres://app:${secret}@db:5432/main`,
+    });
+    const result = await callProduceResult(finding, "Redaction boundary report", "markdown");
+    const encoded = JSON.stringify(result.structured);
+    assert.ok(!encoded.includes(secret), "structuredContent must not carry the secret");
+    assert.ok(!result.text.includes(secret), "Markdown must not carry the secret");
+    assert.match(result.text, /REDACTED/);
+  });
+
+  it("redacts report_title and project_root before output", async () => {
+    const secret = "titleleakvalue444";
+    const result = await callProduceRaw({
+      findings: [makeFinding()],
+      report_title: `Review token=${secret}`,
+      project_root: `/repo/token=${secret}/sub`,
+    });
+    assert.equal(result.isError, undefined);
+    assert.ok(!result.text.includes(secret));
+    assert.ok(!JSON.stringify(result.structured).includes(secret));
   });
 });

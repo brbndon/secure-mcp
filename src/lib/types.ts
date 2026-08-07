@@ -64,10 +64,16 @@ export interface CoverageReport {
   files_reviewed: string[];
   candidate_dispositions: CoverageCandidateDisposition[];
   candidate_disposition_counts: Record<CandidateDisposition, number>;
+  /**
+   * What the review actually inspected. `inventory_only` means only path
+   * metadata was collected — file contents were never opened or evaluated.
+   */
+  review_basis?: "content_review" | "inventory_only";
   scan_status: "complete" | "partial" | "truncated";
   not_observed_means:
     | "no_candidate_in_files_reviewed"
-    | "scope_was_truncated_or_partial";
+    | "scope_was_truncated_or_partial"
+    | "inventory_only_contents_not_reviewed";
 }
 
 /**
