@@ -144,10 +144,11 @@ export function redactedEvidence(raw: string): string {
     });
   }
 
-  // Only path-shaped strings can contain secret basenames; a bare word in
-  // prose must not be treated as a path component. Single filenames with
-  // secret extensions are still caught by SECRET_PATH_NAME_RE below.
-  output = /[\\/]/.test(output) ? redactedSecretPath(output) : output;
+  // Basename pass is safe on multi-word prose (it only rewrites whole path
+  // segments that match SECRET_BASENAME_RE). Always run it so root-level
+  // names like `.env` still redact. Embedded path tokens without needing a
+  // slash-bearing whole string are handled by SECRET_PATH_NAME_RE.
+  output = redactedSecretPath(output);
   return output.replace(SECRET_PATH_NAME_RE, "[redacted-secret-file]");
 }
 

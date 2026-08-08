@@ -12,8 +12,7 @@
     "dist/",
     "CHANGELOG.md",
     "LICENSE",
-    "README.md",
-    "SECURITY.md"
+    "README.md"
   ],
   "scripts": {
     "build": "pnpm clean && tsc",

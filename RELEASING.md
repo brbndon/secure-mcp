@@ -52,4 +52,4 @@ npm publish --access public
 2. Push the tag.
 3. Create a GitHub release whose notes match the changelog and include any security-relevant upgrade guidance.
 
-Before the first public release, make the repository public, enable GitHub private vulnerability reporting, confirm Issues and branch protection are configured, and verify the documentation hosting settings. These are repository-owner actions and are intentionally not automated from a local checkout.
+Before the first public release, make the repository public, confirm Issues work, and verify documentation hosting if you use it. Those are repository-owner actions and are intentionally not automated from a local checkout.

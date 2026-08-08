@@ -208,7 +208,6 @@ The server clamps configurable values to fixed hard limits.
 - [Security auditor skill](skills/security-auditor.md)
 - [Development guide](skills/development.md)
 - [Sample audit session](examples/sample-audit-session.md)
-- [Security policy](SECURITY.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 - [Release process](RELEASING.md)
@@ -230,11 +229,11 @@ pnpm docs:validate
 - Coverage distinguishes “no candidate in files reviewed” from a partial or truncated scan.
 - Use the project only for authorized defensive review of codebases you own or are engaged to harden.
 
-Report product vulnerabilities privately according to [SECURITY.md](SECURITY.md). For bugs and feature requests, use [GitHub Issues](https://github.com/brbndon/secure-mcp/issues).
+For bugs, questions, and feature requests, use [GitHub Issues](https://github.com/brbndon/secure-mcp/issues). Prefer a private contact for anything that would leak secrets or sensitive audit output if posted publicly.
 
 ## Contributing
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request. Development changes should preserve the read-only, remediation-focused trust model.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Keep changes read-only and remediation-focused.
 
 ## License
 

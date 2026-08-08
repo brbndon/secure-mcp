@@ -81,6 +81,30 @@ describe("secret evidence redaction", () => {
     );
   });
 
+  it("redacts bare secret basenames used as whole-string paths", () => {
+    assert.equal(redactedEvidence(".env"), "[redacted-secret-file]");
+    assert.equal(redactedEvidence("id_rsa"), "[redacted-secret-file]");
+    assert.equal(redactedEvidence("credentials"), "[redacted-secret-file]");
+    assert.equal(
+      redactFinding({
+        id: "SEC-ROOT",
+        title: "Root env",
+        description: "root-level secret file",
+        severity: "high",
+        confidence: "high",
+        category: "secrets",
+        file: ".env",
+        line: 1,
+        evidence: "TOKEN=x",
+        impact_if_unremediated: "i",
+        remediation: "r",
+        residual_risk: "r",
+        verification_suggestion: "v",
+      }).file,
+      "[redacted-secret-file]",
+    );
+  });
+
   it("redacts secret paths embedded in evidence and location suffixes", () => {
     const safe = redactedEvidence(
       "source=config/.env.production:3; sink=keys/service-account.json:12:4; ordinary=src/auth.ts:9",

@@ -5,7 +5,7 @@ Thanks for helping improve defensive, agent-first code review. Contributions of 
 ## Before you start
 
 - Use [GitHub Issues](https://github.com/brbndon/secure-mcp/issues) for reproducible bugs and focused feature proposals.
-- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+- Do not post live credentials, private source, or sensitive audit output in public issues.
 - Keep all work defensive and remediation-focused. Exploit generation, live-target interaction, credential use, and offensive bypass guidance are out of scope.
 - For larger changes, open an issue first so tool contracts and trust-boundary implications can be discussed before implementation.
 
@@ -38,7 +38,7 @@ Changes must preserve these invariants:
 5. Secret-like and untrusted evidence is redacted or neutralized before return.
 6. Findings distinguish evidence from assumptions and always lead to remediation and verification.
 
-Review [SECURITY.md](SECURITY.md), [the architecture notes](docs/docs/architecture.md), and [the development guide](skills/development.md) before changing filesystem, redaction, finding-schema, or tool-boundary code.
+Review [the architecture notes](docs/docs/architecture.md) and [the development guide](skills/development.md) before changing filesystem, redaction, finding-schema, or tool-boundary code.
 
 ## Making changes
 
