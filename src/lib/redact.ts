@@ -24,9 +24,15 @@ const SECRET_BASENAME_RE =
  * after a path separator (`config/.env`, `keys/credentials`). A bare word in
  * prose ("No hardcoded credentials") stays readable; the same text redacted
  * through structured fields still goes through redactedSecretPath().
+ *
+ * Matching stops at boundary punctuation (period, comma, semicolon, closing
+ * brackets/quotes), so sentence-final names like `server.pem.` still redact
+ * without swallowing the punctuation. The named-branch extension is matched
+ * lazily so `(see credentials.json)` keeps its closing paren; the suffix
+ * branch (`*.pem` etc.) backtracks to the last dot naturally.
  */
 const SECRET_PATH_NAME_RE =
-  /(?<![A-Za-z0-9_.-])(?:(?:\.env|credentials|service-account|GoogleService-Info\.plist|id_(?:rsa|ed25519))(?:\.[^/\\:\s]+)|(?<=[\\/:])\.env|(?<=[\\/:])credentials|(?<=[\\/:])service-account|(?<=[\\/:])GoogleService-Info\.plist|(?<=[\\/:])id_(?:rsa|ed25519)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))(?=[:),;\]}\s"'`]|$)/gi;
+  /(?<![A-Za-z0-9_.-])(?:(?:\.env|credentials|service-account|GoogleService-Info\.plist|id_(?:rsa|ed25519))(?:\.[^/\\:\s]+?)|(?<=[\\/:])\.env|(?<=[\\/:])credentials|(?<=[\\/:])service-account|(?<=[\\/:])GoogleService-Info\.plist|(?<=[\\/:])id_(?:rsa|ed25519)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))(?=[:.,;)\]}\s"'`]|$)/gi;
 const LOCATION_SUFFIX_RE = /^(.*?)(:\d+(?::\d+)?)?$/;
 
 /**

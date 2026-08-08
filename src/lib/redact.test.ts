@@ -81,6 +81,26 @@ describe("secret evidence redaction", () => {
     );
   });
 
+  it("preserves boundary punctuation around redacted secret names", () => {
+    assert.equal(
+      redactedEvidence("(see credentials.json)"),
+      "(see [redacted-secret-file])",
+    );
+    assert.equal(
+      redactedEvidence("rotate credentials.json."),
+      "rotate [redacted-secret-file].",
+    );
+    assert.equal(
+      redactedEvidence("rotate server.pem."),
+      "rotate [redacted-secret-file].",
+    );
+    assert.equal(redactedEvidence("server.pem."), "[redacted-secret-file].");
+    assert.equal(
+      redactedEvidence("credentials.json, then rotate"),
+      "[redacted-secret-file], then rotate",
+    );
+  });
+
   it("redacts bare secret basenames used as whole-string paths", () => {
     assert.equal(redactedEvidence(".env"), "[redacted-secret-file]");
     assert.equal(redactedEvidence("id_rsa"), "[redacted-secret-file]");
