@@ -4,7 +4,7 @@
 
 > Defensive secure-code-review report. Goal: help the development team harden the codebase. Do not include exploit or attack PoC content.
 
-**Project:** \/Users\/brandon\/Code\/secure\-mcp\/fixtures\/tiny\-app
+**Project:** \/workspace\/secure\-mcp\/fixtures\/tiny\-app
 **Total findings:** 3
 
 ## Summary by severity (remediation priority)
@@ -31,7 +31,7 @@
 - **Disposition reason:** Confirmed in the intentionally vulnerable bundled fixture\.
 
 #### Evidence
-Matched heuristic for Generic API key assignment\. Verify whether this is a real \[redacted\-secret\-file\] and whether it is still active\; if so\, remediate and rotate\.
+Matched heuristic for Generic API key assignment\. Verify whether this is a real credential and whether it is still active\; if so\, remediate and rotate\.
 
 `apiKey = "[REDACTED:****]"`
 
@@ -50,7 +50,7 @@ Matched heuristic for Generic API key assignment\. Verify whether this is a real
 - Confirm rotation in the provider console\; re\-scan the repository and history\; ensure CI secrets are updated\.
 
 #### Impact if unremediated
-Hardcoded API \[redacted\-secret\-file\] can be reused by anyone with repository access\.
+Hardcoded API credentials can be reused by anyone with repository access\.
 
 #### Remediation
 Move secrets to environment variables or a secret manager\; rotate if committed\.
@@ -140,7 +140,7 @@ Swift secret\-handling heuristic SWIFT\-PRINT\-SENSITIVE matched — review stor
 - Audit Keychain migration paths and confirm no secrets remain in UserDefaults\, pasteboard\, or source\.
 
 #### Impact if unremediated
-Logs may retain tokens or \[redacted\-secret\-file\] beyond the intended session lifetime\.
+Logs may retain tokens or credentials beyond the intended session lifetime\.
 
 #### Remediation
 Remove sensitive prints\; use privacy\-preserving os\_log\.

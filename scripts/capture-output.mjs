@@ -38,15 +38,55 @@ function textOf(result) {
   return t ? t.text : JSON.stringify(result);
 }
 
-async function save(name, result, { prettifyJson = false } = {}) {
+const UNTRUSTED_BANNER_RE = /^\[secure-mcp\] UNTRUSTED AUDIT DATA:[^\n]*\n{1,2}/;
+
+/**
+ * Markdown-escape every character the server's escapeMarkdown() escapes so
+ * paths embedded in rendered reports are sanitized too (e.g. `secure\-mcp`).
+ */
+function escapeMarkdownChars(value) {
+  return value.replace(/[\\`*_{}\[\]()#+\-.!/|<>~:=;,]/g, (c) => `\\${c}`);
+}
+
+/** Sanitize absolute local paths out of captured output, failing loudly on any remnant. */
+function sanitizeForPublic(text) {
   const publicRoot = "/workspace/secure-mcp";
-  const text = textOf(result)
-    .replaceAll(root, publicRoot)
-    .replaceAll(root.replaceAll("/", "\\/"), publicRoot.replaceAll("/", "\\/"));
+  const variants = [
+    root,
+    root.replaceAll("/", "\\/"),
+    escapeMarkdownChars(root),
+  ];
+  const replacements = [
+    publicRoot,
+    publicRoot.replaceAll("/", "\\/"),
+    escapeMarkdownChars(publicRoot),
+  ];
+  let out = text;
+  variants.forEach((variant, i) => {
+    out = out.replaceAll(variant, replacements[i]);
+  });
+  const remnant = variants.find((variant) => out.includes(variant));
+  if (remnant) {
+    throw new Error(`capture sanitization failed: output still contains ${remnant}`);
+  }
+  // Catch any other home-directory form (plain or Markdown/JSON-escaped) even
+  // if it does not exactly match the repo-root variants above.
+  if (/\/Users\/[A-Za-z0-9._-]+\//.test(out) || /\\\/Users\\\/[A-Za-z0-9._-]+\\\//.test(out)) {
+    throw new Error("capture sanitization failed: output still contains a /Users/<name>/ path");
+  }
+  return out;
+}
+
+async function save(name, result, { prettifyJson = false } = {}) {
+  const text = sanitizeForPublic(textOf(result));
   let out = text;
   if (prettifyJson) {
     try {
-      out = JSON.stringify(JSON.parse(text), null, 2);
+      // Tool text starts with the untrusted-data banner; parse the JSON body
+      // after it and keep the banner in the saved capture.
+      const body = text.replace(UNTRUSTED_BANNER_RE, "");
+      const prettified = JSON.stringify(JSON.parse(body), null, 2);
+      out = text.startsWith("[secure-mcp] UNTRUSTED") ? `${text.match(UNTRUSTED_BANNER_RE)?.[0] ?? ""}${prettified}` : prettified;
     } catch {
       // keep raw text for non-JSON payloads
     }

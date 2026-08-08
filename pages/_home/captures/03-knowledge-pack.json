@@ -31,7 +31,7 @@
     },
     {
       "id": "SEC-NO-HARDCODE",
-      "title": "No hardcoded [redacted-secret-file]",
+      "title": "No hardcoded credentials",
       "category": "secrets",
       "severityHint": "critical",
       "remediation": "Move secrets to env or a secret manager"
