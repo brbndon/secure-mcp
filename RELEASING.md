@@ -28,10 +28,23 @@ Verify the package name and authenticated npm account before the external action
 ```bash
 npm view secure-mcp
 npm whoami
-npm publish --access public --provenance
 ```
 
 Publishing is irreversible for that exact version. Run it only after the version, changelog, and tarball have been reviewed.
+
+Prefer publishing from GitHub Actions with npm provenance (the package then carries an OIDC attestation linking it to the tagged commit):
+
+```bash
+# CI (GitHub Actions) — provenance supported
+npm publish --access public --provenance
+```
+
+`--provenance` requires an OIDC token from a supported CI provider and fails from a local machine. A local publish is still fine for a personal project, just without provenance:
+
+```bash
+# Local fallback — no provenance attestation
+npm publish --access public
+```
 
 ## 4. Tag and announce
 
