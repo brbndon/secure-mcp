@@ -14,7 +14,7 @@ sidebar:
 ┌─────────────────────┐     stdio (JSON-RPC)     ┌──────────────────────┐
 │  Coding agent       │ ◄──────────────────────► │  secure-mcp process  │
 │  (Codex/Claude/…)   │                          │  src/index.ts        │
-└─────────────────────┘                          │    ├ license gate    │
+└─────────────────────┘                          │    ├ root allowlist  │
                                                  │    ├ McpServer       │
                                                  │    └ tools/*         │
                                                  └──────────┬───────────┘
@@ -38,28 +38,25 @@ sidebar:
 
 | Layer | Path | Role |
 |-------|------|------|
-| Entry | `src/index.ts` | License check, stdio transport |
+| Entry | `src/index.ts` | Configuration, diagnostics, stdio transport |
 | Server | `src/server.ts` | `McpServer` + tool registration |
 | Tools | `src/tools/*.ts` | MCP tool handlers (defensive descriptions) |
 | Knowledge | `src/knowledge/packs/` + `*.ts` | Progressive packs, patterns, findings schema |
-| Lib | `src/lib/*` | FS safety, license, shared types |
+| Lib | `src/lib/*` | Filesystem safety, redaction, markdown, shared types |
 | Config | `src/config.ts` | Env-driven limits |
 
 ## Transport
 
-v1 supports **stdio only** (`StdioServerTransport` from `@modelcontextprotocol/sdk`).
+The server speaks the stateless MCP protocol (spec `2026-07-28`) over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained, and the SDK falls back to legacy behavior for older clients (`legacy: "serve"` in `src/index.ts`).
 
 - Do **not** log to stdout (corrupts the protocol).
 - Use `console.error` for startup and failure messages.
 
-## License gate
+## Filesystem authorization
 
-On startup, `requireValidLicense()` resolves:
+Process-level configuration always supplies an explicit filesystem allowlist from `SECURE_MCP_ALLOWED_ROOTS`. The value uses the operating system path delimiter (`:` on macOS/Linux, `;` on Windows).
 
-1. `SECURE_MCP_LICENSE_KEY`, or
-2. first non-comment line of `SECURE_MCP_LICENSE_FILE`
-
-Production keys are locally verified signed tokens (`smcp_<payload>.<base64url-signature>`) using `SECURE_MCP_LICENSE_PUBLIC_KEY`. The documented development key is accepted only when `SECURE_MCP_DEV_MODE=1` is set; startup emits a warning in that mode. Invalid/missing keys exit with code `1`, and production keys should be used without DEV_MODE.
+An empty allowlist does not stop knowledge-only tools from starting, but every filesystem tool rejects `project_root`. Configured roots and requested project roots are canonicalized before containment checks; stale entries do not grant access. Programmatic test configurations may omit the field to exercise tool behavior against temporary fixtures.
 
 ## Filesystem policy
 
@@ -115,7 +112,6 @@ Heuristics are intentionally imperfect. Confidence fields tell agents to verify 
 
 - HTTP / remote MCP transport
 - Database or persistent audit history
-- Heavy DRM / online license enforcement
 - Full multi-language SAST
 - GUI dashboard
 - Executing or building the target project
@@ -125,4 +121,3 @@ Heuristics are intentionally imperfect. Confidence fields tell agents to verify 
 
 1. Add a tool under `src/tools/` and register it in `src/tools/index.ts` with defensive descriptions.
 2. Add or extend packs under `src/knowledge/packs/` and register them in `registry.ts`.
-3. Optional remote license validation inside `src/lib/license.ts` without changing tools.

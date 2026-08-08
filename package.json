@@ -1,5 +1,5 @@
 {
-  "name": "secure-mcp",
+  "name": "@brdndon/secure-mcp",
   "version": "1.0.0",
   "description": "Local MCP server for structured, agent-first security audits of TypeScript/Next.js and Swift/SwiftUI codebases",
   "type": "module",
@@ -8,20 +8,30 @@
   "bin": {
     "secure-mcp": "dist/index.js"
   },
+  "files": [
+    "dist/",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "pnpm clean && tsc",
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/server.test.ts src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/knowledge/findings-schema.test.ts src/knowledge/common.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/lib/license.test.ts src/tools/checkAuthentication.test.ts src/tools/produceFindings.test.ts src/tools/reviewSecrets.test.ts src/tools/buildRemediationThreatModel.test.ts",
+    "test": "tsx --test src/config.test.ts src/server.test.ts src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/knowledge/findings-schema.test.ts src/knowledge/common.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/tools/analyzeInjectionRisks.test.ts src/tools/checkAuthentication.test.ts src/tools/produceFindings.test.ts src/tools/reviewSecrets.test.ts src/tools/buildRemediationThreatModel.test.ts scripts/modern-protocol.test.ts scripts/legacy-v1-compat.test.ts",
     "smoke": "tsx scripts/smoke-test.ts",
-    "typecheck": "tsc --noEmit",
-    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm smoke",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+    "verify": "pnpm typecheck && pnpm build && pnpm test && pnpm smoke",
     "docs:dev": "pnpm exec blume dev",
     "docs:build": "BLUME_RUNTIME_DIR=.blume-verify pnpm exec blume build",
     "docs:check": "BLUME_RUNTIME_DIR=.blume-verify pnpm exec blume check",
     "docs:validate": "BLUME_RUNTIME_DIR=.blume-verify pnpm exec blume validate",
-    "docs:preview": "pnpm exec astro preview --root .blume-verify"
+    "docs:preview": "pnpm exec astro preview --root .blume-verify",
+    "audit:dependencies": "pnpm audit --audit-level low",
+    "release:check": "pnpm verify && pnpm docs:build && pnpm docs:check && pnpm docs:validate && pnpm audit:dependencies && npm pack --dry-run",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm release:check"
   },
   "engines": {
     "node": ">=20"
@@ -45,16 +55,28 @@
     "swift",
     "model-context-protocol"
   ],
-  "license": "UNLICENSED",
-  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brbndon/secure-mcp.git"
+  },
+  "homepage": "https://github.com/brbndon/secure-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/brbndon/secure-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^3.24.2"
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.13.10",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/sdk-v1": "npm:@modelcontextprotocol/sdk@1.30.0",
+    "@types/node": "^26.1.2",
     "blume": "1.3.1",
-    "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
+    "tsx": "^4.23.9",
+    "typescript": "^7.0.2"
   }
 }

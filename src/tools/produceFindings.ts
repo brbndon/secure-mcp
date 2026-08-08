@@ -3,7 +3,7 @@
  * Normalize and format a remediation-focused findings report.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { toolError, toolSuccess } from "../lib/filesystem.js";
 import { redactFindings, redactedEvidence } from "../lib/redact.js";
@@ -50,7 +50,7 @@ const InputSchema = z
           decodedBytes += Buffer.byteLength(JSON.stringify(finding), "utf8");
           if (decodedBytes > MAX_FINDINGS_DECODED_BYTES) {
             ctx.addIssue({
-              code: z.ZodIssueCode.custom,
+              code: "custom",
               message: `findings exceed the total decoded size budget of ${MAX_FINDINGS_DECODED_BYTES} bytes`,
             });
             return;

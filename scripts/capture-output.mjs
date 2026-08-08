@@ -1,28 +1,27 @@
 /**
  * Capture real secure-mcp output for the marketing site gallery.
- * Spawns the actual server over stdio (dev mode, documented dev key),
+ * Spawns the actual server over stdio with a fixture-scoped filesystem allowlist,
  * runs the multi-phase audit tools against fixtures/tiny-app, and
- * writes verbatim output into pages/_home/captures/.
+ * writes path-sanitized output into pages/_home/captures/.
  *
  * Usage (from the repo root):
  *   node scripts/capture-output.mjs
  */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, "..", "..");
+const root = path.resolve(__dirname, "..");
 const fixture = path.join(root, "fixtures", "tiny-app");
 const outDir = path.join(root, "pages", "_home", "captures");
 mkdirSync(outDir, { recursive: true });
 
 const env = {
   ...process.env,
-  SECURE_MCP_LICENSE_KEY: "smcp_dev_local_testing_key_v1",
-  SECURE_MCP_DEV_MODE: "1",
+  SECURE_MCP_ALLOWED_ROOTS: fixture,
 };
 
 const transport = new StdioClientTransport({
@@ -39,12 +38,55 @@ function textOf(result) {
   return t ? t.text : JSON.stringify(result);
 }
 
+const UNTRUSTED_BANNER_RE = /^\[secure-mcp\] UNTRUSTED AUDIT DATA:[^\n]*\n{1,2}/;
+
+/**
+ * Markdown-escape every character the server's escapeMarkdown() escapes so
+ * paths embedded in rendered reports are sanitized too (e.g. `secure\-mcp`).
+ */
+function escapeMarkdownChars(value) {
+  return value.replace(/[\\`*_{}\[\]()#+\-.!/|<>~:=;,]/g, (c) => `\\${c}`);
+}
+
+/** Sanitize absolute local paths out of captured output, failing loudly on any remnant. */
+function sanitizeForPublic(text) {
+  const publicRoot = "/workspace/secure-mcp";
+  const variants = [
+    root,
+    root.replaceAll("/", "\\/"),
+    escapeMarkdownChars(root),
+  ];
+  const replacements = [
+    publicRoot,
+    publicRoot.replaceAll("/", "\\/"),
+    escapeMarkdownChars(publicRoot),
+  ];
+  let out = text;
+  variants.forEach((variant, i) => {
+    out = out.replaceAll(variant, replacements[i]);
+  });
+  const remnant = variants.find((variant) => out.includes(variant));
+  if (remnant) {
+    throw new Error(`capture sanitization failed: output still contains ${remnant}`);
+  }
+  // Catch any other home-directory form (plain or Markdown/JSON-escaped) even
+  // if it does not exactly match the repo-root variants above.
+  if (/\/Users\/[A-Za-z0-9._-]+\//.test(out) || /\\\/Users\\\/[A-Za-z0-9._-]+\\\//.test(out)) {
+    throw new Error("capture sanitization failed: output still contains a /Users/<name>/ path");
+  }
+  return out;
+}
+
 async function save(name, result, { prettifyJson = false } = {}) {
-  const text = textOf(result);
+  const text = sanitizeForPublic(textOf(result));
   let out = text;
   if (prettifyJson) {
     try {
-      out = JSON.stringify(JSON.parse(text), null, 2);
+      // Tool text starts with the untrusted-data banner; parse the JSON body
+      // after it and keep the banner in the saved capture.
+      const body = text.replace(UNTRUSTED_BANNER_RE, "");
+      const prettified = JSON.stringify(JSON.parse(body), null, 2);
+      out = text.startsWith("[secure-mcp] UNTRUSTED") ? `${text.match(UNTRUSTED_BANNER_RE)?.[0] ?? ""}${prettified}` : prettified;
     } catch {
       // keep raw text for non-JSON payloads
     }
@@ -79,11 +121,16 @@ const secrets = await client.callTool({
 });
 await save("04-secrets.json", secrets, { prettifyJson: true });
 
-// 4. Remediation report (markdown) — feed the secrets findings back
-let findings = [];
-try {
-  findings = JSON.parse(textOf(secrets)).findings ?? [];
-} catch {}
+// 4. Remediation report (markdown) — the bundled fixture is intentionally
+// vulnerable, so promote its manually known candidates before report rollup.
+const structuredFindings = secrets.structuredContent?.findings;
+const findings = Array.isArray(structuredFindings)
+  ? structuredFindings.map((finding) => ({
+      ...finding,
+      disposition: "reportable",
+      disposition_reason: "Confirmed in the intentionally vulnerable bundled fixture.",
+    }))
+  : [];
 const report = await client.callTool({
   name: "secure_mcp_produce_findings",
   arguments: {

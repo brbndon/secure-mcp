@@ -2,14 +2,14 @@
  * Smoke test: spawn secure-mcp over stdio, list tools, call core tools on fixtures.
  *
  * Usage:
- *   SECURE_MCP_DEV_MODE=1 SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1 pnpm smoke
+ *   pnpm smoke
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEV_LICENSE_KEY } from "../src/lib/license.js";
+import { MODERN_PROTOCOL_VERSION, REQUIRED_TOOLS } from "./test-constants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -18,18 +18,6 @@ const expoFixture = path.join(root, "fixtures", "tiny-expo");
 /** React-native library with a non-Expo app.json — must not route to expo-rn. */
 const rnLibFixture = path.join(root, "fixtures", "rn-lib-no-expo");
 const serverEntry = path.join(root, "src", "index.ts");
-
-const REQUIRED_TOOLS = [
-  "secure_mcp_list_project_structure",
-  "secure_mcp_analyze_architecture",
-  "secure_mcp_get_knowledge_pack",
-  "secure_mcp_get_audit_guidance",
-  "secure_mcp_check_authentication",
-  "secure_mcp_analyze_injection_risks",
-  "secure_mcp_review_secrets",
-  "secure_mcp_build_remediation_threat_model",
-  "secure_mcp_produce_findings",
-] as const;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -50,10 +38,6 @@ function parseJsonPayload(result: { content?: unknown; structuredContent?: unkno
 }
 
 async function main(): Promise<void> {
-  const license = process.env.SECURE_MCP_LICENSE_KEY ?? DEV_LICENSE_KEY;
-  process.env.SECURE_MCP_LICENSE_KEY = license;
-  process.env.SECURE_MCP_DEV_MODE = "1";
-
   console.log("[smoke] Starting secure-mcp via tsx…");
   console.log(`[smoke] Fixture: ${fixture}`);
 
@@ -63,19 +47,37 @@ async function main(): Promise<void> {
     cwd: root,
     env: {
       ...process.env,
-      SECURE_MCP_LICENSE_KEY: license,
-      SECURE_MCP_DEV_MODE: "1",
+      SECURE_MCP_ALLOWED_ROOTS: root,
     } as Record<string, string>,
   });
 
-  const client = new Client({ name: "secure-mcp-smoke", version: "1.0.0" });
+  const client = new Client(
+    { name: "secure-mcp-smoke", version: "1.0.0" },
+    {
+      versionNegotiation: {
+        mode: { pin: MODERN_PROTOCOL_VERSION },
+      },
+    },
+  );
   await client.connect(transport);
 
   try {
+    assert(client.getProtocolEra() === "modern", "Expected a modern protocol connection");
+    assert(
+      client.getNegotiatedProtocolVersion() === MODERN_PROTOCOL_VERSION,
+      `Expected protocol ${MODERN_PROTOCOL_VERSION}, got ${client.getNegotiatedProtocolVersion()}`,
+    );
+    assert(
+      client.getDiscoverResult()?.supportedVersions.includes(MODERN_PROTOCOL_VERSION),
+      `server/discover did not offer ${MODERN_PROTOCOL_VERSION}`,
+    );
+    console.log(`[smoke] Modern protocol ${MODERN_PROTOCOL_VERSION} negotiated via server/discover.`);
+
     const listed = await client.listTools();
     const names = new Set(listed.tools.map((t) => t.name));
     console.log(`[smoke] Tools listed: ${listed.tools.length}`);
 
+    assert(listed.tools.length === REQUIRED_TOOLS.length, `Expected exactly ${REQUIRED_TOOLS.length} tools`);
     for (const name of REQUIRED_TOOLS) {
       assert(names.has(name), `Missing tool: ${name}`);
     }

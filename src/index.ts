@@ -8,9 +8,8 @@
  * Logging goes to stderr only (stdout is reserved for MCP protocol traffic).
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { loadConfig } from "./config.js";
-import { requireValidLicense } from "./lib/license.js";
 import { redactedEvidence } from "./lib/redact.js";
 import { createServer } from "./server.js";
 
@@ -21,32 +20,26 @@ function safeDiagnostic(error: unknown): string {
 
 async function main(): Promise<void> {
   const config = loadConfig();
-
-  // License gate: fail fast with a clear message if missing/invalid.
-  try {
-    const license = await requireValidLicense();
+  if (config.allowedRoots?.length === 0) {
     console.error(
-      `[secure-mcp] License OK (${license.keySource}${license.isDevKey ? ", development key" : ""}).`,
+      "[secure-mcp] WARNING: SECURE_MCP_ALLOWED_ROOTS is not configured; filesystem tools will reject project roots.",
     );
-    if (license.isDevKey) {
-      console.error(
-        "[secure-mcp] WARNING: SECURE_MCP_DEV_MODE=1 with development license key is active. " +
-          "This allows startup for local development / agent / CI testing ONLY. " +
-          "Do NOT use in production, do not process production data or secrets, and do not deploy with DEV_MODE enabled. " +
-          "Production deployments must use a production license key without DEV_MODE.",
-      );
-    }
-  } catch (error) {
-    // Do not echo license-file paths, environment-derived values, or provider
-    // errors into stderr, which may be collected by a host or CI system.
-    console.error("[secure-mcp] License check failed; refusing to accept connections.");
-    process.exit(1);
   }
 
-  const server = createServer(config);
-  const transport = new StdioServerTransport();
+  // Keep construction failures startup-fatal before the stdio message pump begins.
+  let validationServer: ReturnType<typeof createServer> | undefined;
+  try {
+    validationServer = createServer(config);
+  } finally {
+    await validationServer?.close();
+  }
 
-  await server.connect(transport);
+  serveStdio(() => createServer(config), {
+    legacy: "serve",
+    onerror: (error) => {
+      console.error(`[secure-mcp] Protocol error: ${safeDiagnostic(error)}`);
+    },
+  });
   console.error(
     `[secure-mcp] ${config.name} v${config.version} running on stdio (Node ${process.version}).`,
   );

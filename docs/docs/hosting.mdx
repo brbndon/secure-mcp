@@ -28,14 +28,22 @@ The repository root carries a `vercel.json` for the Vercel project:
 
 `BLUME_SITE` and `BLUME_BASE_PATH` can be set in the Vercel project environment to control the canonical site URL (e.g. `https://securemcp.dev`) and mount point.
 
-## Cloudflare deployment
+## Cloudflare Pages deployment
 
-For a host that builds directly from the repository, use:
+Create a Pages project connected to this repository (or upload the build output) with:
 
 - Build command: `pnpm docs:build`
 - Output directory: `.blume-verify/dist`
 
-Cloudflare Pages can use these settings for a static deployment. A Cloudflare Workers site can consume the same static output through its chosen Workers Static Assets configuration.
+With a custom domain, set the project environment variables so canonical URLs,
+sitemap, and `llms.txt` point at the site:
+
+| Variable | Value |
+| --- | --- |
+| `BLUME_SITE` | `https://mcp.branalytic.com` |
+| `BLUME_BASE_PATH` | (empty) |
+
+A Cloudflare Workers site can consume the same static output through its chosen Workers Static Assets configuration.
 
 ## Custom domains and forks
 
@@ -47,4 +55,4 @@ env:
   BLUME_BASE_PATH: ""
 ```
 
-The output is fully static: HTML, local search, sitemap/robots metadata when a site URL is available, and AI-readable `llms.txt` files. No MCP server secrets or license keys are needed to build the documentation site.
+The output is fully static: HTML pages with canonical URLs (when `BLUME_SITE` is set), a client-side search index (`blume-search.json`), a 404 page, and raw Markdown copies of every page for AI-readable consumption. No MCP server configuration or repository access is needed to build the documentation site.

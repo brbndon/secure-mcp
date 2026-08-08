@@ -55,16 +55,17 @@ describe("bounded coverage accounting", () => {
     });
   });
 
-  it("keeps the repository security policy readable as review guidance", async () => {
+  it("keeps the repository README readable as review guidance", async () => {
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-    const policy = await readProjectFile(repositoryRoot, "SECURITY.md");
-    assert.match(policy.content, /defensive, read-only/i);
-    assert.match(policy.content, /does not execute target-project code/i);
+    const readme = await readProjectFile(repositoryRoot, "README.md");
+    assert.match(readme.content, /secure-mcp/i);
+    assert.match(readme.content, /does not execute target code/i);
+    assert.match(readme.content, /redacted before it crosses/i);
   });
 
-  it("includes SECURITY.md and reports ignored files, caps, and truncation", async () => {
+  it("includes ordinary project files and reports ignored files, caps, and truncation", async () => {
     await withTempTree(async (root) => {
-      await fs.writeFile(path.join(root, "SECURITY.md"), "# Security policy\n", "utf8");
+      await fs.writeFile(path.join(root, "NOTES.md"), "# Notes\n", "utf8");
       await fs.writeFile(path.join(root, ".env.local"), "TOKEN=redacted-fixture\n", "utf8");
       await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
       await fs.writeFile(path.join(root, "b.ts"), "export const b = 1;\n", "utf8");
@@ -80,7 +81,7 @@ describe("bounded coverage accounting", () => {
       assert.equal(result.coverage.not_observed_means, "scope_was_truncated_or_partial");
 
       const full = await walkProject(root);
-      assert.ok(full.files.some((file) => file.relativePath === "SECURITY.md"));
+      assert.ok(full.files.some((file) => file.relativePath === "NOTES.md"));
       assert.ok(full.files.some((file) => file.relativePath === ".env.local"));
       assert.ok(full.coverage.ignored_paths.some((item) => item.path === "node_modules"));
       assert.ok(full.coverage.ignored_paths.some((item) => item.path === "pnpm-lock.yaml"));

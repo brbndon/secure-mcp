@@ -111,10 +111,29 @@ export interface WalkOptions {
   maxFileBytes?: number;
   /** Aggregate byte budget for files included in this walk. */
   maxTotalBytes?: number;
-  /** Optional canonical-root allowlist for production tool calls. */
+  /** Optional canonical-root allowlist for process-level tool calls. */
   allowedRoots?: readonly string[];
   /** Cap on coverage path events retained in the report (default 1000). */
   maxCoverageEvents?: number;
+}
+
+/** Candidate fields a content reviewer can hand back for coverage accounting. */
+export type CoverageCandidate = Pick<
+  Finding,
+  | "id"
+  | "disposition"
+  | "disposition_reason"
+  | "file"
+  | "line"
+  | "rule_family"
+  | "instance_id"
+>;
+
+/** Receipt-oriented coverage interface returned by walkProject. */
+export interface CoverageSession {
+  recordReviewedFile(relativePath: string): void;
+  recordExclusion(event: CoveragePathDecision): void;
+  finish(candidates?: ReadonlyArray<CoverageCandidate>): CoverageReport;
 }
 
 export interface ProfileOptions {
@@ -125,7 +144,7 @@ export interface ProfileOptions {
   maxDepth?: number;
   maxFileBytes?: number;
   maxTotalBytes?: number;
-  /** Optional canonical-root allowlist for production tool calls. */
+  /** Optional canonical-root allowlist for process-level tool calls. */
   allowedRoots?: readonly string[];
 }
 
@@ -221,9 +240,9 @@ export async function normalizeProjectRoot(projectRoot: string): Promise<string>
 }
 
 /**
- * Normalize a project root and enforce the production filesystem allowlist.
+ * Normalize a project root and enforce the process filesystem allowlist.
  * Programmatic configs may omit allowedRoots for backwards-compatible tests;
- * loadConfig supplies an empty list in production when the operator has not
+ * loadConfig supplies an empty list when the operator has not
  * configured one, which fails closed.
  */
 export async function normalizeAuthorizedProjectRoot(
@@ -303,7 +322,12 @@ function dirLeadsToAnyFocus(dirRel: string, prefixes: string[]): boolean {
 export async function walkProject(
   projectRoot: string,
   options: WalkOptions = {},
-): Promise<{ files: FileEntry[]; truncated: boolean; coverage: CoverageReport }> {
+): Promise<{
+  files: FileEntry[];
+  truncated: boolean;
+  coverage: CoverageReport;
+  coverageSession: CoverageSession;
+}> {
   const root = await normalizeAuthorizedProjectRoot(projectRoot, options.allowedRoots);
   const boundedPositive = (value: number | undefined, fallback: number, maximum: number): number =>
     value !== undefined && Number.isFinite(value) && value > 0
@@ -647,36 +671,42 @@ export async function walkProject(
     : hasScopeGaps
       ? "partial"
       : "complete";
+  const coverage: CoverageReport = {
+    included_paths: includedPaths,
+    excluded_paths: excludedPaths,
+    ignored_paths: ignoredPaths,
+    caps: {
+      max_files: maxFiles,
+      max_depth: maxDepth,
+      max_file_bytes: maxFileBytes,
+      max_total_bytes: maxTotalBytes,
+    },
+    truncation: {
+      truncated: effectiveTruncated || coverageEventsTruncated,
+      reasons: [...truncationReasons],
+      coverage_events_truncated: coverageEventsTruncated,
+    },
+    files_reviewed: [],
+    candidate_dispositions: [],
+    candidate_disposition_counts: candidateDispositionCounts,
+    scan_status,
+    // The walk is inventory only: contents are never opened here. Content-review
+    // finalizers (finalizeCoverage) upgrade this; inventory finalizers keep it.
+    review_basis: "inventory_only",
+    not_observed_means:
+      scan_status === "complete"
+        ? "inventory_only_contents_not_reviewed"
+        : "scope_was_truncated_or_partial",
+  };
   return {
     files,
     truncated: effectiveTruncated || coverageEventsTruncated,
-    coverage: {
-      included_paths: includedPaths,
-      excluded_paths: excludedPaths,
-      ignored_paths: ignoredPaths,
-      caps: {
-        max_files: maxFiles,
-        max_depth: maxDepth,
-        max_file_bytes: maxFileBytes,
-        max_total_bytes: maxTotalBytes,
-      },
-      truncation: {
-        truncated: effectiveTruncated || coverageEventsTruncated,
-        reasons: [...truncationReasons],
-        coverage_events_truncated: coverageEventsTruncated,
-      },
-      files_reviewed: [],
-      candidate_dispositions: [],
-      candidate_disposition_counts: candidateDispositionCounts,
-      scan_status,
-      // The walk is inventory only: contents are never opened here. Content-review
-      // finalizers (finalizeCoverage) upgrade this; inventory finalizers keep it.
-      review_basis: "inventory_only",
-      not_observed_means:
-        scan_status === "complete"
-          ? "inventory_only_contents_not_reviewed"
-          : "scope_was_truncated_or_partial",
-    },
+    coverage,
+    coverageSession: new CoverageSessionImpl(
+      coverage,
+      files.map((file) => file.relativePath),
+      maxCoverageEvents,
+    ),
   };
 }
 
@@ -788,6 +818,57 @@ export function finalizeInventoryCoverage(
   coverage.not_observed_means = "inventory_only_contents_not_reviewed";
   coverage.scan_status = coverage.truncation.truncated ? "truncated" : "partial";
   return coverage;
+}
+
+/**
+ * Receipt-oriented coverage session returned by walkProject. Callers record
+ * exclusions and content-review receipts while scanning, then finalize once.
+ * An inventory-only finish keeps the walk's accounting honest: no reviewed
+ * file is claimed, and scan_status never implies complete content coverage.
+ */
+class CoverageSessionImpl implements CoverageSession {
+  readonly #reviewedFiles = new Set<string>();
+  readonly #coverage: CoverageReport;
+  readonly #inventoriedFiles: ReadonlySet<string>;
+  readonly #maxCoverageEvents: number;
+  #finished = false;
+
+  constructor(
+    coverage: CoverageReport,
+    inventoriedFiles: readonly string[],
+    maxCoverageEvents: number,
+  ) {
+    this.#coverage = coverage;
+    this.#inventoriedFiles = new Set(inventoriedFiles);
+    this.#maxCoverageEvents = maxCoverageEvents;
+  }
+
+  recordReviewedFile(relativePath: string): void {
+    this.#assertOpen();
+    if (!this.#inventoriedFiles.has(relativePath)) {
+      throw new Error(`Reviewed file is not part of the coverage inventory: ${relativePath}`);
+    }
+    this.#reviewedFiles.add(relativePath);
+  }
+
+  recordExclusion(event: CoveragePathDecision): void {
+    this.#assertOpen();
+    recordCoverageExclusion(this.#coverage, event, this.#maxCoverageEvents);
+  }
+
+  finish(candidates: ReadonlyArray<CoverageCandidate> = []): CoverageReport {
+    this.#assertOpen();
+    this.#finished = true;
+    return this.#reviewedFiles.size > 0
+      ? finalizeCoverage(this.#coverage, [...this.#reviewedFiles], candidates)
+      : finalizeInventoryCoverage(this.#coverage, [...this.#inventoriedFiles]);
+  }
+
+  #assertOpen(): void {
+    if (this.#finished) {
+      throw new Error("CoverageSession has already been finished.");
+    }
+  }
 }
 
 /** Open flags: prefer no-follow so the final path component cannot race into a symlink. */

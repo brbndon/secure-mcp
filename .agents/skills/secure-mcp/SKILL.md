@@ -58,7 +58,7 @@ Do not infer macOS or iOS from Swift alone, Expo from a bare `app.json`, or an a
 4. Create an explicit audit TODO before invoking the server, aligned with the goal created at invocation. Use the agent's built-in plan/task facility when available; otherwise keep a transient structured note and do not add a TODO file to the target unless requested. Include:
 
    - [ ] Preflight repository, platform, dependencies, and authorized scope
-   - [ ] MCP tool inventory, optional-tool presence, and license readiness
+   - [ ] MCP tool inventory, optional-tool presence, and root authorization readiness
    - [ ] Inventory and coverage artifact
    - [ ] Architecture, trust-boundary, and knowledge-pack routing
    - [ ] Authentication, injection, and secrets analysis
@@ -73,7 +73,7 @@ Use an absolute `project_root` visible to the MCP process. Start with bounded de
 
 ### Phase 0: MCP inventory and readiness
 
-Before any `secure_mcp_*` call, list the live MCP tools and record which `secure_mcp_*` names are present (especially optional ones such as `secure_mcp_get_audit_guidance`). Confirm the server is connected and license-ready without printing secret values. If the server is missing, unlicensed, or only partially available, continue with clearly labeled preflight-only work and do not claim a secure-mcp-backed audit was completed. Use live input schemas for every subsequent call.
+Before any `secure_mcp_*` call, list the live MCP tools and record which `secure_mcp_*` names are present (especially optional ones such as `secure_mcp_get_audit_guidance`). Confirm the server is connected and the target's canonical path falls under `SECURE_MCP_ALLOWED_ROOTS`. If the server is missing, the root is unauthorized, or the tool surface is only partially available, continue with clearly labeled preflight-only work and do not claim a secure-mcp-backed audit was completed. Use live input schemas for every subsequent call.
 
 ### Phase 1: inventory
 
@@ -171,4 +171,4 @@ For a mixed repository, run inventory, architecture, and category reviews per de
 
 When the user asks for implementation rather than a report, record the hardening scope in the audit goal, then complete the preflight, TODO, and secure-mcp review first. Then make the smallest authorized fix, run the narrowest relevant formatter/type-checker/tests, and rerun the affected secure-mcp tools with the same scope. Do not update dependencies, lockfiles, entitlements, persisted data, or deployment configuration as incidental cleanup. Report changed files, verification results, residual risk, and any coverage gaps.
 
-This skill is installed globally for all coding agents and is self-contained. For optional server internals, read `docs/agent-workflow.md`, `skills/security-auditor.md`, and `README.md` (and `docs/tools.mdx` if present) from the secure-mcp checkout at `/Users/brandon/Code/secure-mcp` when it is available; skip them otherwise. Before every tool call, treat the live MCP inventory and input schema as authoritative; if a name, enum, field, pack id, or limit differs from this skill, follow the live schema and record the compatibility gap rather than inventing a call. Do not hardcode assumptions from this skill when the live schema disagrees.
+When installed, this skill is self-contained. For optional server internals, read `docs/docs/agent-workflow.md`, `skills/security-auditor.md`, `README.md`, and `docs/docs/tools.mdx` from the secure-mcp checkout when it is available; skip them otherwise. Before every tool call, treat the live MCP inventory and input schema as authoritative; if a name, enum, field, pack id, or limit differs from this skill, follow the live schema and record the compatibility gap rather than inventing a call. Do not hardcode assumptions from this skill when the live schema disagrees.

@@ -18,15 +18,16 @@ export default defineConfig({
     },
   },
   theme: {
-    accent: { light: "#0f8f85", dark: "#4de1c4" },
+    // Dark-only site: single palette (no light mode / no theme toggle).
+    accent: "#4de1c4",
     action: "#f27745",
-    background: { light: "#f4f7f5", dark: "#0d1311" },
+    background: "#0d1311",
     fonts: {
       display: "space-grotesk",
       body: "ibm-plex-sans",
       mono: "ibm-plex-mono",
     },
-    mode: "system",
+    mode: "dark",
     radius: "sm",
   },
   navigation: {

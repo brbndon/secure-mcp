@@ -45,13 +45,6 @@ export function loadConfig(): ServerConfig {
     .map((root) => root.trim())
     .filter(Boolean);
 
-  // Production configurations fail closed until an operator explicitly scopes
-  // the filesystem roots. Dev mode keeps the existing local-test ergonomics.
-  const allowedRoots =
-    configuredRoots.length > 0 || process.env.SECURE_MCP_DEV_MODE !== "1"
-      ? configuredRoots
-      : undefined;
-
   return {
     name: SERVER_NAME,
     version: SERVER_VERSION,
@@ -67,6 +60,8 @@ export function loadConfig(): ServerConfig {
       64 * 1024 * 1024,
       HARD_MAX_TOTAL_BYTES,
     ),
-    allowedRoots,
+    // Process-level configuration always enforces an explicit allowlist.
+    // Programmatic test configs may still omit this field.
+    allowedRoots: configuredRoots,
   };
 }

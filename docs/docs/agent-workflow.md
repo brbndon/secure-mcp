@@ -24,7 +24,7 @@ Prefer long, multi-phase analysis with intermediate artifacts when thoroughness 
 
 ## Preconditions
 
-1. MCP server is connected and licensed.
+1. MCP server is connected and the target falls under `SECURE_MCP_ALLOWED_ROOTS`.
 2. Absolute path to the target repository (`project_root`) is known.
 3. You will **not** treat heuristic hits as confirmed without reading code.
 4. You are authorized to review the target (owned or explicitly in-scope code).

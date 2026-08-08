@@ -89,6 +89,6 @@ Use stable `instance_id`/`root_control` values when merging runs, and retain `so
 
 Call out residual risk and method limits (static heuristics + partial review). Always end with actionable remediation for the team.
 
-## License
+## Connection troubleshooting
 
-If tools fail to connect, ensure `SECURE_MCP_LICENSE_KEY` is set in the MCP client config.
+If filesystem tools reject a project, ensure its canonical path falls under `SECURE_MCP_ALLOWED_ROOTS` in the MCP client config.

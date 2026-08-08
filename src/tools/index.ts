@@ -4,7 +4,7 @@
  * Tool names are a stable public API for defensive secure-code-review.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { loadConfig, type ServerConfig } from "../config.js";
 import { registerListProjectStructure } from "./listProjectStructure.js";
 import { registerAnalyzeArchitecture } from "./analyzeArchitecture.js";

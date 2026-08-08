@@ -10,9 +10,9 @@ dist/
 !.env.example
 *.local
 
-# License / local config (never commit real keys)
+# Local config
 .secure-mcp.json
-license.key
+.claude/
 
 # Logs and OS noise
 *.log

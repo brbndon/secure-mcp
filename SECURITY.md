@@ -1,59 +1,42 @@
-# Security policy
+# Security Policy
 
-## Purpose and scope
+## Supported versions
 
-`secure-mcp` is a local, defensive, read-only MCP server for helping a code owner or an explicitly authorized reviewer identify potential weaknesses and plan remediation. It performs bounded static inspection of files under a requested project root. It does not execute target-project code, make network requests, mutate target files, or test a live service.
+| Version | Supported |
+| --- | --- |
+| 1.x | ✅ |
 
-The supported review surfaces are:
+## Reporting a vulnerability
 
-- TypeScript, JavaScript, Node.js, and common API/server code.
-- Next.js, including App Router route handlers, Server Actions, middleware, client bundles, and configuration.
-- Swift/SwiftUI and related iOS/macOS configuration, Keychain, URLSession, WebView, deep-link, and entitlement surfaces.
-- Expo and React Native JavaScript/native-configuration surfaces, including SecureStore, AsyncStorage/MMKV, AuthSession, and `EXPO_PUBLIC_` configuration.
+**Do not open a public GitHub issue for security vulnerabilities.**
 
-The server is not a general-purpose SAST engine. Findings are bounded, evidence-oriented candidates for developer confirmation.
+Report suspected vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories/new).
 
-## Assets and trust boundaries
+Include:
 
-Reviews may protect source code, credentials and signing material, user sessions, personal/business data, device-local secrets, client bundles, audit records, and service availability. Typical boundaries include:
+- secure-mcp version or commit SHA
+- environment (Node.js version, OS, MCP client)
+- minimal reproduction or proof of concept using fake data only
+- impact assessment if you have one
 
-- browser or mobile client input to server/API, middleware, Route Handler, or Server Action code;
-- UI, deep links, WebView content, and native bridges to privileged app logic;
-- app logic to Keychain, SecureStore, app-group storage, UserDefaults, or other local stores;
-- application code to databases, third parties, and credential-bearing configuration; and
-- source/CI configuration to production secret stores.
+You should receive an acknowledgment within 7 days. Please avoid public
+disclosure until the report has been triaged and a fix or advisory is available.
 
-Attacker-controlled inputs are modeled as untrusted request parameters, headers, cookies, uploads, URL/deep-link values, WebView messages, client-bundle values, environment/configuration values, and identifiers supplied by a client. A detector does not assume that an input reaches a sink: source-to-sink reachability, authorization, runtime configuration, and deployment context must be validated by the code owner.
+If you cannot use Security Advisories, open a normal issue **without**
+sensitive details and ask for a private channel, or contact the maintainer
+listed on the [GitHub profile for @brbndon](https://github.com/brbndon).
 
-## Security invariants
+## Scope
 
-The following are product invariants:
+The server runs locally over stdio and performs read-only analysis of
+repositories you explicitly authorize. Reports may target the server (`src/`),
+the knowledge packs (`src/knowledge/`), the installer scripts (`scripts/`), or
+the documentation site (`pages/`, `docs/`). The threat model assumes a trusted
+local user; issues triggered by malicious repository content are in scope.
 
-1. Every audit operation is read-only and remains under the requested project root after lexical and realpath/symlink containment checks.
-2. Target code, build scripts, package scripts, plugins, and binaries are never executed.
-3. Stdio stdout remains reserved for MCP JSON-RPC; diagnostics belong on stderr.
-4. File count, directory depth, file size, and response size are bounded. Coverage output records ignored, excluded, reviewed, and truncated scope so “not observed” never means “not scanned.”
-5. Secret-like evidence is redacted before it is returned. Review output is explicitly marked as untrusted audit data, and invisible control characters are neutralized before it crosses the MCP boundary. Review output must not be used to recover, validate, or operate credentials.
-6. Findings remain remediation-focused and include evidence, control context, proof gaps, and validation guidance rather than attack instructions.
+Out of scope:
 
-## Reportable severity
-
-Report a candidate as `reportable` only when the evidence is sufficient for the authorized owner to act on a concrete control gap. Otherwise use `needs_review`, `suppressed`, `not_applicable`, or `deferred` with a reason. Severity is about plausible impact if the gap is left unremediated:
-
-- **Critical:** likely compromise of authentication/signing authority, broad sensitive-data disclosure, or a secret that appears active and grants high-impact access.
-- **High:** material confidentiality, integrity, authorization, or availability impact across a meaningful surface.
-- **Medium:** scoped or conditional impact, defense-in-depth gaps, or weaknesses requiring additional conditions.
-- **Low:** limited exposure or hardening opportunity with constrained impact.
-- **Info:** an observed control or review prompt that needs confirmation and is not itself a demonstrated vulnerability.
-
-Confidence is separate from severity. A high-severity heuristic with an unresolved proof gap remains a candidate until validated.
-
-## Exclusions and accepted risks
-
-Out of scope are exploit development, proof-of-concept or payload generation, bypass recipes, credential use or validation, live-target interaction, remote transport, external tracking, target-code execution, write/fix tools, and integration with a Codex Security plugin. The server does not claim that a project is secure, does not inspect runtime behavior, and does not replace dependency, infrastructure, cloud, binary, or manual authorization review.
-
-Accepted limitations include regex false positives and false negatives, incomplete monorepo coverage, ignored/generated/vendor content, unreadable files, symlink skips, file/depth/size caps, redacted evidence, and configuration or secrets that exist outside the inspected tree. A clean result means only that no candidate was observed in the files actually reviewed within the reported scope.
-
-## Reporting a product issue
-
-For a `secure-mcp` defect, provide a minimal reproducible local fixture, the tool and input shape, the structured coverage report, and the observed defensive behavior. Do not include live credentials, sensitive source, exploit code, or interaction with a real target. Keep reports focused on containment, output safety, stdio integrity, read-only behavior, and incorrect or misleading audit results.
+- Findings produced when reviewing third-party code (product output, not
+  product defects), unless they reveal a server, pack, or docs defect
+- Requests for exploit development or live-target attacks

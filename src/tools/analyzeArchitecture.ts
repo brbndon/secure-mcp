@@ -4,7 +4,7 @@
  * Returns recommended_packs for progressive knowledge loading (not a full checklist dump).
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
