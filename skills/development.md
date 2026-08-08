@@ -6,7 +6,7 @@ Guidance for coding agents that modify this repository.
 
 - Local **stdio** MCP only (v1)
 - TypeScript + official `@modelcontextprotocol/sdk`
-- Private / closed-source (`private: true`, `UNLICENSED`)
+- Open source under Apache-2.0
 - **Defensive secure-code-review framing only** — identify weaknesses, classify, remediate
 - Keep code clear and commented—the owner is learning and multiple agents collaborate
 - **Progressive knowledge packs** — thin always-on skill; stack checklists load on demand via `secure_mcp_get_knowledge_pack`
@@ -24,8 +24,6 @@ Anything an agent or hosted model reads (tool names/descriptions, skills, docs, 
 ```bash
 pnpm install
 pnpm build
-export SECURE_MCP_DEV_MODE=1
-export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
 pnpm smoke
 ```
 
@@ -41,7 +39,7 @@ Install the master skill and MCP client wiring for pi / Claude Code / Cursor / C
 
 | Path | Responsibility |
 |------|----------------|
-| `src/index.ts` | Entry, license, stdio |
+| `src/index.ts` | Entry, configuration, stdio |
 | `src/server.ts` | Server factory |
 | `src/tools/` | One tool per file + `index.ts` registration |
 | `src/knowledge/packs/` | Named packs + registry / stack routing |
@@ -49,7 +47,6 @@ Install the master skill and MCP client wiring for pi / Claude Code / Cursor / C
 | `scripts/install-agents.sh` | Idempotent install/check/uninstall of the master skill symlinks + MCP client configs (pi, Claude Code, Cursor, Codex) |
 | `agents/codex.toml` | OpenAI Codex agent manifest copied to `~/.codex/agents/secure-mcp.toml` by the install script |
 | `src/lib/filesystem.ts` | Safe FS walk/read/helpers + stack profiling |
-| `src/lib/license.ts` | License resolution/validation |
 | `src/lib/types.ts` | Shared TS types |
 | `skills/security-auditor.md` | Thin agent orchestrator (~2k tokens) |
 
@@ -106,7 +103,7 @@ Aim ~10–13 checklist items per pack (a full five-pack recommendation must fit 
 - `pnpm verify` — typecheck + unit tests + build + smoke
 - `pnpm test` — pack registry, stack profiling, and auth-heuristic unit tests
 - `pnpm smoke` — client connect + tool calls against `fixtures/` (Next, Expo, non-Expo `app.json`)
-- Manual: MCP Inspector with license env set
+- Manual: MCP Inspector with `SECURE_MCP_ALLOWED_ROOTS` set to a test fixture or repository
 
 ## Style
 

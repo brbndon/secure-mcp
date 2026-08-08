@@ -1,5 +1,17 @@
 # Security policy
 
+## Reporting a vulnerability in secure-mcp
+
+Please report suspected vulnerabilities through [GitHub private vulnerability reporting](https://github.com/brbndon/secure-mcp/security/advisories/new). Do not open a public issue for a vulnerability and do not include live credentials, private source code, or weaponized proof-of-concept material.
+
+Include the affected version or commit, the trust boundary involved, the smallest safe reproduction you can provide, the expected invariant, and the observed behavior. Reports about filesystem containment, untrusted-output handling, secret redaction, stdio integrity, or unexpected target-code execution are especially important.
+
+The maintainers aim to acknowledge a complete report within five business days, coordinate validation and remediation privately, and credit reporters who want attribution. Please allow a reasonable remediation window before public disclosure.
+
+## Supported versions
+
+Security fixes are made against the latest release and the `main` branch. Older versions may be asked to reproduce on the latest release before a fix is prepared.
+
 ## Purpose and scope
 
 `secure-mcp` is a local, defensive, read-only MCP server for helping a code owner or an explicitly authorized reviewer identify potential weaknesses and plan remediation. It performs bounded static inspection of files under a requested project root. It does not execute target-project code, make network requests, mutate target files, or test a live service.
@@ -54,6 +66,6 @@ Out of scope are exploit development, proof-of-concept or payload generation, by
 
 Accepted limitations include regex false positives and false negatives, incomplete monorepo coverage, ignored/generated/vendor content, unreadable files, symlink skips, file/depth/size caps, redacted evidence, and configuration or secrets that exist outside the inspected tree. A clean result means only that no candidate was observed in the files actually reviewed within the reported scope.
 
-## Reporting a product issue
+## Reporting a non-security product issue
 
-For a `secure-mcp` defect, provide a minimal reproducible local fixture, the tool and input shape, the structured coverage report, and the observed defensive behavior. Do not include live credentials, sensitive source, exploit code, or interaction with a real target. Keep reports focused on containment, output safety, stdio integrity, read-only behavior, and incorrect or misleading audit results.
+For a non-security defect, open a [GitHub issue](https://github.com/brbndon/secure-mcp/issues) with a minimal reproducible local fixture, the tool and input shape, the structured coverage report, and the observed defensive behavior. Do not include live credentials, sensitive source, exploit code, or interaction with a real target.

@@ -99,31 +99,24 @@ const benefits = [
   },
 ] as const;
 
-// PLACEHOLDER — replace with real quotes, names, and contexts after launch.
-const testimonialPlaceholders = [
+const communityPaths = [
   {
-    quote:
-      "The findings arrive with the fix half-written — evidence, impact, remediation, and how to verify. Our review loops got dramatically shorter.",
-    name: "Mara",
-    context: "Founder, fintech startup",
-    initial: "M",
-    bg: "#e8d5cf",
+    title: "Inspect every boundary",
+    body: "Read the filesystem containment, redaction, tool schemas, knowledge packs, and tests in the public repository.",
+    label: "Browse the source",
+    href: "https://github.com/brbndon/secure-mcp",
   },
   {
-    quote:
-      "It scoped a large monorepo without drama and told us exactly which paths it had not covered. That honesty is rare in security tooling.",
-    name: "Dev",
-    context: "Platform engineer",
-    initial: "D",
-    bg: "#d4e0d8",
+    title: "Shape the roadmap",
+    body: "Report false positives, propose stack coverage, and bring real defensive-review workflows to the issue tracker.",
+    label: "Open an issue",
+    href: "https://github.com/brbndon/secure-mcp/issues",
   },
   {
-    quote:
-      "The Swift packs caught Keychain and deep-link issues our checklist had missed. Remediation-first, exactly how we like to work.",
-    name: "Ana",
-    context: "iOS team lead",
-    initial: "A",
-    bg: "#d9e2ea",
+    title: "Contribute safely",
+    body: "Add tests, detectors, and remediation guidance while preserving the read-only and evidence-first trust model.",
+    label: "Read the contributor guide",
+    href: "https://github.com/brbndon/secure-mcp/blob/main/CONTRIBUTING.md",
   },
 ] as const;
 
@@ -134,7 +127,7 @@ const clarityPoints = [
   "Remediation with a verification step",
 ] as const;
 
-const pricingPoints = [
+const openSourcePoints = [
   "Nine tools in one server: inventory, architecture, packs, guidance, and category reviews",
   "Stack-aware knowledge packs for TypeScript, Next.js, Swift, and Expo",
   "Structured findings with remediation and verification steps",
@@ -152,7 +145,7 @@ const faqs = [
   },
   {
     q: "Does my code leave my machine?",
-    a: "No. secure-mcp is a local process with no network calls — in v1, license validation is a local format check. Logs go to stderr only, and stdout stays reserved for MCP messages.",
+    a: "No. secure-mcp is a local process with no network calls. Logs go to stderr only, stdout stays reserved for MCP messages, and filesystem tools are limited to explicitly allowed roots.",
   },
   {
     q: "Which stacks does it support?",
@@ -183,13 +176,12 @@ const faqs = [
         </p>
 
         <div class="mt-9 flex w-full max-w-md flex-col items-stretch gap-3 sm:max-w-none sm:flex-row sm:flex-wrap sm:items-center">
-          <span
-            class="btn btn-coming-soon w-full sm:w-auto"
-            role="status"
-            aria-describedby="license-note"
+          <a
+            class="btn w-full sm:w-auto"
+            href="https://github.com/brbndon/secure-mcp"
           >
-            License key required
-          </span>
+            View on GitHub
+          </a>
           <a
             class="btn btn-secondary w-full sm:w-auto"
             href="#screens"
@@ -203,9 +195,8 @@ const faqs = [
             Read the quickstart
           </a>
         </div>
-        <p class="microcopy" id="license-note">
-          The development key covers local evaluation. Production keys are issued
-          separately.
+        <p class="microcopy">
+          Open source under Apache-2.0. Local by design, with no telemetry.
         </p>
       </div>
 
@@ -344,50 +335,43 @@ const faqs = [
       </div>
     </section>
 
-    <!-- Social proof -->
+    <!-- Open-source community -->
     <section
       class="relative left-1/2 right-1/2 w-screen -ml-[50vw] -mr-[50vw] bg-[#efeff1]"
-      aria-labelledby="praise-title"
+      aria-labelledby="community-title"
     >
       <div class="site-shell py-24 md:py-32">
         <div class="max-w-2xl">
-          <p class="eyebrow">From the beta</p>
-          <h2 id="praise-title" class="section-title mb-5">
-            What early testers say
+          <p class="eyebrow">Built in public</p>
+          <h2 id="community-title" class="section-title mb-5">
+            Security tooling should be inspectable.
           </h2>
           <p class="lede">
-            Sample quotes for now — replaced with real feedback after launch.
+            The implementation, tests, review methodology, and contribution
+            process are open for scrutiny and improvement.
           </p>
         </div>
 
         <ul class="mt-14 grid list-none gap-4 p-0 md:grid-cols-3">
           {
-            testimonialPlaceholders.map((testimonial) => (
+            communityPaths.map((item) => (
               <li
                 class="flex flex-col justify-between gap-7 rounded-[1.25rem] border border-line bg-surface p-6 shadow-soft md:p-7"
               >
-                <blockquote class="m-0">
-                  <p class="m-0 text-[1.0625rem] leading-relaxed text-ink">
-                    “{testimonial.quote}”
+                <div>
+                  <h3 class="m-0 text-[1.125rem] font-semibold tracking-[-0.015em] text-ink">
+                    {item.title}
+                  </h3>
+                  <p class="mt-3 mb-0 text-[0.9375rem] leading-relaxed text-muted">
+                    {item.body}
                   </p>
-                </blockquote>
-                <footer class="flex items-center gap-3">
-                  <span
-                    class="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[0.8125rem] font-semibold text-[#1d1d1f]"
-                    style={`background: ${testimonial.bg}`}
-                    aria-hidden="true"
-                  >
-                    {testimonial.initial}
-                  </span>
-                  <span class="min-w-0">
-                    <strong class="block truncate text-[0.875rem] font-semibold tracking-[-0.01em] text-ink">
-                      {testimonial.name}
-                    </strong>
-                    <span class="block text-[0.8125rem] text-muted">
-                      {testimonial.context}
-                    </span>
-                  </span>
-                </footer>
+                </div>
+                <a
+                  class="text-[0.9375rem] font-medium text-ink underline decoration-line underline-offset-[0.25em] transition-colors hover:decoration-ink"
+                  href={item.href}
+                >
+                  {item.label}
+                </a>
               </li>
             ))
           }
@@ -395,21 +379,20 @@ const faqs = [
       </div>
     </section>
 
-    <!-- Pricing -->
+    <!-- Open source -->
     <section
       class="site-shell py-24 md:py-32"
-      aria-labelledby="pricing-title"
-      id="pricing"
+      aria-labelledby="open-source-title"
+      id="open-source"
     >
       <div class="mx-auto max-w-2xl text-center">
-        <p class="eyebrow">Pricing</p>
-        <h2 id="pricing-title" class="section-title mb-5">
-          Licensed per team. Honest by default.
+        <p class="eyebrow">Apache-2.0</p>
+        <h2 id="open-source-title" class="section-title mb-5">
+          Free to use. Open to improve.
         </h2>
         <p class="lede mx-auto">
-          secure-mcp is closed-source and license-gated. No public pricing has
-          been announced yet — and every claim on this page matches what the
-          server actually does.
+          Use, modify, and distribute secure-mcp under a permissive license
+          with an explicit patent grant.
         </p>
       </div>
 
@@ -421,7 +404,7 @@ const faqs = [
             secure-mcp
           </h3>
           <span class="text-[2rem] font-semibold tracking-[-0.03em] text-ink">
-            By license
+            $0
           </span>
         </div>
         <p class="mt-2 mb-0 text-[0.9375rem] text-muted">
@@ -429,7 +412,7 @@ const faqs = [
         </p>
         <ul class="mt-6 grid list-none gap-3 border-t border-line p-0 pt-6 text-[0.9375rem] text-ink">
           {
-            pricingPoints.map((point) => (
+            openSourcePoints.map((point) => (
               <li class="flex items-start gap-3">
                 <span
                   class="mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full bg-ink"
@@ -440,11 +423,11 @@ const faqs = [
             ))
           }
         </ul>
-        <span class="btn btn-coming-soon mt-8 w-full" role="status">
-          Pricing to be announced
-        </span>
+        <a class="btn mt-8 w-full" href="https://github.com/brbndon/secure-mcp">
+          Get the source
+        </a>
         <p class="microcopy text-center">
-          No payment is required to evaluate with the documented development key.
+          Apache-2.0 terms apply. Contributions are welcome.
         </p>
       </div>
     </section>

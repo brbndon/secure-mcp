@@ -2,14 +2,13 @@
  * Smoke test: spawn secure-mcp over stdio, list tools, call core tools on fixtures.
  *
  * Usage:
- *   SECURE_MCP_DEV_MODE=1 SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1 pnpm smoke
+ *   pnpm smoke
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEV_LICENSE_KEY } from "../src/lib/license.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -50,10 +49,6 @@ function parseJsonPayload(result: { content?: unknown; structuredContent?: unkno
 }
 
 async function main(): Promise<void> {
-  const license = process.env.SECURE_MCP_LICENSE_KEY ?? DEV_LICENSE_KEY;
-  process.env.SECURE_MCP_LICENSE_KEY = license;
-  process.env.SECURE_MCP_DEV_MODE = "1";
-
   console.log("[smoke] Starting secure-mcp via tsx…");
   console.log(`[smoke] Fixture: ${fixture}`);
 
@@ -63,8 +58,7 @@ async function main(): Promise<void> {
     cwd: root,
     env: {
       ...process.env,
-      SECURE_MCP_LICENSE_KEY: license,
-      SECURE_MCP_DEV_MODE: "1",
+      SECURE_MCP_ALLOWED_ROOTS: root,
     } as Record<string, string>,
   });
 

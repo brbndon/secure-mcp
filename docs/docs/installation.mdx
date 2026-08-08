@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Build secure-mcp locally, configure its defensive license gate, and connect the stdio MCP server to Claude, Cursor, Codex, or another authorized client.
+description: Build secure-mcp locally, authorize repository roots, and connect the stdio MCP server to Claude, Cursor, Codex, or another client.
 sidebar:
   label: Installation
   order: 2
@@ -8,13 +8,13 @@ sidebar:
 
 ## Installation
 
-`secure-mcp` runs as a local subprocess over stdio. The client launches the built entrypoint, passes a license key in the environment, and exchanges MCP messages over stdin/stdout.
+`secure-mcp` runs as a local subprocess over stdio. The client launches the built entrypoint, passes a filesystem allowlist in the environment, and exchanges MCP messages over stdin/stdout.
 
 ## Requirements
 
 - Node.js 20 or newer
 - pnpm preferred (npm also works)
-- An authorized local checkout of the server
+- A local checkout of the server
 
 ## Build the server
 
@@ -25,20 +25,19 @@ pnpm build
 
 The compiled entrypoint is `dist/index.js`.
 
-## Configure the local license
+## Authorize repository roots
 
-For local development and smoke tests, use the documented development key with development mode enabled:
+Filesystem tools fail closed unless `SECURE_MCP_ALLOWED_ROOTS` names one or more roots that may contain a requested `project_root`:
 
 ```bash
-export SECURE_MCP_DEV_MODE=1
-export SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1
+export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
 ```
 
-The server validates the key format locally and emits a warning on stderr in development mode. Do not use the development key with production or real data.
+Use `:` between multiple roots on macOS/Linux and `;` on Windows. Keep the scope as narrow as practical; canonical-path and symlink checks still apply within each authorized root.
 
 ## Connect a client
 
-Point your MCP client at the built entrypoint and pass the license environment variable. Claude Desktop and Claude Code use a configuration shaped like this:
+Point your MCP client at the built entrypoint and pass the allowlist. Claude Desktop and Claude Code use a configuration shaped like this:
 
 ```json
 {
@@ -47,15 +46,14 @@ Point your MCP client at the built entrypoint and pass the license environment v
       "command": "node",
       "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
       "env": {
-        "SECURE_MCP_LICENSE_KEY": "smcp_dev_local_testing_key_v1",
-        "SECURE_MCP_DEV_MODE": "1"
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
       }
     }
   }
 }
 ```
 
-Cursor and other stdio clients use the same `command`, `args`, and `env` values. The `project_root` supplied to a tool must be visible to the machine running the server; absolute paths are safest.
+Cursor and other stdio clients use the same `command`, `args`, and `env` values. The `project_root` supplied to a tool must be visible to the machine running the server, fall under an allowed root, and is safest as an absolute path.
 
 :::tip
 `./scripts/install-agents.sh install` configures this server **and** the master skill for pi, Claude Code, Cursor, and Codex in one idempotent command (`check` verifies, `uninstall` removes).

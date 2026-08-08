@@ -1,20 +1,38 @@
 ---
 import LandingLayout from "../_home/LandingLayout.astro";
 import PageIntro from "../_home/components/PageIntro.astro";
-import SupportForm from "../_home/components/SupportForm.astro";
 
 const pageTitle = "Support — secure-mcp";
 const pageDescription =
-  "Contact support for secure-mcp: setup, license keys, tool results, and feature requests.";
+  "Get support for secure-mcp through public issues or private vulnerability reporting.";
 ---
 
 <LandingLayout title={pageTitle} description={pageDescription} route="/support">
   <PageIntro
     eyebrow="Support"
-    title="We read every message."
+    title="Start in the right place."
     titleId="support-title"
-    lede="Setup problems, license questions, unexpected tool results, feature ideas — tell us what happened and what you expected."
+    lede="Use GitHub Issues for bugs, setup questions, and feature ideas. Security vulnerabilities have a separate private channel."
     wide
   />
-  <SupportForm />
+  <section class="site-shell grid gap-5 pb-24 md:grid-cols-2 md:pb-32" aria-label="Support options">
+    <article class="rounded-[1.25rem] border border-line bg-surface p-7 shadow-soft">
+      <p class="eyebrow">Public support</p>
+      <h2 class="m-0 mb-3 text-[1.35rem] font-semibold tracking-[-0.02em]">Bugs, setup, and ideas</h2>
+      <p class="mb-6 text-[0.9375rem] leading-relaxed text-muted">
+        Search existing reports, then open an issue with the version, client,
+        environment, and smallest safe reproduction.
+      </p>
+      <a class="btn" href="https://github.com/brbndon/secure-mcp/issues">Browse GitHub Issues</a>
+    </article>
+    <article class="rounded-[1.25rem] border border-line bg-surface p-7 shadow-soft">
+      <p class="eyebrow">Private reporting</p>
+      <h2 class="m-0 mb-3 text-[1.35rem] font-semibold tracking-[-0.02em]">Product vulnerabilities</h2>
+      <p class="mb-6 text-[0.9375rem] leading-relaxed text-muted">
+        Do not post vulnerabilities, credentials, private source, or sensitive
+        audit output in a public issue. Use GitHub's private advisory flow.
+      </p>
+      <a class="btn" href="https://github.com/brbndon/secure-mcp/security/advisories/new">Report privately</a>
+    </article>
+  </section>
 </LandingLayout>

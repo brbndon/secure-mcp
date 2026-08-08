@@ -10,4 +10,4 @@ Themes referenced at a high level (not vendored as source files):
 - Apple / Swift storage and privacy themes (Keychain, ATS, WebView, entitlements)
 - Mobile / Expo secure-storage and config-secret themes
 
-This product does **not** vendor third-party `SKILL.md` trees. Pack items are original structured checklists owned by secure-mcp. Do not paste attribution essays into tool responses.
+The knowledge packs do **not** vendor third-party `SKILL.md` content. Pack items are original structured checklists maintained by secure-mcp. Do not paste attribution essays into tool responses.

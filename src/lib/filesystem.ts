@@ -111,7 +111,7 @@ export interface WalkOptions {
   maxFileBytes?: number;
   /** Aggregate byte budget for files included in this walk. */
   maxTotalBytes?: number;
-  /** Optional canonical-root allowlist for production tool calls. */
+  /** Optional canonical-root allowlist for process-level tool calls. */
   allowedRoots?: readonly string[];
   /** Cap on coverage path events retained in the report (default 1000). */
   maxCoverageEvents?: number;
@@ -125,7 +125,7 @@ export interface ProfileOptions {
   maxDepth?: number;
   maxFileBytes?: number;
   maxTotalBytes?: number;
-  /** Optional canonical-root allowlist for production tool calls. */
+  /** Optional canonical-root allowlist for process-level tool calls. */
   allowedRoots?: readonly string[];
 }
 
@@ -221,9 +221,9 @@ export async function normalizeProjectRoot(projectRoot: string): Promise<string>
 }
 
 /**
- * Normalize a project root and enforce the production filesystem allowlist.
+ * Normalize a project root and enforce the process filesystem allowlist.
  * Programmatic configs may omit allowedRoots for backwards-compatible tests;
- * loadConfig supplies an empty list in production when the operator has not
+ * loadConfig supplies an empty list when the operator has not
  * configured one, which fails closed.
  */
 export async function normalizeAuthorizedProjectRoot(

@@ -4,7 +4,7 @@
 # server wiring for the user's coding agents (pi, Claude Code, Cursor, OpenAI Codex).
 #
 # Usage:
-#   ./scripts/install-agents.sh install    # symlink the skill + configure every harness (default)
+#   SECURE_MCP_ALLOWED_ROOTS=/path/to/repos ./scripts/install-agents.sh install
 #   ./scripts/install-agents.sh check      # verify symlinks, configs, and server startup
 #   ./scripts/install-agents.sh uninstall  # remove exactly what install added
 #
@@ -15,25 +15,41 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILL_SRC="$ROOT/.agents/skills/secure-mcp"
 SERVER_ENTRY="$ROOT/dist/index.js"
-DEV_KEY="smcp_dev_local_testing_key_v1"
+CONFIGURED_ROOTS="${SECURE_MCP_ALLOWED_ROOTS:-}"
+# Test harnesses may redirect all user-level writes without repurposing HOME.
+INSTALL_HOME="${SECURE_MCP_INSTALL_HOME:-$HOME}"
 
 SKILL_LINKS=(
-  "$HOME/.agents/skills/secure-mcp"
-  "$HOME/.claude/skills/secure-mcp"
-  "$HOME/.cursor/skills/secure-mcp"
+  "$INSTALL_HOME/.agents/skills/secure-mcp"
+  "$INSTALL_HOME/.claude/skills/secure-mcp"
+  "$INSTALL_HOME/.cursor/skills/secure-mcp"
 )
 JSON_CONFIGS=(
-  "$HOME/.pi/agent/mcp.json"
-  "$HOME/.claude/settings.json"
-  "$HOME/.cursor/mcp.json"
+  "$INSTALL_HOME/.pi/agent/mcp.json"
+  "$INSTALL_HOME/.claude/settings.json"
+  "$INSTALL_HOME/.cursor/mcp.json"
 )
-CODEX_CONFIG="$HOME/.codex/config.toml"
+CODEX_CONFIG="$INSTALL_HOME/.codex/config.toml"
 CODEX_AGENT_SRC="$ROOT/agents/codex.toml"
-CODEX_AGENT_DST="$HOME/.codex/agents/secure-mcp.toml"
+CODEX_AGENT_DST="$INSTALL_HOME/.codex/agents/secure-mcp.toml"
 
 log()  { printf '\033[1;36m[install-agents]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[install-agents]\033[0m warning: %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[install-agents]\033[0m error: %s\n' "$*" >&2; exit 1; }
+
+validate_configured_roots() {
+  SECURE_MCP_ROOTS="$CONFIGURED_ROOTS" python3 - <<'PY'
+import os, sys
+
+roots = [root.strip() for root in os.environ["SECURE_MCP_ROOTS"].split(os.pathsep) if root.strip()]
+if not roots:
+    sys.exit("SECURE_MCP_ALLOWED_ROOTS must contain at least one path")
+if any(not os.path.isabs(root) for root in roots):
+    sys.exit("every SECURE_MCP_ALLOWED_ROOTS entry must be absolute")
+if any(not os.path.isdir(root) for root in roots):
+    sys.exit("every SECURE_MCP_ALLOWED_ROOTS entry must be an existing directory")
+PY
+}
 
 # --- JSON helpers -----------------------------------------------------------
 
@@ -41,7 +57,7 @@ die()  { printf '\033[1;31m[install-agents]\033[0m error: %s\n' "$*" >&2; exit 1
 json_set() {
   local file="$1"
   mkdir -p "$(dirname "$file")"
-  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_DEV_KEY="$DEV_KEY" python3 - "$file" <<'PY'
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_ROOTS="$CONFIGURED_ROOTS" python3 - "$file" <<'PY'
 import json, os, sys
 
 path = sys.argv[1]
@@ -49,8 +65,7 @@ entry = {
     "command": "node",
     "args": [os.environ["SECURE_MCP_ENTRY"]],
     "env": {
-        "SECURE_MCP_LICENSE_KEY": os.environ["SECURE_MCP_DEV_KEY"],
-        "SECURE_MCP_DEV_MODE": "1",
+        "SECURE_MCP_ALLOWED_ROOTS": os.environ["SECURE_MCP_ROOTS"],
     },
 }
 try:
@@ -101,7 +116,9 @@ try:
 except (FileNotFoundError, json.JSONDecodeError):
     sys.exit(1)
 entry = (data.get("mcpServers") or {}).get("secure-mcp")
-sys.exit(0 if isinstance(entry, dict) else 1)
+env = entry.get("env") if isinstance(entry, dict) else None
+roots = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+sys.exit(0 if isinstance(roots, str) and roots.strip() else 1)
 PY
 }
 
@@ -111,30 +128,17 @@ codex_section_present() {
   grep -q '^\[mcp_servers\.secure-mcp\]' "$CODEX_CONFIG" 2>/dev/null
 }
 
-codex_section_append() {
-  if codex_section_present; then
-    log "codex: $CODEX_CONFIG already has [mcp_servers.secure-mcp]"
-    return 0
-  fi
-  cat >> "$CODEX_CONFIG" <<EOF
-
-[mcp_servers.secure-mcp]
-command = "node"
-args = ["$SERVER_ENTRY"]
-
-[mcp_servers.secure-mcp.env]
-SECURE_MCP_LICENSE_KEY = "$DEV_KEY"
-SECURE_MCP_DEV_MODE = "1"
-EOF
-  log "codex: appended [mcp_servers.secure-mcp] to $CODEX_CONFIG"
+codex_has_authorized_entry() {
+  [ -f "$CODEX_CONFIG" ] || return 1
+  awk '
+    /^\[mcp_servers\.secure-mcp\.env\]$/ { in_env = 1; next }
+    /^\[/ { in_env = 0 }
+    in_env && /^SECURE_MCP_ALLOWED_ROOTS = ".+"$/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$CODEX_CONFIG"
 }
 
-codex_section_remove() {
-  [ -f "$CODEX_CONFIG" ] || return 0
-  if ! codex_section_present; then
-    log "codex: no secure-mcp section in $CODEX_CONFIG"
-    return 0
-  fi
+codex_section_strip() {
   local tmp
   tmp="$(mktemp)"
   # Drop from the section header (and its sub-tables) through the line before
@@ -145,6 +149,35 @@ codex_section_remove() {
     !skip
   ' "$CODEX_CONFIG" > "$tmp"
   mv "$tmp" "$CODEX_CONFIG"
+}
+
+codex_section_append() {
+  mkdir -p "$(dirname "$CODEX_CONFIG")"
+  if codex_section_present; then
+    codex_section_strip
+    log "codex: updating [mcp_servers.secure-mcp] in $CODEX_CONFIG"
+  fi
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_ROOTS="$CONFIGURED_ROOTS" python3 - "$CODEX_CONFIG" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+with open(path, "a", encoding="utf-8") as f:
+    f.write("\n[mcp_servers.secure-mcp]\n")
+    f.write('command = "node"\n')
+    f.write(f'args = [{json.dumps(os.environ["SECURE_MCP_ENTRY"])}]\n')
+    f.write("\n[mcp_servers.secure-mcp.env]\n")
+    f.write(f'SECURE_MCP_ALLOWED_ROOTS = {json.dumps(os.environ["SECURE_MCP_ROOTS"])}\n')
+PY
+  log "codex: configured [mcp_servers.secure-mcp] in $CODEX_CONFIG"
+}
+
+codex_section_remove() {
+  [ -f "$CODEX_CONFIG" ] || return 0
+  if ! codex_section_present; then
+    log "codex: no secure-mcp section in $CODEX_CONFIG"
+    return 0
+  fi
+  codex_section_strip
   log "codex: removed [mcp_servers.secure-mcp] from $CODEX_CONFIG"
 }
 
@@ -187,19 +220,20 @@ unlink_skill() {
 
 probe_server() {
   local out
-  out="$(SECURE_MCP_LICENSE_KEY="$DEV_KEY" SECURE_MCP_DEV_MODE=1 node "$SERVER_ENTRY" </dev/null 2>&1)" || {
+  out="$(SECURE_MCP_ALLOWED_ROOTS="$ROOT" node "$SERVER_ENTRY" </dev/null 2>&1)" || {
     warn "server probe failed with exit $?"
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     return 1
   }
-  printf '%s\n' "$out" | grep -q "License OK" || { warn "server probe: license not OK"; return 1; }
   printf '%s\n' "$out" | grep -q "running on stdio" || { warn "server probe: did not reach stdio"; return 1; }
-  log "server: $SERVER_ENTRY starts and passes the license gate"
+  log "server: $SERVER_ENTRY starts with an explicit filesystem allowlist"
 }
 
 # --- Modes ------------------------------------------------------------------
 
 cmd_install() {
+  [ -n "$CONFIGURED_ROOTS" ] || die "set SECURE_MCP_ALLOWED_ROOTS to the repositories this server may inspect"
+  validate_configured_roots || die "invalid SECURE_MCP_ALLOWED_ROOTS"
   [ -f "$SERVER_ENTRY" ] || die "build the server first (pnpm build) — $SERVER_ENTRY missing"
   log "installing secure-mcp for coding agents (skill source: $SKILL_SRC)"
   for target in "${SKILL_LINKS[@]}"; do link_skill "$target"; done
@@ -235,15 +269,15 @@ cmd_check() {
   log "checking client configs"
   for cfg in "${JSON_CONFIGS[@]}"; do
     if json_has_entry "$cfg"; then
-      log "  ok: $cfg has secure-mcp entry"
+      log "  ok: $cfg has secure-mcp entry with an allowed-root scope"
     else
       warn "missing secure-mcp entry in $cfg"
       failures=$((failures + 1))
     fi
   done
 
-  if codex_section_present && grep -q '^SECURE_MCP_DEV_MODE = "1"' "$CODEX_CONFIG"; then
-    log "  ok: $CODEX_CONFIG has secure-mcp section"
+  if codex_section_present && codex_has_authorized_entry; then
+    log "  ok: $CODEX_CONFIG has secure-mcp section with an allowed-root scope"
   else
     warn "missing secure-mcp section in $CODEX_CONFIG"
     failures=$((failures + 1))

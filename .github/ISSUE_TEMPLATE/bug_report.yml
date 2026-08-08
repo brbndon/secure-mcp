@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible secure-mcp defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private source code, sensitive audit output, or security vulnerabilities. Use the private process in SECURITY.md for vulnerabilities.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 1.0.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Node.js version, operating system, and MCP client
+      placeholder: Node 22, macOS 15, Codex
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use a safe local fixture with fake data.
+      placeholder: Commands, tool input, and minimal fixture structure
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include redacted logs or structured coverage when relevant.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private source, and sensitive audit output.
+          required: true
+        - label: This is not a vulnerability report.
+          required: true

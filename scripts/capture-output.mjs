@@ -1,8 +1,8 @@
 /**
  * Capture real secure-mcp output for the marketing site gallery.
- * Spawns the actual server over stdio (dev mode, documented dev key),
+ * Spawns the actual server over stdio with a fixture-scoped filesystem allowlist,
  * runs the multi-phase audit tools against fixtures/tiny-app, and
- * writes verbatim output into pages/_home/captures/.
+ * writes path-sanitized output into pages/_home/captures/.
  *
  * Usage (from the repo root):
  *   node scripts/capture-output.mjs
@@ -14,15 +14,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, "..", "..");
+const root = path.resolve(__dirname, "..");
 const fixture = path.join(root, "fixtures", "tiny-app");
 const outDir = path.join(root, "pages", "_home", "captures");
 mkdirSync(outDir, { recursive: true });
 
 const env = {
   ...process.env,
-  SECURE_MCP_LICENSE_KEY: "smcp_dev_local_testing_key_v1",
-  SECURE_MCP_DEV_MODE: "1",
+  SECURE_MCP_ALLOWED_ROOTS: fixture,
 };
 
 const transport = new StdioClientTransport({
@@ -40,7 +39,10 @@ function textOf(result) {
 }
 
 async function save(name, result, { prettifyJson = false } = {}) {
-  const text = textOf(result);
+  const publicRoot = "/workspace/secure-mcp";
+  const text = textOf(result)
+    .replaceAll(root, publicRoot)
+    .replaceAll(root.replaceAll("/", "\\/"), publicRoot.replaceAll("/", "\\/"));
   let out = text;
   if (prettifyJson) {
     try {
@@ -79,11 +81,16 @@ const secrets = await client.callTool({
 });
 await save("04-secrets.json", secrets, { prettifyJson: true });
 
-// 4. Remediation report (markdown) — feed the secrets findings back
-let findings = [];
-try {
-  findings = JSON.parse(textOf(secrets)).findings ?? [];
-} catch {}
+// 4. Remediation report (markdown) — the bundled fixture is intentionally
+// vulnerable, so promote its manually known candidates before report rollup.
+const structuredFindings = secrets.structuredContent?.findings;
+const findings = Array.isArray(structuredFindings)
+  ? structuredFindings.map((finding) => ({
+      ...finding,
+      disposition: "reportable",
+      disposition_reason: "Confirmed in the intentionally vulnerable bundled fixture.",
+    }))
+  : [];
 const report = await client.callTool({
   name: "secure_mcp_produce_findings",
   arguments: {

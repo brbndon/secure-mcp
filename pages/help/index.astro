@@ -6,7 +6,7 @@ const base = import.meta.env.BASE_URL;
 
 const pageTitle = "Getting started — secure-mcp";
 const pageDescription =
-  "Install secure-mcp, set a license key, connect it to your MCP client, and run a structured defensive code review.";
+  "Install secure-mcp, authorize repository roots, connect it to your MCP client, and run a structured defensive code review.";
 
 const steps = [
   {
@@ -17,26 +17,24 @@ const steps = [
     code: "cd secure-mcp\npnpm install\npnpm build",
   },
   {
-    id: "get-a-license-key",
+    id: "authorize-repository-roots",
     number: "02",
-    title: "Provide a license key",
-    body: "Production uses a signed key plus a configured public key and allowed root; local smoke tests may use the documented dev key with DEV_MODE=1.",
-    code: "export SECURE_MCP_LICENSE_KEY='smcp_<payload>.<base64url-signature>'\nexport SECURE_MCP_LICENSE_PUBLIC_KEY='...PEM public key...'\nexport SECURE_MCP_ALLOWED_ROOTS=/abs/path/repository\npnpm start",
+    title: "Authorize repository roots",
+    body: "Filesystem tools fail closed until you configure the canonical roots they may inspect. Keep the scope as narrow as practical.",
+    code: "export SECURE_MCP_ALLOWED_ROOTS=/abs/path/repositories\npnpm start",
   },
   {
     id: "connect-from-mcp-clients",
     number: "03",
     title: "Connect from your client",
-    body: "Point any MCP client at the built entrypoint with the license variable set. Works in Claude, Cursor, Codex, pi, and other stdio clients.",
+    body: "Point any MCP client at the built entrypoint with the filesystem allowlist set. Works in Claude, Cursor, Codex, pi, and other stdio clients.",
     code: `{
   "mcpServers": {
     "secure-mcp": {
       "command": "node",
       "args": ["/abs/path/secure-mcp/dist/index.js"],
       "env": {
-        "SECURE_MCP_LICENSE_KEY": "smcp_<payload>.<base64url-signature>",
-        "SECURE_MCP_LICENSE_PUBLIC_KEY": "...PEM public key...",
-        "SECURE_MCP_ALLOWED_ROOTS": "/abs/path/repository"
+        "SECURE_MCP_ALLOWED_ROOTS": "/abs/path/repositories"
       }
     }
   }
@@ -289,9 +287,9 @@ const workflowPhases = [
       </div>
 
       <div class="mt-12 max-w-3xl border-t border-line">
-        <details class="faq-item group border-b border-line" id="development-key-for-evaluation">
+        <details class="faq-item group border-b border-line" id="filesystem-allowlist">
           <summary class="flex min-h-[4.25rem] cursor-pointer items-center justify-between gap-6 py-4 text-left text-[1.0625rem] font-medium tracking-[-0.01em] text-ink">
-            <span>What is the development key for evaluation?</span>
+            <span>Why is a filesystem allowlist required?</span>
             <span
               class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#e8e8ed] text-base font-normal text-ink transition group-open:hidden"
               aria-hidden="true"
@@ -307,10 +305,10 @@ const workflowPhases = [
           </summary>
           <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
             <p class="m-0">
-              The documented dev key (<code class="rounded bg-[#e8e8ed] px-1.5 py-0.5 font-mono text-[0.85em] text-ink">smcp_dev_local_testing_key_v1</code>)
-              works only with <code class="rounded bg-[#e8e8ed] px-1.5 py-0.5 font-mono text-[0.85em] text-ink">SECURE_MCP_DEV_MODE=1</code>,
-              is for local and CI testing only, and prints a clear warning. It
-              must never be used with production data or deployments.
+              The allowlist prevents an agent prompt from turning a local MCP
+              server into a general filesystem reader. Set <code class="rounded bg-[#e8e8ed] px-1.5 py-0.5 font-mono text-[0.85em] text-ink">SECURE_MCP_ALLOWED_ROOTS</code>
+              to the narrowest parent directories that contain repositories
+              you intend to review.
             </p>
           </div>
         </details>
@@ -360,8 +358,8 @@ const workflowPhases = [
           <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
             <p class="m-0">
               Yes — stack packs and tool coverage evolve on a roadmap. Open a
-              support request with the category “Feature Request” and the
-              stack or surface you need.
+              GitHub feature request with the stack or surface you need and
+              where it fits in the defensive audit workflow.
             </p>
           </div>
         </details>
