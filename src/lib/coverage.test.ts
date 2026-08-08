@@ -59,7 +59,8 @@ describe("bounded coverage accounting", () => {
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
     const readme = await readProjectFile(repositoryRoot, "README.md");
     assert.match(readme.content, /secure-mcp/i);
-    assert.match(readme.content, /Apache/i);
+    assert.match(readme.content, /does not execute target code/i);
+    assert.match(readme.content, /redacted before it crosses/i);
   });
 
   it("includes ordinary project files and reports ignored files, caps, and truncation", async () => {

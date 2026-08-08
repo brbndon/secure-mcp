@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Do not include credentials, private source code, sensitive audit output, or security vulnerabilities. Use the private process in SECURITY.md for vulnerabilities.
+        Do not include credentials, private source code, sensitive audit output, or security vulnerabilities. Use the process in SECURITY.md for vulnerabilities.
   - type: input
     id: version
     attributes:
