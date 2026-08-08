@@ -37,8 +37,8 @@ log()  { printf '\033[1;36m[install-agents]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[install-agents]\033[0m warning: %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[install-agents]\033[0m error: %s\n' "$*" >&2; exit 1; }
 
-validate_configured_roots() {
-  SECURE_MCP_ROOTS="$CONFIGURED_ROOTS" python3 - <<'PY'
+validate_roots_string() {
+  SECURE_MCP_ROOTS="$1" python3 - <<'PY'
 import os, sys
 
 roots = [root.strip() for root in os.environ["SECURE_MCP_ROOTS"].split(os.pathsep) if root.strip()]
@@ -49,6 +49,10 @@ if any(not os.path.isabs(root) for root in roots):
 if any(not os.path.isdir(root) for root in roots):
     sys.exit("every SECURE_MCP_ALLOWED_ROOTS entry must be an existing directory")
 PY
+}
+
+validate_configured_roots() {
+  validate_roots_string "$CONFIGURED_ROOTS"
 }
 
 # --- JSON helpers -----------------------------------------------------------
@@ -75,10 +79,41 @@ except FileNotFoundError:
     data = {}
 except json.JSONDecodeError as exc:
     sys.exit(f"cannot parse {path}: {exc}")
+if not isinstance(data, dict):
+    sys.exit(f"cannot update {path}: top-level JSON value must be an object")
+servers = data.get("mcpServers")
+if servers is not None and not isinstance(servers, dict):
+    sys.exit(f"cannot update {path}: mcpServers must be an object")
 data.setdefault("mcpServers", {})["secure-mcp"] = entry
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
+PY
+}
+
+# json_roots_ok <file> — true when the entry's allowlist is non-empty, absolute, and exists.
+json_roots_ok() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  python3 - "$file" <<'PY'
+import json, os, sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError):
+    sys.exit(1)
+entry = (data.get("mcpServers") or {}).get("secure-mcp")
+env = entry.get("env") if isinstance(entry, dict) else None
+raw = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+if not isinstance(raw, str) or not raw.strip():
+    sys.exit(1)
+roots = [r.strip() for r in raw.split(os.pathsep) if r.strip()]
+if not roots:
+    sys.exit(1)
+if any(not os.path.isabs(r) for r in roots):
+    sys.exit(1)
+if any(not os.path.isdir(r) for r in roots):
+    sys.exit(1)
 PY
 }
 
@@ -95,6 +130,11 @@ try:
         data = json.load(f)
 except json.JSONDecodeError as exc:
     sys.exit(f"cannot parse {path}: {exc}")
+if not isinstance(data, dict):
+    sys.exit(f"cannot update {path}: top-level JSON value must be an object")
+servers = data.get("mcpServers")
+if servers is not None and not isinstance(servers, dict):
+    sys.exit(f"cannot update {path}: mcpServers must be an object")
 servers = data.get("mcpServers")
 if isinstance(servers, dict):
     servers.pop("secure-mcp", None)
@@ -125,29 +165,34 @@ PY
 # --- Codex TOML helpers -----------------------------------------------------
 
 codex_section_present() {
-  grep -q '^\[mcp_servers\.secure-mcp\]' "$CODEX_CONFIG" 2>/dev/null
+  # Canonical sub-table header or dotted-key definition ("mcp_servers.secure-mcp.env = {…}").
+  grep -qE '^\[mcp_servers\.secure-mcp(\]|\.)|^mcp_servers\.secure-mcp(\.| ?=)' "$CODEX_CONFIG" 2>/dev/null
 }
 
 codex_has_authorized_entry() {
   [ -f "$CODEX_CONFIG" ] || return 1
   awk '
-    /^\[mcp_servers\.secure-mcp\.env\]$/ { in_env = 1; next }
-    /^\[/ { in_env = 0 }
-    in_env && /^SECURE_MCP_ALLOWED_ROOTS = ".+"$/ { found = 1 }
+    /^\[/ { in_block = 0 }
+    /^\[mcp_servers\.secure-mcp(\]|\.)/ { in_block = 1; next }
+    in_block && /SECURE_MCP_ALLOWED_ROOTS = ".+"/ { found = 1 }
     END { exit(found ? 0 : 1) }
   ' "$CODEX_CONFIG"
 }
 
 codex_section_strip() {
-  local tmp
+  local tmp mode
+  mode="$(stat -c %a "$CODEX_CONFIG" 2>/dev/null || stat -f %Lp "$CODEX_CONFIG" 2>/dev/null || printf '600')"
   tmp="$(mktemp)"
   # Drop from the section header (and its sub-tables) through the line before
-  # the next top-level section, preserving everything else.
+  # the next top-level section, plus any dotted-key definition of the same
+  # table; preserve everything else and the original file mode.
   awk '
     /^\[mcp_servers\.secure-mcp(\]|\.)/ { skip = 1; next }
+    /^mcp_servers\.secure-mcp(\.| ?=)/ { next }
     /^\[/ { skip = 0 }
     !skip
   ' "$CODEX_CONFIG" > "$tmp"
+  chmod "$mode" "$tmp"
   mv "$tmp" "$CODEX_CONFIG"
 }
 
@@ -161,8 +206,18 @@ codex_section_append() {
 import json, os, sys
 
 path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+except FileNotFoundError:
+    content = ""
 with open(path, "a", encoding="utf-8") as f:
-    f.write("\n[mcp_servers.secure-mcp]\n")
+    # Avoid stacking blank lines across install/uninstall cycles.
+    if content and not content.endswith("\n"):
+        f.write("\n")
+    elif content and content.endswith("\n\n"):
+        f.truncate(len(content.rstrip("\n")) + 1)
+    f.write("[mcp_servers.secure-mcp]\n")
     f.write('command = "node"\n')
     f.write(f'args = [{json.dumps(os.environ["SECURE_MCP_ENTRY"])}]\n')
     f.write("\n[mcp_servers.secure-mcp.env]\n")
@@ -269,7 +324,12 @@ cmd_check() {
   log "checking client configs"
   for cfg in "${JSON_CONFIGS[@]}"; do
     if json_has_entry "$cfg"; then
-      log "  ok: $cfg has secure-mcp entry with an allowed-root scope"
+      if json_roots_ok "$cfg"; then
+        log "  ok: $cfg has secure-mcp entry with an allowed-root scope"
+      else
+        warn "$cfg allowlist is empty, relative, or points at a missing directory"
+        failures=$((failures + 1))
+      fi
     else
       warn "missing secure-mcp entry in $cfg"
       failures=$((failures + 1))
