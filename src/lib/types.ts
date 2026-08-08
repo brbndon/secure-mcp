@@ -55,6 +55,7 @@ export interface CoverageReport {
     max_files: number;
     max_depth: number;
     max_file_bytes: number;
+    max_total_bytes?: number;
   };
   truncation: {
     truncated: boolean;
@@ -193,6 +194,8 @@ export interface ToolErrorResult {
   error: string;
   code?: string;
   hint?: string;
+  output_trust?: "untrusted";
+  output_notice?: string;
 }
 
 export type ToolResult<T extends object = object> = (ToolResultBase & T) | ToolErrorResult;

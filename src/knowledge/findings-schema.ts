@@ -183,9 +183,9 @@ export const ProjectRootInput = z
       .number()
       .int()
       .min(1)
-      .max(5000)
+      .max(1000)
       .optional()
-      .describe("Safety cap on how many files tools may inspect (default ~400)"),
+      .describe("Safety cap on how many files tools may inspect (default ~400, hard max 1000)"),
 
     focus_paths: z
       .array(z.string().min(1).max(MAX_FOCUS_PATH_LENGTH))

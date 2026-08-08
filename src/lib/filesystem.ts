@@ -20,7 +20,7 @@ import type {
   StackFocus,
 } from "./types.js";
 import { CANDIDATE_DISPOSITIONS } from "./types.js";
-import { redactValue, redactedEvidence } from "./redact.js";
+import { redactValue, redactedEvidence, UNTRUSTED_OUTPUT_NOTICE } from "./redact.js";
 
 /** Default directories/files to skip when walking a project. */
 export const DEFAULT_IGNORE_DIRS = new Set([
@@ -90,6 +90,11 @@ export const CODE_EXTENSIONS = new Set([
 export const DEFAULT_MAX_FILE_BYTES = 256 * 1024; // 256 KiB per file
 export const DEFAULT_MAX_FILES = 400;
 export const DEFAULT_MAX_DEPTH = 12;
+export const DEFAULT_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+export const HARD_MAX_FILES = 1_000;
+export const HARD_MAX_FILE_BYTES = 1 * 1024 * 1024;
+export const HARD_MAX_DEPTH = 20;
+export const HARD_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 export const CHARACTER_LIMIT = 25_000;
 
 export interface WalkOptions {
@@ -104,6 +109,10 @@ export interface WalkOptions {
   focusPrefixes?: string[];
   /** Files larger than this are accounted for but not returned for review. */
   maxFileBytes?: number;
+  /** Aggregate byte budget for files included in this walk. */
+  maxTotalBytes?: number;
+  /** Optional canonical-root allowlist for production tool calls. */
+  allowedRoots?: readonly string[];
   /** Cap on coverage path events retained in the report (default 1000). */
   maxCoverageEvents?: number;
 }
@@ -115,6 +124,9 @@ export interface ProfileOptions {
   maxFiles?: number;
   maxDepth?: number;
   maxFileBytes?: number;
+  maxTotalBytes?: number;
+  /** Optional canonical-root allowlist for production tool calls. */
+  allowedRoots?: readonly string[];
 }
 
 interface TopLevelInspection {
@@ -208,6 +220,33 @@ export async function normalizeProjectRoot(projectRoot: string): Promise<string>
   }
 }
 
+/**
+ * Normalize a project root and enforce the production filesystem allowlist.
+ * Programmatic configs may omit allowedRoots for backwards-compatible tests;
+ * loadConfig supplies an empty list in production when the operator has not
+ * configured one, which fails closed.
+ */
+export async function normalizeAuthorizedProjectRoot(
+  projectRoot: string,
+  allowedRoots?: readonly string[],
+): Promise<string> {
+  const root = await normalizeProjectRoot(projectRoot);
+  if (allowedRoots === undefined) return root;
+  if (allowedRoots.length === 0) {
+    throw new Error("No allowed project roots are configured for this server.");
+  }
+
+  for (const allowedRoot of allowedRoots) {
+    try {
+      const canonicalAllowedRoot = await normalizeProjectRoot(allowedRoot);
+      if (isWithinRoot(canonicalAllowedRoot, root)) return root;
+    } catch {
+      // Ignore stale allowlist entries; a valid configured root can still match.
+    }
+  }
+  throw new Error("project_root is outside the server's configured allowed roots.");
+}
+
 function toPosix(p: string): string {
   return p.split(path.sep).join("/");
 }
@@ -265,10 +304,23 @@ export async function walkProject(
   projectRoot: string,
   options: WalkOptions = {},
 ): Promise<{ files: FileEntry[]; truncated: boolean; coverage: CoverageReport }> {
-  const root = await normalizeProjectRoot(projectRoot);
-  const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
-  const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
-  const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  const root = await normalizeAuthorizedProjectRoot(projectRoot, options.allowedRoots);
+  const boundedPositive = (value: number | undefined, fallback: number, maximum: number): number =>
+    value !== undefined && Number.isFinite(value) && value > 0
+      ? Math.min(value, maximum)
+      : fallback;
+  const maxFiles = boundedPositive(options.maxFiles, DEFAULT_MAX_FILES, HARD_MAX_FILES);
+  const maxDepth = boundedPositive(options.maxDepth, DEFAULT_MAX_DEPTH, HARD_MAX_DEPTH);
+  const maxFileBytes = boundedPositive(
+    options.maxFileBytes,
+    DEFAULT_MAX_FILE_BYTES,
+    HARD_MAX_FILE_BYTES,
+  );
+  const maxTotalBytes = boundedPositive(
+    options.maxTotalBytes,
+    DEFAULT_MAX_TOTAL_BYTES,
+    HARD_MAX_TOTAL_BYTES,
+  );
   const extensions = options.extensions === undefined ? CODE_EXTENSIONS : options.extensions;
   const ignoreDirs = options.ignoreDirs ?? DEFAULT_IGNORE_DIRS;
   const ignoreFiles = options.ignoreFiles ?? DEFAULT_IGNORE_FILES;
@@ -281,6 +333,7 @@ export async function walkProject(
   const excludedPaths: CoveragePathDecision[] = [];
   const ignoredPaths: CoveragePathDecision[] = [];
   let coverageEventsTruncated = false;
+  let totalBytes = 0;
   const maxCoverageEvents = options.maxCoverageEvents ?? 1000;
 
   const markCoverageEventsTruncated = (reason = "coverage_events_cap"): void => {
@@ -542,7 +595,15 @@ export async function walkProject(
         continue;
       }
 
+      if (totalBytes + size > maxTotalBytes) {
+        truncated = true;
+        truncationReasons.add("max_total_bytes");
+        addEvent(excludedPaths, { path: rel, kind: "file", reason: "max_total_bytes" });
+        continue;
+      }
+
       files.push({ absolutePath: abs, relativePath: rel, size, ext });
+      totalBytes += size;
       if (files.length > maxCoverageEvents) {
         markCoverageEventsTruncated("included_paths_cap");
       }
@@ -564,7 +625,14 @@ export async function walkProject(
       reason: "included_paths_cap",
     });
   }
-  const walkTruncated = truncated || truncationReasons.has("max_files") || truncationReasons.has("max_depth") || truncationReasons.has("max_file_bytes") || truncationReasons.has("symlink_containment") || truncationReasons.has("response_size");
+  const walkTruncated =
+    truncated ||
+    truncationReasons.has("max_files") ||
+    truncationReasons.has("max_depth") ||
+    truncationReasons.has("max_file_bytes") ||
+    truncationReasons.has("max_total_bytes") ||
+    truncationReasons.has("symlink_containment") ||
+    truncationReasons.has("response_size");
   const effectiveTruncated = walkTruncated;
   const hasScopeGaps =
     effectiveTruncated ||
@@ -586,7 +654,12 @@ export async function walkProject(
       included_paths: includedPaths,
       excluded_paths: excludedPaths,
       ignored_paths: ignoredPaths,
-      caps: { max_files: maxFiles, max_depth: maxDepth, max_file_bytes: maxFileBytes },
+      caps: {
+        max_files: maxFiles,
+        max_depth: maxDepth,
+        max_file_bytes: maxFileBytes,
+        max_total_bytes: maxTotalBytes,
+      },
       truncation: {
         truncated: effectiveTruncated || coverageEventsTruncated,
         reasons: [...truncationReasons],
@@ -627,6 +700,7 @@ export function recordCoverageExclusion(
       "max_files",
       "max_depth",
       "max_file_bytes",
+      "max_total_bytes",
       "response_size",
       "symlink_containment",
       "coverage_events_cap",
@@ -919,8 +993,9 @@ export async function readProjectFile(
   projectRoot: string,
   relativeOrAbsolute: string,
   maxBytes: number = DEFAULT_MAX_FILE_BYTES,
+  allowedRoots?: readonly string[],
 ): Promise<ReadFileResult> {
-  const root = await normalizeProjectRoot(projectRoot);
+  const root = await normalizeAuthorizedProjectRoot(projectRoot, allowedRoots);
   const realRoot = await fs.realpath(root);
 
   let handle: FileHandle | undefined;
@@ -935,14 +1010,16 @@ export async function readProjectFile(
     const st = opened.stat;
 
     const size = st.size;
-    const toRead = Math.min(maxBytes, size);
+    const requestedMaxBytes = Number.isFinite(maxBytes) ? Math.max(0, maxBytes) : 0;
+    const safeMaxBytes = Math.min(requestedMaxBytes, HARD_MAX_FILE_BYTES);
+    const toRead = Math.min(safeMaxBytes, size);
     const buf = Buffer.alloc(toRead);
     const { bytesRead } = await handle.read(buf, 0, toRead, 0);
     const content = buf.subarray(0, bytesRead).toString("utf8");
     return {
       relativePath: toPosix(path.relative(realRoot, realFile)),
       content,
-      truncated: size > maxBytes,
+      truncated: size > safeMaxBytes,
       size,
     };
   } catch (err) {
@@ -964,9 +1041,10 @@ export async function readProjectFileIfExists(
   projectRoot: string,
   relativePath: string,
   maxBytes?: number,
+  allowedRoots?: readonly string[],
 ): Promise<ReadFileResult | null> {
   try {
-    return await readProjectFile(projectRoot, relativePath, maxBytes);
+    return await readProjectFile(projectRoot, relativePath, maxBytes, allowedRoots);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return null;
@@ -976,8 +1054,12 @@ export async function readProjectFileIfExists(
 }
 
 /** Stream top-level entries while retaining only a bounded preview. */
-async function inspectTopLevel(projectRoot: string, maxEntries: number): Promise<TopLevelInspection> {
-  const root = await normalizeProjectRoot(projectRoot);
+async function inspectTopLevel(
+  projectRoot: string,
+  maxEntries: number,
+  allowedRoots?: readonly string[],
+): Promise<TopLevelInspection> {
+  const root = await normalizeAuthorizedProjectRoot(projectRoot, allowedRoots);
   // Bind enumeration to a verified root object: open the root, then confirm the
   // pathname still names that same directory after opendir finished.
   const rootHandle = await fs.open(root, openDirFlags());
@@ -1094,10 +1176,11 @@ export async function profileProject(
   projectRoot: string,
   options: ProfileOptions = {},
 ): Promise<ProjectProfile> {
-  const root = await normalizeProjectRoot(projectRoot);
+  const root = await normalizeAuthorizedProjectRoot(projectRoot, options.allowedRoots);
   const topLevel = await inspectTopLevel(
     root,
     Math.min(1_000, Math.max(20, options.maxFiles ?? 80)),
+    options.allowedRoots,
   );
   const topLevelEntries = topLevel.entries;
   const focusPrefixes = options.focusPrefixes;
@@ -1106,8 +1189,9 @@ export async function profileProject(
 
   const exists = async (rel: string): Promise<boolean> => {
     try {
-      const target = await resolveContainedPath(root, rel);
-      const opened = await openCanonicalPath(root, target, openReadFlags(), "any");
+      const authorizedRoot = await normalizeAuthorizedProjectRoot(root, options.allowedRoots);
+      const target = await resolveContainedPath(authorizedRoot, rel);
+      const opened = await openCanonicalPath(authorizedRoot, target, openReadFlags(), "any");
       await opened.handle.close();
       return true;
     } catch {
@@ -1130,6 +1214,8 @@ export async function profileProject(
     maxFiles: options.maxFiles ?? 80,
     maxDepth: options.maxDepth ?? 6,
     maxFileBytes: options.maxFileBytes,
+    maxTotalBytes: options.maxTotalBytes,
+    allowedRoots: options.allowedRoots,
     extensions: new Set([".ts", ".tsx", ".js", ".jsx", ".swift", ".json", ".pbxproj", ".plist"]),
     focusPrefixes,
   });
@@ -1139,7 +1225,12 @@ export async function profileProject(
 
   let dependencyNames: string[] = [];
   if (hasPackageJson) {
-    const pkgFile = await readProjectFileIfExists(root, "package.json", metadataReadLimit(64 * 1024));
+    const pkgFile = await readProjectFileIfExists(
+      root,
+      "package.json",
+      metadataReadLimit(64 * 1024),
+      options.allowedRoots,
+    );
     if (pkgFile) {
       try {
         const pkg = JSON.parse(pkgFile.content) as {
@@ -1156,10 +1247,20 @@ export async function profileProject(
     }
   }
 
-  const appJson = await readProjectFileIfExists(root, "app.json", metadataReadLimit(32 * 1024));
+  const appJson = await readProjectFileIfExists(
+    root,
+    "app.json",
+    metadataReadLimit(32 * 1024),
+    options.allowedRoots,
+  );
   let appConfigContent: string | null = null;
   for (const name of ["app.config.js", "app.config.ts", "app.config.mjs", "app.config.cjs"]) {
-    const file = await readProjectFileIfExists(root, name, metadataReadLimit(32 * 1024));
+    const file = await readProjectFileIfExists(
+      root,
+      name,
+      metadataReadLimit(32 * 1024),
+      options.allowedRoots,
+    );
     if (file) {
       appConfigContent = file.content;
       break;
@@ -1186,7 +1287,12 @@ export async function profileProject(
   if (hasSwiftFiles) {
     const sampleSwift = files.filter((f) => f.ext === ".swift").slice(0, 30);
     for (const f of sampleSwift) {
-      const body = await readProjectFileIfExists(root, f.relativePath, metadataReadLimit(32 * 1024));
+      const body = await readProjectFileIfExists(
+        root,
+        f.relativePath,
+        metadataReadLimit(32 * 1024),
+        options.allowedRoots,
+      );
       if (!body) continue;
       if (
         /\bimport\s+AppKit\b|\bNSApplication\b|\bNSWindow\b|\bMacCatalyst\b|#if\s+os\(macOS\)/.test(
@@ -1200,7 +1306,12 @@ export async function profileProject(
     if (!hasMacOS) {
       const pbx = files.find((f) => f.relativePath.endsWith(".pbxproj"));
       if (pbx) {
-        const body = await readProjectFileIfExists(root, pbx.relativePath, metadataReadLimit(64 * 1024));
+        const body = await readProjectFileIfExists(
+          root,
+          pbx.relativePath,
+          metadataReadLimit(64 * 1024),
+          options.allowedRoots,
+        );
         if (body && /SDKROOT\s*=\s*macosx|MACOSX_DEPLOYMENT_TARGET/.test(body.content)) {
           hasMacOS = true;
         }
@@ -1278,6 +1389,8 @@ export function toolError(
     ok: false as const,
     error: message,
     ...(safeHint ? { hint: safeHint } : {}),
+    output_trust: "untrusted" as const,
+    output_notice: UNTRUSTED_OUTPUT_NOTICE,
   };
   const bounded = boundStructuredPayload(base).data as {
     ok: false;
@@ -1285,8 +1398,8 @@ export function toolError(
     hint?: string;
   };
   const text = bounded.hint
-    ? `Error: ${bounded.error}\n\nHint: ${bounded.hint}`
-    : `Error: ${bounded.error}`;
+    ? `${UNTRUSTED_OUTPUT_NOTICE}\n\nError: ${bounded.error}\n\nHint: ${bounded.hint}`
+    : `${UNTRUSTED_OUTPUT_NOTICE}\n\nError: ${bounded.error}`;
   return {
     isError: true,
     content: [{ type: "text", text }],
@@ -1494,26 +1607,59 @@ export function toolSuccess<T extends object>(
   // Keep this as the final output boundary as well as the finding-specific
   // redaction callers. Static tools add caller/repository strings in more than
   // one place, and a new caller must not be able to bypass the central policy.
-  const safeData = redactValue(data) as T;
-  const { data: bounded, truncated: structuredTruncated } = boundStructuredPayload(safeData);
+  const safeData = redactValue({
+    ...data,
+    output_trust: "untrusted" as const,
+    output_notice: UNTRUSTED_OUTPUT_NOTICE,
+  }) as T;
+  const contentPrefix = `${UNTRUSTED_OUTPUT_NOTICE}\n\n`;
+  const contentBudget = Math.max(1, CHARACTER_LIMIT - contentPrefix.length);
+  const boundedResult = boundStructuredPayload(safeData, contentBudget);
+  let structured = boundedResult.data;
+  const structuredTruncated = boundedResult.truncated;
   const format = options.responseFormat ?? "json";
   const safeMarkdown = options.markdown ? redactedEvidence(options.markdown) : undefined;
-  let text: string;
-  if (format === "markdown" && safeMarkdown && !structuredTruncated) {
-    text = safeMarkdown;
-  } else if (format === "markdown" && safeMarkdown && structuredTruncated) {
-    // Re-serialize from bounded structured data so markdown cannot reintroduce bulk.
-    text = JSON.stringify(bounded, null, 2);
-  } else {
-    text = JSON.stringify(bounded, null, 2);
+
+  const renderMarkdown =
+    format === "markdown" &&
+    safeMarkdown !== undefined &&
+    !structuredTruncated &&
+    safeMarkdown.length <= contentBudget;
+
+  if (
+    format === "markdown" &&
+    safeMarkdown !== undefined &&
+    !renderMarkdown &&
+    !structuredTruncated
+  ) {
+    // The requested Markdown representation exceeded the response budget even
+    // though its structured source did not. Preserve a complete JSON fallback
+    // and mark the representation change instead of slicing Markdown mid-field.
+    structured = boundStructuredPayload(
+      markResponseSizeTruncation(structured),
+      contentBudget,
+    ).data as T;
   }
-  const { text: limited, truncated: textTruncated } = truncateText(text);
-  let structured = bounded;
-  if (structuredTruncated || textTruncated) {
-    structured = boundStructuredPayload(markResponseSizeTruncation(bounded)).data as T;
+
+  let body = renderMarkdown ? safeMarkdown : JSON.stringify(structured, null, 2);
+  if (body.length > contentBudget) {
+    // Pretty-print whitespace can push an otherwise bounded JSON value over the
+    // text-channel limit. Compact serialization stays parseable and represents
+    // the same structuredContent without losing fields mid-token.
+    body = JSON.stringify(structured);
   }
+
+  if (body.length > contentBudget) {
+    // Defensive backstop if a future serializer changes the size calculation.
+    structured = boundStructuredPayload(
+      markResponseSizeTruncation(structured),
+      contentBudget,
+    ).data as T;
+    body = JSON.stringify(structured);
+  }
+
   return {
-    content: [{ type: "text", text: limited }],
+    content: [{ type: "text", text: `${contentPrefix}${body}` }],
     structuredContent: structured as T,
   };
 }

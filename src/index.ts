@@ -11,7 +11,13 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
 import { requireValidLicense } from "./lib/license.js";
+import { redactedEvidence } from "./lib/redact.js";
 import { createServer } from "./server.js";
+
+function safeDiagnostic(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return redactedEvidence(raw).replace(/\s+/g, " ").slice(0, 1_000);
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -31,8 +37,9 @@ async function main(): Promise<void> {
       );
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[secure-mcp] License check failed: ${message}`);
+    // Do not echo license-file paths, environment-derived values, or provider
+    // errors into stderr, which may be collected by a host or CI system.
+    console.error("[secure-mcp] License check failed; refusing to accept connections.");
     process.exit(1);
   }
 
@@ -46,7 +53,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[secure-mcp] Fatal: ${message}`);
+  console.error(`[secure-mcp] Fatal: ${safeDiagnostic(error)}`);
   process.exit(1);
 });

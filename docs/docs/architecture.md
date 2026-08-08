@@ -59,7 +59,7 @@ On startup, `requireValidLicense()` resolves:
 1. `SECURE_MCP_LICENSE_KEY`, or
 2. first non-comment line of `SECURE_MCP_LICENSE_FILE`
 
-Validation is local format checking (`smcp_<token>`). The documented development key is accepted only when `SECURE_MCP_DEV_MODE=1` is set; startup emits a warning in that mode. Invalid/missing keys exit with code `1`, and production keys should be used without DEV_MODE.
+Production keys are locally verified signed tokens (`smcp_<payload>.<base64url-signature>`) using `SECURE_MCP_LICENSE_PUBLIC_KEY`. The documented development key is accepted only when `SECURE_MCP_DEV_MODE=1` is set; startup emits a warning in that mode. Invalid/missing keys exit with code `1`, and production keys should be used without DEV_MODE.
 
 ## Filesystem policy
 

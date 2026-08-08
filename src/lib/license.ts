@@ -1,24 +1,26 @@
 /**
- * Simple v1 license-key gating.
+ * Local license-key gating.
  *
  * Goals for v1:
  * - Fail clearly when the key is missing or invalid
  * - Keep validation local (no network required)
  * - Allow a documented development key for smoke tests
  *
- * Future: optional remote validation can plug into validateLicenseKey().
+ * Production validation is cryptographic and does not require a network call.
  */
 
 import { promises as fs } from "node:fs";
+import { createPublicKey, verify as verifySignature } from "node:crypto";
 
 /** Documented development key for local testing and CI. */
 export const DEV_LICENSE_KEY = "smcp_dev_local_testing_key_v1";
 
 /**
- * License keys must look like: smcp_<token>
- * Token: at least 16 characters of [A-Za-z0-9_-]
+ * Development keys use the documented fixed value. Production keys are
+ * signed opaque tokens: smcp_<payload>.<base64url-signature>. The payload and
+ * signature are verified against the operator-configured public key.
  */
-const LICENSE_PATTERN = /^smcp_[A-Za-z0-9_-]{16,}$/;
+const SIGNED_LICENSE_PATTERN = /^smcp_[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$/;
 
 export interface LicenseResult {
   valid: boolean;
@@ -55,11 +57,8 @@ export async function resolveLicenseKey(): Promise<{
         return { key, source: "file" };
       }
       return { key: null, source: "file" };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Could not read SECURE_MCP_LICENSE_FILE (${filePath}): ${message}`,
-      );
+    } catch {
+      throw new Error("Could not read the configured license file.");
     }
   }
 
@@ -67,8 +66,9 @@ export async function resolveLicenseKey(): Promise<{
 }
 
 /**
- * Validate a license key for v1 (local format + known dev key).
- * Production keys for a future paid tier can share the same format.
+ * Validate a license key locally. The development key is intentionally gated
+ * by DEV_MODE; production keys require a valid detached signature so that a
+ * caller cannot authorize the server with an arbitrary smcp_ token.
  *
  * Dev keys are only accepted when SECURE_MCP_DEV_MODE=1 (for agents, local dev, CI).
  * When DEV_MODE + dev key: allow startup but the caller emits a clear warning on stderr.
@@ -86,37 +86,62 @@ export function validateLicenseKey(key: string | null | undefined): LicenseResul
   }
 
   const trimmed = key.trim();
-  if (!LICENSE_PATTERN.test(trimmed)) {
+  if (trimmed === DEV_LICENSE_KEY) {
+    const devMode = process.env.SECURE_MCP_DEV_MODE === "1";
+    if (!devMode) {
+      return {
+        valid: false,
+        keySource: "env",
+        reason:
+          `Development key ${DEV_LICENSE_KEY} is only permitted when SECURE_MCP_DEV_MODE=1 is set ` +
+          "(for local development, agent testing, and CI smoke tests). " +
+          "For production use, obtain a signed production license and do not set DEV_MODE.",
+        isDevKey: true,
+      };
+    }
+    return { valid: true, keySource: "env", isDevKey: true };
+  }
+
+  if (!SIGNED_LICENSE_PATTERN.test(trimmed)) {
     return {
       valid: false,
       keySource: "env",
       reason:
-        "License key format is invalid. Expected smcp_<token> with a token of at least 16 " +
-        "alphanumeric/underscore/hyphen characters.",
+        "Production license format is invalid. Expected a signed smcp_<payload>.<signature> token.",
     };
   }
 
-  const isDevKey = trimmed === DEV_LICENSE_KEY;
-  const devMode = process.env.SECURE_MCP_DEV_MODE === "1";
-
-  if (isDevKey && !devMode) {
+  const publicKey = process.env.SECURE_MCP_LICENSE_PUBLIC_KEY?.trim();
+  if (!publicKey) {
     return {
       valid: false,
       keySource: "env",
-      reason:
-        `Development key ${DEV_LICENSE_KEY} is only permitted when SECURE_MCP_DEV_MODE=1 is set ` +
-        "(for local development, agent testing, and CI smoke tests). " +
-        "For production use, obtain a production license key and do not set DEV_MODE.",
-      isDevKey: true,
+      reason: "SECURE_MCP_LICENSE_PUBLIC_KEY must be configured for production license validation.",
     };
   }
 
-  // v1: well-formed keys accepted; dev key gated behind DEV_MODE.
-  return {
-    valid: true,
-    keySource: "env",
-    isDevKey,
-  };
+  const separator = trimmed.lastIndexOf(".");
+  const payload = trimmed.slice(0, separator);
+  const encodedSignature = trimmed.slice(separator + 1);
+  try {
+    const publicKeyObject = createPublicKey(publicKey);
+    const signature = Buffer.from(encodedSignature, "base64url");
+    const valid = verifySignature(
+      null,
+      Buffer.from(payload, "utf8"),
+      publicKeyObject,
+      signature,
+    );
+    if (!valid) throw new Error("signature mismatch");
+  } catch {
+    return {
+      valid: false,
+      keySource: "env",
+      reason: "Production license signature validation failed.",
+    };
+  }
+
+  return { valid: true, keySource: "env", isDevKey: false };
 }
 
 /**
