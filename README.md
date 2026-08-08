@@ -94,7 +94,7 @@ The server refuses to start without a valid key (except in DEV_MODE with the doc
 | Environment | `SECURE_MCP_LICENSE_KEY` |
 | File (single line) | `SECURE_MCP_LICENSE_FILE` |
 
-The format is `smcp_<token>`, where the token is at least 16 characters drawn from `[A-Za-z0-9_-]`.
+Production keys use the signed format `smcp_<payload>.<base64url-signature>`. The payload and signature are verified locally with the operator-configured public key.
 
 Development / CI key (for local and agent testing only):
 
@@ -105,7 +105,7 @@ smcp_dev_local_testing_key_v1
 **To use dev key:** set both `SECURE_MCP_DEV_MODE=1` and `SECURE_MCP_LICENSE_KEY=smcp_dev_local_testing_key_v1`.
 The server emits a clear warning on stderr. Never use the dev key in production or with real data.
 
-v1 only validates the format locally (no network calls). A remote validator can be added later without changing tool names.
+Production keys are signed opaque tokens in the form `smcp_<payload>.<base64url-signature>` and are verified locally with `SECURE_MCP_LICENSE_PUBLIC_KEY`; the server fails closed when that public key is missing. No network call is required. The documented development key remains available only with `SECURE_MCP_DEV_MODE=1`.
 
 ## Connect from common MCP clients
 
@@ -233,6 +233,9 @@ fixtures/rn-lib-no-expo/ # react-native dep + non-Expo app.json (detection guard
 | `SECURE_MCP_MAX_FILES` | `400` | Default walk cap |
 | `SECURE_MCP_MAX_FILE_BYTES` | `262144` | Per-file read cap |
 | `SECURE_MCP_MAX_DEPTH` | `12` | Directory depth cap |
+| `SECURE_MCP_MAX_TOTAL_BYTES` | `67108864` | Aggregate file-size cap per walk |
+| `SECURE_MCP_ALLOWED_ROOTS` | (required outside dev mode) | OS-path-delimited canonical roots the tools may inspect |
+| `SECURE_MCP_LICENSE_PUBLIC_KEY` | (required for production keys) | PEM public key used to verify signed license tokens |
 
 ## Documentation
 
@@ -258,7 +261,7 @@ Local docs verification uses `.blume-verify/dist` so it stays separate from the 
 
 ## Security notes
 
-- Tools only read paths under the requested `project_root` (path traversal is blocked).
+- Tools only read paths under the requested `project_root` (path traversal and symlink escapes are blocked); production mode additionally requires `SECURE_MCP_ALLOWED_ROOTS`.
 - The server does **not** execute target project code.
 - Logs go to stderr only (stdout is MCP JSON-RPC).
 - Secret findings redact evidence where practical; still handle outputs carefully.

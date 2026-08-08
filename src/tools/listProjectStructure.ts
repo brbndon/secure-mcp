@@ -8,7 +8,7 @@ import { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
   finalizeInventoryCoverage,
-  normalizeProjectRoot,
+  normalizeAuthorizedProjectRoot,
   profileProject,
   toolError,
   toolSuccess,
@@ -27,7 +27,8 @@ const InputSchema = ProjectRootInput.extend({
     .optional()
     .describe("Maximum directory depth to walk (default 12)"),
   include_extensions: z
-    .array(z.string())
+    .array(z.string().min(1).max(20))
+    .max(50)
     .optional()
     .describe('Optional extension filter, e.g. [".ts", ".swift"]. Include the dot.'),
 }).strict();
@@ -120,7 +121,7 @@ Error Handling:
     },
     async (params: Input) => {
       try {
-        const root = await normalizeProjectRoot(params.project_root);
+        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
         const effectiveMaxDepth = Math.min(
           params.max_depth ?? config.maxDepth,
@@ -131,6 +132,8 @@ Error Handling:
           maxFiles: effectiveMaxFiles,
           maxDepth: effectiveMaxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
         });
         const extensions =
           params.include_extensions && params.include_extensions.length > 0
@@ -141,6 +144,8 @@ Error Handling:
           maxFiles: effectiveMaxFiles,
           maxDepth: effectiveMaxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
           extensions: extensions ?? undefined,
           focusPrefixes: params.focus_paths,
         });

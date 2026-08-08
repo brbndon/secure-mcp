@@ -11,7 +11,7 @@ import {
   findLineNumber,
   finalizeCoverage,
   recordCoverageExclusion,
-  normalizeProjectRoot,
+  normalizeAuthorizedProjectRoot,
   readProjectFile,
   snippetAround,
   toolError,
@@ -89,7 +89,7 @@ export function registerAnalyzeInjectionRisks(
     },
     async (params: Input) => {
       try {
-        const root = await normalizeProjectRoot(params.project_root);
+        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const nextId = createFindingIdFactory("INJ");
         const findings: Finding[] = [];
         const filesScanned: string[] = [];
@@ -114,6 +114,8 @@ export function registerAnalyzeInjectionRisks(
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
           extensions,
           focusPrefixes: params.focus_paths,
         });
@@ -233,7 +235,14 @@ export function registerAnalyzeInjectionRisks(
 
           let content: string;
           try {
-            content = (await readProjectFile(root, file.relativePath, config.maxFileBytes)).content;
+            content = (
+              await readProjectFile(
+                root,
+                file.relativePath,
+                config.maxFileBytes,
+                config.allowedRoots,
+              )
+            ).content;
           } catch {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,

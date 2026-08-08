@@ -9,7 +9,7 @@ import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
   finalizeInventoryCoverage,
-  normalizeProjectRoot,
+  normalizeAuthorizedProjectRoot,
   profileProject,
   readProjectFileIfExists,
   toolError,
@@ -46,6 +46,8 @@ async function detectSurface(
     maxFiles: maxFiles ?? config.defaultMaxFiles,
     maxDepth: config.maxDepth,
     maxFileBytes: config.maxFileBytes,
+    maxTotalBytes: config.maxTotalBytes,
+    allowedRoots: config.allowedRoots,
     focusPrefixes: focusPaths,
   });
   const entrypoints: string[] = [];
@@ -165,13 +167,15 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
     },
     async (params: Input) => {
       try {
-        const root = await normalizeProjectRoot(params.project_root);
+        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
         const profile = await profileProject(root, {
           focusPrefixes: params.focus_paths,
           maxFiles: effectiveMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
         });
         const detected = await detectSurface(root, effectiveMaxFiles, params.focus_paths, config);
         const { surface } = detected;
@@ -183,7 +187,12 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           data_layer_hints: redactedSecretPaths(surface.data_layer_hints),
         };
 
-        const packageJson = await readProjectFileIfExists(root, "package.json", config.maxFileBytes);
+        const packageJson = await readProjectFileIfExists(
+          root,
+          "package.json",
+          config.maxFileBytes,
+          config.allowedRoots,
+        );
         let dependencies: string[] = [];
         if (packageJson) {
           try {

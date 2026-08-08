@@ -10,7 +10,7 @@ import {
   detectWithBudget,
   finalizeCoverage,
   findLineNumber,
-  normalizeProjectRoot,
+  normalizeAuthorizedProjectRoot,
   profileProject,
   recordCoverageExclusion,
   readProjectFile,
@@ -313,13 +313,15 @@ export function registerCheckAuthentication(
     },
     async (params: Input) => {
       try {
-        const root = await normalizeProjectRoot(params.project_root);
+        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
         const profile = await profileProject(root, {
           focusPrefixes: params.focus_paths,
           maxFiles: effectiveMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
         });
         const nextId = createFindingIdFactory("AUTH");
         const findings: Finding[] = [];
@@ -330,6 +332,8 @@ export function registerCheckAuthentication(
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
           extensions: new Set([
             ".ts",
             ".tsx",
@@ -386,7 +390,14 @@ export function registerCheckAuthentication(
           }
           let content: string;
           try {
-            content = (await readProjectFile(root, file.relativePath, config.maxFileBytes)).content;
+            content = (
+              await readProjectFile(
+                root,
+                file.relativePath,
+                config.maxFileBytes,
+                config.allowedRoots,
+              )
+            ).content;
           } catch {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,

@@ -33,7 +33,7 @@ The following are product invariants:
 2. Target code, build scripts, package scripts, plugins, and binaries are never executed.
 3. Stdio stdout remains reserved for MCP JSON-RPC; diagnostics belong on stderr.
 4. File count, directory depth, file size, and response size are bounded. Coverage output records ignored, excluded, reviewed, and truncated scope so “not observed” never means “not scanned.”
-5. Secret-like evidence is redacted before it is returned. Review output must not be used to recover, validate, or operate credentials.
+5. Secret-like evidence is redacted before it is returned. Review output is explicitly marked as untrusted audit data, and invisible control characters are neutralized before it crosses the MCP boundary. Review output must not be used to recover, validate, or operate credentials.
 6. Findings remain remediation-focused and include evidence, control context, proof gaps, and validation guidance rather than attack instructions.
 
 ## Reportable severity

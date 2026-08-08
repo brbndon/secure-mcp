@@ -11,7 +11,7 @@ import {
   findLineNumber,
   finalizeCoverage,
   recordCoverageExclusion,
-  normalizeProjectRoot,
+  normalizeAuthorizedProjectRoot,
   readProjectFile,
   snippetAround,
   toolError,
@@ -89,7 +89,7 @@ export function registerReviewSecrets(
     },
     async (params: Input) => {
       try {
-        const root = await normalizeProjectRoot(params.project_root);
+        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const nextId = createFindingIdFactory("SEC");
         const findings: Finding[] = [];
         const filesScanned: string[] = [];
@@ -99,6 +99,8 @@ export function registerReviewSecrets(
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
           extensions: new Set([
             ".ts",
             ".tsx",
@@ -152,7 +154,14 @@ export function registerReviewSecrets(
 
           let content: string;
           try {
-            content = (await readProjectFile(root, file.relativePath, config.maxFileBytes)).content;
+            content = (
+              await readProjectFile(
+                root,
+                file.relativePath,
+                config.maxFileBytes,
+                config.allowedRoots,
+              )
+            ).content;
           } catch {
             recordCoverageExclusion(coverage, {
               path: file.relativePath,

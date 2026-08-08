@@ -8,7 +8,7 @@ import { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
   finalizeInventoryCoverage,
-  normalizeProjectRoot,
+  normalizeAuthorizedProjectRoot,
   profileProject,
   toolError,
   toolSuccess,
@@ -483,13 +483,15 @@ export function registerBuildRemediationThreatModel(
     },
     async (params: Input) => {
       try {
-        const root = await normalizeProjectRoot(params.project_root);
+        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
         const profile = await profileProject(root, {
           focusPrefixes: params.focus_paths,
           maxFiles: effectiveMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
         });
         const stacks =
           params.stack && params.stack !== "auto" ? [params.stack] : profile.likelyStacks;
@@ -498,6 +500,8 @@ export function registerBuildRemediationThreatModel(
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
           focusPrefixes: params.focus_paths,
         });
 

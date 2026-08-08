@@ -20,8 +20,8 @@ const steps = [
     id: "get-a-license-key",
     number: "02",
     title: "Provide a license key",
-    body: "The server refuses to start without a valid key, set as an environment variable or a single-line file.",
-    code: "export SECURE_MCP_LICENSE_KEY=smcp_<token>\npnpm start",
+    body: "Production uses a signed key plus a configured public key and allowed root; local smoke tests may use the documented dev key with DEV_MODE=1.",
+    code: "export SECURE_MCP_LICENSE_KEY='smcp_<payload>.<base64url-signature>'\nexport SECURE_MCP_LICENSE_PUBLIC_KEY='...PEM public key...'\nexport SECURE_MCP_ALLOWED_ROOTS=/abs/path/repository\npnpm start",
   },
   {
     id: "connect-from-mcp-clients",
@@ -33,7 +33,11 @@ const steps = [
     "secure-mcp": {
       "command": "node",
       "args": ["/abs/path/secure-mcp/dist/index.js"],
-      "env": { "SECURE_MCP_LICENSE_KEY": "smcp_<token>" }
+      "env": {
+        "SECURE_MCP_LICENSE_KEY": "smcp_<payload>.<base64url-signature>",
+        "SECURE_MCP_LICENSE_PUBLIC_KEY": "...PEM public key...",
+        "SECURE_MCP_ALLOWED_ROOTS": "/abs/path/repository"
+      }
     }
   }
 }`,
