@@ -17,8 +17,16 @@ export function sanitizeUntrustedText(value: string): string {
 
 const SECRET_BASENAME_RE =
   /^(?:\.env(?:\.[^/\\:\s]+)?|credentials?(?:\.[^/\\:\s]+)?|service-account(?:\.[^/\\:\s]+)?|GoogleService-Info\.plist|id_(?:rsa|ed25519)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))$/i;
+/**
+ * Secret-like path names embedded in free text. A name must appear in a
+ * path-like context to avoid redacting ordinary prose: either with a filename
+ * extension attached (`credentials.json`, `.env.production`) or directly
+ * after a path separator (`config/.env`, `keys/credentials`). A bare word in
+ * prose ("No hardcoded credentials") stays readable; the same text redacted
+ * through structured fields still goes through redactedSecretPath().
+ */
 const SECRET_PATH_NAME_RE =
-  /(?<![A-Za-z0-9_.-])(?:\.env(?:\.[^/\\:\s]+)?|credentials?(?:\.[^/\\:\s]+)?|service-account(?:\.[^/\\:\s]+)?|GoogleService-Info\.plist|id_(?:rsa|ed25519)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))(?=[:),;\]}\s"'`]|$)/gi;
+  /(?<![A-Za-z0-9_.-])(?:(?:\.env|credentials|service-account|GoogleService-Info\.plist|id_(?:rsa|ed25519))(?:\.[^/\\:\s]+)|(?<=[\\/:])\.env|(?<=[\\/:])credentials|(?<=[\\/:])service-account|(?<=[\\/:])GoogleService-Info\.plist|(?<=[\\/:])id_(?:rsa|ed25519)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))(?=[:),;\]}\s"'`]|$)/gi;
 const LOCATION_SUFFIX_RE = /^(.*?)(:\d+(?::\d+)?)?$/;
 
 /**
@@ -136,7 +144,10 @@ export function redactedEvidence(raw: string): string {
     });
   }
 
-  output = redactedSecretPath(output);
+  // Only path-shaped strings can contain secret basenames; a bare word in
+  // prose must not be treated as a path component. Single filenames with
+  // secret extensions are still caught by SECRET_PATH_NAME_RE below.
+  output = /[\\/]/.test(output) ? redactedSecretPath(output) : output;
   return output.replace(SECRET_PATH_NAME_RE, "[redacted-secret-file]");
 }
 

@@ -46,6 +46,41 @@ describe("secret evidence redaction", () => {
     ]);
   });
 
+  it("keeps ordinary prose mentioning secret-like words readable", () => {
+    assert.equal(redactedEvidence("No hardcoded credentials"), "No hardcoded credentials");
+    assert.equal(
+      redactedEvidence(
+        "Never use discovered credentials against systems — only help owners fix and rotate.",
+      ),
+      "Never use discovered credentials against systems — only help owners fix and rotate.",
+    );
+    assert.equal(
+      redactedEvidence('title "No hardcoded credentials" in a checklist'),
+      'title "No hardcoded credentials" in a checklist',
+    );
+    assert.equal(
+      redactedEvidence("check the .env file for the value"),
+      "check the .env file for the value",
+    );
+  });
+
+  it("redacts secret-like names in path context only", () => {
+    assert.equal(
+      redactedEvidence("config/credentials.json"),
+      "config/[redacted-secret-file]",
+    );
+    assert.equal(redactedEvidence("src/.env"), "src/[redacted-secret-file]");
+    assert.equal(redactedEvidence("src/.env:12"), "src/[redacted-secret-file]:12");
+    assert.equal(
+      redactedEvidence("keys/service-account.json:12:4"),
+      "keys/[redacted-secret-file]:12:4",
+    );
+    assert.equal(
+      redactedEvidence("credentials.json alone in prose"),
+      "[redacted-secret-file] alone in prose",
+    );
+  });
+
   it("redacts secret paths embedded in evidence and location suffixes", () => {
     const safe = redactedEvidence(
       "source=config/.env.production:3; sink=keys/service-account.json:12:4; ordinary=src/auth.ts:9",
