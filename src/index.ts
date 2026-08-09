@@ -8,7 +8,7 @@
  * Logging goes to stderr only (stdout is reserved for MCP protocol traffic).
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { loadConfig } from "./config.js";
 import { redactedEvidence } from "./lib/redact.js";
 import { createServer } from "./server.js";
@@ -26,10 +26,20 @@ async function main(): Promise<void> {
     );
   }
 
-  const server = createServer(config);
-  const transport = new StdioServerTransport();
+  // Keep construction failures startup-fatal before the stdio message pump begins.
+  let validationServer: ReturnType<typeof createServer> | undefined;
+  try {
+    validationServer = createServer(config);
+  } finally {
+    await validationServer?.close();
+  }
 
-  await server.connect(transport);
+  serveStdio(() => createServer(config), {
+    legacy: "serve",
+    onerror: (error) => {
+      console.error(`[secure-mcp] Protocol error: ${safeDiagnostic(error)}`);
+    },
+  });
   console.error(
     `[secure-mcp] ${config.name} v${config.version} running on stdio (Node ${process.version}).`,
   );
