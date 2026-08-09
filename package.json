@@ -1,5 +1,5 @@
 {
-  "name": "secure-mcp",
+  "name": "@brdndon/secure-mcp",
   "version": "1.0.0",
   "description": "Local MCP server for structured, agent-first security audits of TypeScript/Next.js and Swift/SwiftUI codebases",
   "type": "module",
