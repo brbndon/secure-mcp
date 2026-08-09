@@ -152,7 +152,6 @@ The installer requires that explicit allowlist and writes it into each client co
 | Harness | Skill location | MCP server config |
 | --- | --- | --- |
 | pi | `~/.agents/skills/secure-mcp` → checkout | `~/.pi/agent/mcp.json` |
-| Claude Code | `~/.claude/skills/secure-mcp` → checkout | `~/.claude/settings.json` |
 | Cursor | `~/.cursor/skills/secure-mcp` → checkout | `~/.cursor/mcp.json` |
 | OpenAI Codex | `~/.codex/agents/secure-mcp.toml` | `~/.codex/config.toml` |
 
