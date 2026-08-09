@@ -3,7 +3,7 @@
  * Inventory the target codebase tree for defensive secure-code-review scoping.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import {
