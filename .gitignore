@@ -12,6 +12,7 @@ dist/
 
 # Local config
 .secure-mcp.json
+.claude/
 
 # Logs and OS noise
 *.log
