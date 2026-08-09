@@ -26,7 +26,7 @@ This runs type checking, tests, the build and MCP smoke test, documentation buil
 Verify the package name and authenticated npm account before the external action:
 
 ```bash
-npm view secure-mcp
+npm view @brdndon/secure-mcp
 npm whoami
 ```
 
