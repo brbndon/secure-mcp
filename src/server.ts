@@ -2,7 +2,7 @@
  * MCP server factory for secure-mcp.
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { registerAllTools } from "./tools/index.js";
 

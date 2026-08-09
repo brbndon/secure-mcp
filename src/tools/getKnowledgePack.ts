@@ -3,7 +3,7 @@
  * On-demand, capped knowledge packs for progressive agent context loading.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { toolError, toolSuccess } from "../lib/filesystem.js";
 import {

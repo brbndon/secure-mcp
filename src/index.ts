@@ -8,7 +8,7 @@
  * Logging goes to stderr only (stdout is reserved for MCP protocol traffic).
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { loadConfig } from "./config.js";
 import { redactedEvidence } from "./lib/redact.js";
 import { createServer } from "./server.js";
