@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # install-agents.sh — install, verify, or remove the secure-mcp skill and MCP
-# server wiring for the user's coding agents (pi, Claude Code, Cursor, OpenAI Codex).
+# server wiring for the user's coding agents (pi, Cursor, OpenAI Codex).
 #
 # Usage:
 #   SECURE_MCP_ALLOWED_ROOTS=/path/to/repos ./scripts/install-agents.sh install
@@ -21,12 +21,10 @@ INSTALL_HOME="${SECURE_MCP_INSTALL_HOME:-$HOME}"
 
 SKILL_LINKS=(
   "$INSTALL_HOME/.agents/skills/secure-mcp"
-  "$INSTALL_HOME/.claude/skills/secure-mcp"
   "$INSTALL_HOME/.cursor/skills/secure-mcp"
 )
 JSON_CONFIGS=(
   "$INSTALL_HOME/.pi/agent/mcp.json"
-  "$INSTALL_HOME/.claude/settings.json"
   "$INSTALL_HOME/.cursor/mcp.json"
 )
 CODEX_CONFIG="$INSTALL_HOME/.codex/config.toml"
@@ -236,6 +234,26 @@ codex_section_remove() {
   log "codex: removed [mcp_servers.secure-mcp] from $CODEX_CONFIG"
 }
 
+# --- Legacy Claude Code cleanup ----------------------------------------------
+
+# Older versions of this installer also wired Claude Code. Clean up those
+# artifacts when present so upgrading leaves no stale wiring behind.
+LEGACY_CLAUDE_LINK="$INSTALL_HOME/.claude/skills/secure-mcp"
+LEGACY_CLAUDE_CONFIG="$INSTALL_HOME/.claude/settings.json"
+
+cleanup_legacy_claude() {
+  if [ -L "$LEGACY_CLAUDE_LINK" ] && [ "$(readlink "$LEGACY_CLAUDE_LINK")" = "$SKILL_SRC" ]; then
+    rm "$LEGACY_CLAUDE_LINK"
+    log "claude: removed legacy skill link $LEGACY_CLAUDE_LINK"
+  elif [ -e "$LEGACY_CLAUDE_LINK" ]; then
+    warn "legacy Claude skill path $LEGACY_CLAUDE_LINK exists but is not a link to $SKILL_SRC; leaving it alone"
+  fi
+  if [ -f "$LEGACY_CLAUDE_CONFIG" ] && grep -q '"secure-mcp"' "$LEGACY_CLAUDE_CONFIG"; then
+    json_remove "$LEGACY_CLAUDE_CONFIG"
+    log "claude: removed legacy secure-mcp entry from $LEGACY_CLAUDE_CONFIG"
+  fi
+}
+
 # --- Skill symlinks ---------------------------------------------------------
 
 link_skill() {
@@ -297,7 +315,8 @@ cmd_install() {
   mkdir -p "$(dirname "$CODEX_AGENT_DST")"
   cp "$CODEX_AGENT_SRC" "$CODEX_AGENT_DST"
   log "codex: installed agent manifest $CODEX_AGENT_DST"
-  log "done. Restart your agent sessions (pi, Claude Code, Cursor, Codex) to pick up changes."
+  cleanup_legacy_claude
+  log "done. Restart your agent sessions (pi, Cursor, Codex) to pick up changes."
 }
 
 cmd_uninstall() {
@@ -306,11 +325,18 @@ cmd_uninstall() {
   for cfg in "${JSON_CONFIGS[@]}"; do json_remove "$cfg"; log "json: removed secure-mcp from $cfg"; done
   codex_section_remove
   if [ -f "$CODEX_AGENT_DST" ]; then rm -f "$CODEX_AGENT_DST"; log "codex: removed $CODEX_AGENT_DST"; fi
+  cleanup_legacy_claude
   log "done. The repo skill and server are untouched."
 }
 
 cmd_check() {
   local failures=0
+  if [ -L "$LEGACY_CLAUDE_LINK" ] && [ "$(readlink "$LEGACY_CLAUDE_LINK")" = "$SKILL_SRC" ]; then
+    warn "legacy Claude Code skill link still present at $LEGACY_CLAUDE_LINK (re-run install or uninstall to clean up)"
+  fi
+  if [ -f "$LEGACY_CLAUDE_CONFIG" ] && grep -q '"secure-mcp"' "$LEGACY_CLAUDE_CONFIG"; then
+    warn "legacy Claude Code config entry still present in $LEGACY_CLAUDE_CONFIG (re-run install or uninstall to clean up)"
+  fi
   log "checking skill symlinks"
   for target in "${SKILL_LINKS[@]}"; do
     if [ -L "$target" ] && [ "$(readlink "$target")" = "$SKILL_SRC" ]; then
