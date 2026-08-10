@@ -47,7 +47,7 @@ sidebar:
 
 ## Transport
 
-v1 supports **stdio only** (`StdioServerTransport` from `@modelcontextprotocol/server`). The protocol core is stateless (MCP spec `2026-07-28`): no `initialize` handshake or session ID — each request is self-contained, and the SDK falls back to legacy behavior for older clients.
+The server speaks the stateless MCP protocol (spec `2026-07-28`) over **stdio** (`StdioServerTransport` from `@modelcontextprotocol/server`): no `initialize` handshake or session ID — each request is self-contained, and the SDK falls back to legacy behavior for older clients.
 
 - Do **not** log to stdout (corrupts the protocol).
 - Use `console.error` for startup and failure messages.

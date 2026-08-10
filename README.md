@@ -83,6 +83,23 @@ The smoke test scopes itself to the bundled fixtures:
 pnpm smoke
 ```
 
+## MCP v2 protocol support
+
+`secure-mcp` uses MCP SDK v2 and serves stateless stdio connections. Modern clients negotiate protocol version `2026-07-28` through `server/discover` without the legacy `initialize` exchange.
+
+Existing client configuration does not need to change. The server still accepts the v1 handshake used by older clients, with compatibility tested against MCP SDK v1.30.0. Both protocol flows use the same built entrypoint:
+
+```bash
+node /absolute/path/to/secure-mcp/dist/index.js
+```
+
+After updating an existing checkout, reinstall from the lockfile and rebuild the entrypoint before restarting the MCP client:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+```
+
 ## Filesystem authorization
 
 `SECURE_MCP_ALLOWED_ROOTS` is required for tools that read a repository. It is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected.
