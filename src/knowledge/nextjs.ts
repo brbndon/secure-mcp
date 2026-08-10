@@ -7,10 +7,11 @@ import { authWebPack } from "./packs/auth-web.js";
 import type { PackItem } from "./packs/types.js";
 import { webNextPack } from "./packs/web-next.js";
 
+/** @deprecated Prefer PackItem from packs/types — kept for existing imports. */
 export type ChecklistItem = PackItem;
 
 /** Next.js checklist (web-next pack + CSRF item from auth-web for compatibility). */
-export const NEXTJS_CHECKLIST: ChecklistItem[] = [
+export const NEXTJS_CHECKLIST: PackItem[] = [
   ...webNextPack.items,
   ...authWebPack.items.filter((i) => i.id === "AUTHWEB-CSRF"),
 ];

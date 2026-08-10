@@ -50,7 +50,7 @@ const InputSchema = z
           decodedBytes += Buffer.byteLength(JSON.stringify(finding), "utf8");
           if (decodedBytes > MAX_FINDINGS_DECODED_BYTES) {
             ctx.addIssue({
-              code: z.ZodIssueCode.custom,
+              code: "custom",
               message: `findings exceed the total decoded size budget of ${MAX_FINDINGS_DECODED_BYTES} bytes`,
             });
             return;

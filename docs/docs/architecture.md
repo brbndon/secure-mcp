@@ -47,7 +47,7 @@ sidebar:
 
 ## Transport
 
-The server speaks the stateless MCP protocol (spec `2026-07-28`) over **stdio** (`StdioServerTransport` from `@modelcontextprotocol/server`): no `initialize` handshake or session ID — each request is self-contained, and the SDK falls back to legacy behavior for older clients.
+The server speaks the stateless MCP protocol (spec `2026-07-28`) over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained, and the SDK falls back to legacy behavior for older clients (`legacy: "serve"` in `src/index.ts`).
 
 - Do **not** log to stdout (corrupts the protocol).
 - Use `console.error` for startup and failure messages.
