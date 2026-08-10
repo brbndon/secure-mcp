@@ -250,6 +250,36 @@ describe("structural and URI secret redaction", () => {
     assert.ok(!safe.includes("deep value 456"));
   });
 
+  it("preserves quotes and structure for labeled quoted values (no double-apply)", () => {
+    // Overlapping quoted+unquoted portion edits previously dropped closing
+    // quotes, garbled short markers, and truncated JSON after the first secret.
+    assert.equal(
+      redactedEvidence('password="super-secret-value-123456"'),
+      'password="[REDACTED:****]"',
+    );
+    assert.equal(
+      redactedEvidence("password='super-secret-value-123456'"),
+      "password='[REDACTED:****]'",
+    );
+    assert.equal(
+      redactedEvidence("password=`super-secret-value-123456`"),
+      "password=`[REDACTED:****]`",
+    );
+    assert.equal(redactedEvidence('password="short"'), 'password="[REDACTED:****]"');
+    assert.equal(
+      redactedEvidence('{"password": "my secret value 123", "api_key": "another value here"}'),
+      '{"password": "[REDACTED:****]", "api_key": "[REDACTED:****]"}',
+    );
+    assert.equal(
+      redactedEvidence('password="one-secret" token="two-secret"'),
+      'password="[REDACTED:****]" token="[REDACTED:****]"',
+    );
+    assert.equal(
+      redactedEvidence('password="secret-val" config/.env'),
+      'password="[REDACTED:****]" config/[redacted-secret-file]',
+    );
+  });
+
   it("redacts single-quoted and template-quoted labeled values", () => {
     const safe = redactedEvidence(
       "config = { 'client_secret': 'abc def ghi', `token`: `tpl value 789` }",
@@ -257,6 +287,10 @@ describe("structural and URI secret redaction", () => {
     assert.ok(!safe.includes("abc def ghi"));
     assert.ok(!safe.includes("tpl value 789"));
     assert.ok(safe.includes("client_secret"));
+    assert.equal(
+      safe,
+      "config = { 'client_secret': '[REDACTED:****]', `token`: `[REDACTED:****]` }",
+    );
   });
 
   it("redacts YAML block scalars", () => {
@@ -265,6 +299,11 @@ describe("structural and URI secret redaction", () => {
     );
     assert.ok(!safe.includes("first-line-value"));
     assert.ok(!safe.includes("second-line-value"));
+    // Keep the block indicator; body is a single marker (no double-mark of `|`).
+    assert.equal(
+      safe,
+      "api:\n  secret: |\n[REDACTED:****]\n  other: 1",
+    );
   });
 
   it("redacts URI userinfo credentials and keeps the host", () => {
@@ -540,6 +579,16 @@ describe("escaped-markdown secret redaction", () => {
     assert.equal(pathSafe, `config\\/[redacted-secret-file] token\\=[REDACTED:****]`);
     assert.ok(!unescapeOneLayer(pathSafe).includes(assignmentSecret));
     assert.ok(!unescapeOneLayer(pathSafe).includes(".env"));
+  });
+
+  it("preserves pre-escaped quoted assignments without double-apply garble", () => {
+    const quoted = preEscaped(`password="${assignmentSecret}"`);
+    assert.equal(redactedEvidence(quoted), `password\\=\\"[REDACTED:****]\\"`);
+    const multi = preEscaped(`password="${assignmentSecret}" token="${assignmentSecret}"`);
+    assert.equal(
+      redactedEvidence(multi),
+      `password\\=\\"[REDACTED:****]\\" token\\=\\"[REDACTED:****]\\"`,
+    );
   });
 
   it("masks one-layer pre-escaped secrets but not double-escaped input", () => {

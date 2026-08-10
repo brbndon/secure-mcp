@@ -53,43 +53,161 @@ const SECRET_KEYS =
  */
 const SECRET_KEY_SEPARATOR = '\\s*["\'`]?\\s*[:=]\\s*';
 
+const VALUE_MARKER = "[REDACTED:****]";
+const PATH_MARKER = "[redacted-secret-file]";
+
+/** A secret span in original-input coordinates, with its replacement text. */
+interface SecretPortionEdit {
+  start: number;
+  end: number;
+  replacement: string;
+}
+
 /**
- * Secret-value patterns. Whole PEM blocks must run before any BEGIN-only match
+ * One secret-value rule: match on immutable plain text, then record only the
+ * secret portion (not kept labels/quotes). Rules are ordered most-specific
+ * first; overlapping later matches are dropped in collectSecretPortionEdits.
+ */
+interface SecretValueRule {
+  name: string;
+  pattern: RegExp;
+  /** Map a match to a portion edit, or null to skip (e.g. YAML `|` indicator). */
+  portion: (match: RegExpMatchArray, index: number) => SecretPortionEdit | null;
+}
+
+/** Full-span replacement (PEM, standalone tokens, legacy catch-alls). */
+const fullMatchPortion = (match: RegExpMatchArray, index: number): SecretPortionEdit => ({
+  start: index,
+  end: index + match[0].length,
+  replacement: VALUE_MARKER,
+});
+
+/**
+ * YAML block-scalar indicators (`|`, `>`, `|-`, `|+2`, …). The unquoted
+ * labeled rule would otherwise treat them as the secret value and double-mark
+ * the body that the YAML-block rule already covers.
+ */
+const YAML_BLOCK_INDICATOR_RE = /^[|>][+-]?\d*$/;
+
+/**
+ * Secret-value rules. Whole PEM blocks must run before any BEGIN-only match
  * so key material between BEGIN/END is not left in the clear. Structured
  * formats (YAML block scalars, quoted JSON/YAML values, URI userinfo) run
  * before the generic single-line fallback.
  */
-const SECRET_VALUE_PATTERNS: RegExp[] = [
-  /-----BEGIN [^-]+-----[^]*?-----END [^-]+-----/g,
-  /-----BEGIN [^-]+-----[^]*$/g,
-  /((?:authorization|proxy-authorization)\s*[:=]\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
-  // YAML block scalars: labeled key, `|`/`>` indicator, indented body lines.
-  new RegExp(
-    `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}[|>][^\\n]*\\n)((?:[ \\t]+[^\\n]*\\n){1,64})`,
-    "gi",
+const SECRET_VALUE_RULES: readonly SecretValueRule[] = [
+  {
+    name: "pem-block",
+    pattern: /-----BEGIN [^-]+-----[^]*?-----END [^-]+-----/g,
+    portion: fullMatchPortion,
+  },
+  {
+    name: "pem-begin-only",
+    pattern: /-----BEGIN [^-]+-----[^]*$/g,
+    portion: fullMatchPortion,
+  },
+  {
+    name: "authorization-header",
+    pattern:
+      /((?:authorization|proxy-authorization)\s*[:=]\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
+    portion: (match, index) => {
+      const prefix = match[1] ?? "";
+      return {
+        start: index + prefix.length,
+        end: index + match[0].length,
+        replacement: VALUE_MARKER,
+      };
+    },
+  },
+  {
+    name: "yaml-block-scalar",
+    // Labeled key, `|`/`>` indicator, indented body lines.
+    pattern: new RegExp(
+      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}[|>][^\\n]*\\n)((?:[ \\t]+[^\\n]*\\n){1,64})`,
+      "gi",
+    ),
+    portion: (match, index) => {
+      const prefix = match[1] ?? "";
+      return {
+        start: index + prefix.length,
+        end: index + match[0].length,
+        replacement: `${VALUE_MARKER}\n`,
+      };
+    },
+  },
+  {
+    name: "quoted-labeled",
+    // Quoted JSON/YAML/code values (single, double, or template quotes).
+    pattern: new RegExp(
+      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])((?:[^\\\\"'\\\`]|\\\\.){0,2048}?)\\2`,
+      "gi",
+    ),
+    portion: (match, index) => {
+      const prefix = match[1] ?? "";
+      const quote = match[2] ?? "";
+      const value = match[3] ?? "";
+      const valueStart = index + prefix.length + quote.length;
+      return {
+        start: valueStart,
+        end: valueStart + value.length,
+        replacement: VALUE_MARKER,
+      };
+    },
+  },
+  {
+    name: "unquoted-labeled",
+    // Env files, URL query tokens, config. `&` is an RFC 3986 query separator.
+    pattern: new RegExp(
+      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}["'\`]?)([^\\s"'\\\`,;&}]+)(["'\`]*)`,
+      "gi",
+    ),
+    portion: (match, index) => {
+      const prefix = match[1] ?? "";
+      const value = match[2] ?? "";
+      if (YAML_BLOCK_INDICATOR_RE.test(value)) return null;
+      const valueStart = index + prefix.length;
+      return {
+        start: valueStart,
+        end: valueStart + value.length,
+        replacement: VALUE_MARKER,
+      };
+    },
+  },
+  {
+    name: "uri-userinfo",
+    // scheme://user:pass@host (also redis://:pass@).
+    pattern: /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\/@\s]+)@/g,
+    portion: (match, index) => {
+      const scheme = match[1] ?? "";
+      const userinfo = match[2] ?? "";
+      const userStart = index + scheme.length;
+      return {
+        start: userStart,
+        end: userStart + userinfo.length,
+        replacement: VALUE_MARKER,
+      };
+    },
+  },
+  // Standalone token shapes from lib/secret-tokens.ts — same set the secrets
+  // detector uses, so a detected token is always masked here.
+  ...SECRET_TOKEN_REGEXES.map(
+    (pattern, i): SecretValueRule => ({
+      name: `secret-token-${i}`,
+      pattern,
+      portion: fullMatchPortion,
+    }),
   ),
-  // Quoted JSON/YAML/code values (single, double, or template quotes), bounded,
-  // including escaped quotes and multi-line template literals.
-  new RegExp(
-    `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])((?:[^\\\\"'\\\`]|\\\\.){0,2048}?)\\2`,
-    "gi",
-  ),
-  // Unquoted single-line values (env files, URLs' query tokens, config).
-  // `&` is an RFC 3986 query separator, so values stop there and sibling
-  // parameters are preserved.
-  new RegExp(
-    `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}["'\`]?)([^\\s"'\\\`,;&}]+)(["'\`]*)`,
-    "gi",
-  ),
-  // URI userinfo credentials: scheme://user:pass@host (also redis://:pass@).
-  /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\/@\s]+)@/g,
-  // Standalone token shapes from lib/secret-tokens.ts — the same set the
-  // secrets detector uses, so a detected token is always masked here.
-  ...SECRET_TOKEN_REGEXES,
-  /\b(Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
-  // Legacy output-only catch-all (sk_test_, pk_*, malformed ghp*, …). These
-  // conservative masks intentionally have no detector shape.
-  /\b(?:sk|pk|ghp)[A-Za-z0-9_\-]{12,}\b/gi,
+  {
+    name: "bearer-basic",
+    pattern: /\b(Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
+    portion: fullMatchPortion,
+  },
+  {
+    name: "legacy-token-prefix",
+    // Output-only catch-all (sk_test_, pk_*, malformed ghp*, …).
+    pattern: /\b(?:sk|pk|ghp)[A-Za-z0-9_\-]{12,}\b/gi,
+    portion: fullMatchPortion,
+  },
 ];
 
 /** Redact a path whose name commonly identifies credential material. */
@@ -110,136 +228,79 @@ export function redactedSecretPaths(paths: readonly string[]): string[] {
   return paths.map(redactedSecretPath);
 }
 
-const VALUE_MARKER = "[REDACTED:****]";
-const PATH_MARKER = "[redacted-secret-file]";
+/**
+ * Keep the first non-overlapping edit per span. Rules are collected
+ * most-specific-first, so quoted beats unquoted rematch of the same value,
+ * PEM beats inner tokens, etc. Required so applyPortionEditsToEscaped never
+ * double-splices the same origin range (which garbles markers and drops quotes).
+ */
+function dedupeOverlappingEdits(edits: readonly SecretPortionEdit[]): SecretPortionEdit[] {
+  const ranked = edits
+    .map((edit, order) => ({ edit, order }))
+    .filter(({ edit }) => edit.end > edit.start)
+    .sort((a, b) => a.edit.start - b.edit.start || a.order - b.order);
+  const kept: SecretPortionEdit[] = [];
+  for (const { edit } of ranked) {
+    if (kept.some((prior) => edit.start < prior.end && edit.end > prior.start)) continue;
+    kept.push(edit);
+  }
+  return kept;
+}
 
-/** A secret span in original-input coordinates, with its replacement text. */
-interface SecretPortionEdit {
-  start: number;
-  end: number;
-  replacement: string;
+function matchAllGlobal(text: string, pattern: RegExp): RegExpMatchArray[] {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  return [...text.matchAll(new RegExp(pattern.source, flags))];
 }
 
 /**
  * One full policy sweep over untrusted text: value patterns, then whole-path
- * basenames, then embedded path names. Edits record only the secret portion
- * (not kept labels/prefixes) in original coordinates so a de-escaped match
- * can be mapped back onto still-escaped presentation without rewriting it.
+ * basenames, then embedded path names. All matches are taken against the
+ * immutable plain form so later rules never rematch markers. Edits record only
+ * the secret portion in original coordinates so a de-escaped match can be
+ * mapped back onto still-escaped presentation without rewriting it.
  */
 function collectSecretPortionEdits(input: string): SecretPortionEdit[] {
-  let text = sanitizeUntrustedText(input);
-  // Each working-string character maps back to an [start,end) range in input.
-  let cells: Array<{ start: number; end: number }> = Array.from(text, (_, i) => ({
-    start: i,
-    end: i + 1,
-  }));
+  const text = sanitizeUntrustedText(input);
   const edits: SecretPortionEdit[] = [];
 
-  const originRange = (from: number, to: number): { start: number; end: number } => {
-    if (to <= from) {
-      const at = from < cells.length ? cells[from].start : (cells.at(-1)?.end ?? 0);
-      return { start: at, end: at };
-    }
-    return { start: cells[from].start, end: cells[to - 1].end };
-  };
-
-  const replacePortion = (from: number, to: number, replacement: string): void => {
-    if (to <= from) return;
-    const origin = originRange(from, to);
-    edits.push({ start: origin.start, end: origin.end, replacement });
-    const newCells = Array.from(replacement, () => ({
-      start: origin.start,
-      end: origin.end,
-    }));
-    text = text.slice(0, from) + replacement + text.slice(to);
-    cells = cells.slice(0, from).concat(newCells, cells.slice(to));
-  };
-
-  for (let i = 0; i < SECRET_VALUE_PATTERNS.length; i++) {
-    const pattern = SECRET_VALUE_PATTERNS[i];
-    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-    const matches = [...text.matchAll(new RegExp(pattern.source, flags))];
-    for (const match of matches.reverse()) {
+  for (const rule of SECRET_VALUE_RULES) {
+    for (const match of matchAllGlobal(text, rule.pattern)) {
       const index = match.index ?? 0;
-      const full = match[0];
-      switch (i) {
-        case 2: {
-          // Authorization header: keep the label, redact the scheme+token.
-          const prefix = match[1] ?? "";
-          replacePortion(index + prefix.length, index + full.length, VALUE_MARKER);
-          break;
-        }
-        case 3: {
-          // YAML block scalar: keep the key line, redact the body.
-          const prefix = match[1] ?? "";
-          replacePortion(index + prefix.length, index + full.length, `${VALUE_MARKER}\n`);
-          break;
-        }
-        case 4: {
-          // Quoted labeled value: keep key + quotes, redact the value.
-          const prefix = match[1] ?? "";
-          const quote = match[2] ?? "";
-          const value = match[3] ?? "";
-          const valueStart = index + prefix.length + quote.length;
-          replacePortion(valueStart, valueStart + value.length, VALUE_MARKER);
-          break;
-        }
-        case 5: {
-          // Unquoted labeled value: keep key, redact the value.
-          const prefix = match[1] ?? "";
-          const value = match[2] ?? "";
-          const valueStart = index + prefix.length;
-          replacePortion(valueStart, valueStart + value.length, VALUE_MARKER);
-          break;
-        }
-        case 6: {
-          // URI userinfo: keep the scheme and @, redact user:pass.
-          const scheme = match[1] ?? "";
-          const userinfo = match[2] ?? "";
-          const userStart = index + scheme.length;
-          replacePortion(userStart, userStart + userinfo.length, VALUE_MARKER);
-          break;
-        }
-        default:
-          replacePortion(index, index + full.length, VALUE_MARKER);
-          break;
-      }
+      const edit = rule.portion(match, index);
+      if (edit && edit.end > edit.start) edits.push(edit);
     }
   }
 
-  // Basename pass: whole path segments that look like credential files.
-  // Re-scan after each edit because replacements change offsets.
-  for (let guard = 0; guard < 64; guard++) {
+  // Basename pass: every path segment that looks like a credential file.
+  {
     let offset = 0;
-    let replaced = false;
     const parts = text.split("/");
     for (let p = 0; p < parts.length; p++) {
       const part = parts[p];
       const loc = LOCATION_SUFFIX_RE.exec(part);
       const basename = loc?.[1] ?? part;
       if (SECRET_BASENAME_RE.test(basename)) {
-        replacePortion(offset, offset + basename.length, PATH_MARKER);
-        replaced = true;
-        break;
+        edits.push({
+          start: offset,
+          end: offset + basename.length,
+          replacement: PATH_MARKER,
+        });
       }
       offset += part.length + (p < parts.length - 1 ? 1 : 0);
     }
-    if (!replaced) break;
   }
 
-  // Embedded path tokens in free text (after basename pass).
-  {
-    const flags = SECRET_PATH_NAME_RE.flags.includes("g")
-      ? SECRET_PATH_NAME_RE.flags
-      : `${SECRET_PATH_NAME_RE.flags}g`;
-    const pathMatches = [...text.matchAll(new RegExp(SECRET_PATH_NAME_RE.source, flags))];
-    for (const match of pathMatches.reverse()) {
-      const index = match.index ?? 0;
-      replacePortion(index, index + match[0].length, PATH_MARKER);
-    }
+  // Embedded path tokens in free text (after basename candidates).
+  for (const match of matchAllGlobal(text, SECRET_PATH_NAME_RE)) {
+    const index = match.index ?? 0;
+    edits.push({
+      start: index,
+      end: index + match[0].length,
+      replacement: PATH_MARKER,
+    });
   }
 
-  return edits;
+  return dedupeOverlappingEdits(edits);
 }
 
 /** Punctuation that escapeMarkdown escapes with a leading backslash. */
@@ -285,6 +346,8 @@ function buildDeescapeMap(text: string): DeescapeMap {
  * Apply secret-portion edits (in de-escaped coordinates) onto the still-escaped
  * original via the de-escape map. Only secret spans are replaced; every
  * untouched character — including Markdown backslash escapes — is preserved.
+ * Right-to-left apply with non-overlapping plain spans keeps original escape
+ * indices valid; any residual overlap is skipped as a safety net.
  */
 function applyPortionEditsToEscaped(
   escaped: string,
@@ -294,11 +357,19 @@ function applyPortionEditsToEscaped(
 ): string {
   if (edits.length === 0) return escaped;
   let result = escaped;
-  for (const edit of [...edits].sort((a, b) => b.start - a.start)) {
-    if (edit.end <= edit.start) continue;
+  // Right-to-left so earlier (left) indices stay valid on the mutated string.
+  const ordered = [...edits]
+    .filter((edit) => edit.end > edit.start)
+    .sort((a, b) => b.start - a.start || b.end - a.end);
+  let minPlainStart = Number.POSITIVE_INFINITY;
+  for (const edit of ordered) {
+    // Skip if this plain span overlaps an already-applied (further-right) edit.
+    if (edit.end > minPlainStart) continue;
     const escStart = origStart[edit.start] ?? escaped.length;
     const escEnd = origEnd[edit.end - 1] ?? escaped.length;
+    if (escEnd <= escStart) continue;
     result = result.slice(0, escStart) + edit.replacement + result.slice(escEnd);
+    minPlainStart = edit.start;
   }
   return result;
 }
