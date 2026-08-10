@@ -1,21 +1,31 @@
 /**
  * Tool: secure_mcp_analyze_injection_risks
  * Defensive identification of injection-class weaknesses for remediation.
+ *
+ * Routing rules:
+ * - Auto mode profiles the project and configures only the detector families
+ *   for the detected stacks (core is always available; Next.js and Swift
+ *   families only when those stacks are present).
+ * - Forced stacks configure only their own language families, so a forced
+ *   Swift scan never runs TypeScript-family detectors on a mixed inventory.
+ * - Every detector family declares explicit file-extension applicability;
+ *   a file is scanned only by patterns that apply to its extension.
+ * - applied_pack_ids derives from detector families that actually evaluated
+ *   successfully opened content; configured/consulted packs stay separate in
+ *   knowledge_pack_traceability.
  */
 
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 import {
   detectWithBudget,
   findLineNumber,
-  finalizeCoverage,
-  recordCoverageExclusion,
   normalizeAuthorizedProjectRoot,
+  profileProject,
   readProjectFile,
   snippetAround,
-  toolError,
-  toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
 import {
@@ -24,8 +34,8 @@ import {
   redactFindings,
   redactedSecretPaths,
 } from "../lib/redact.js";
-import { escapeMarkdown } from "../lib/markdown.js";
-import type { Finding, StackFocus } from "../lib/types.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
+import { SEVERITY_ORDER, type Finding, type StackFocus } from "../lib/types.js";
 import {
   buildFinding,
   createFindingIdFactory,
@@ -38,7 +48,7 @@ import {
   SWIFT_CRYPTO_PATTERNS,
   SWIFT_INJECTION_PATTERNS,
 } from "../knowledge/swift.js";
-import type { PackId } from "../knowledge/packs/registry.js";
+import { uniquePackIds, type PackId } from "../knowledge/packs/registry.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
@@ -51,23 +61,230 @@ Returns: findings[] using the shared Finding schema (evidence → classification
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
-function swiftPatternAppliesToFile(
-  pattern: { id: string; extensions?: string[] },
+type InjectionStackFocus = StackFocus | "auto";
+
+/** Detector families the tool can configure, keyed by their stable id. */
+export const INJECTION_DETECTOR_FAMILIES = [
+  "core.injection",
+  "web-next.injection",
+  "swift-ios.injection",
+  "swift-ios.configuration",
+  "swift-ios.cryptography",
+] as const;
+export type InjectionDetectorFamily = (typeof INJECTION_DETECTOR_FAMILIES)[number];
+
+const PACK_ID_BY_DETECTOR_FAMILY: Record<InjectionDetectorFamily, PackId> = {
+  "core.injection": "core",
+  "web-next.injection": "web-next",
+  "swift-ios.injection": "swift-ios",
+  "swift-ios.configuration": "swift-ios",
+  "swift-ios.cryptography": "swift-ios",
+};
+
+/**
+ * Which pattern stacks a forced focus may run. Swift is exclusive: its
+ * detectors never run over TypeScript/JavaScript inventories, and the core
+ * family (JS-flavored shapes) is not configured for Swift-only scans.
+ */
+const PATTERN_STACKS_BY_FOCUS: Record<StackFocus, StackFocus[]> = {
+  common: ["common"],
+  typescript: ["common", "typescript"],
+  nextjs: ["common", "typescript", "nextjs"],
+  expo: ["common", "typescript", "expo"],
+  swift: ["swift"],
+};
+
+/**
+ * Explicit extension applicability for detector families instead of "every
+ * non-Swift file". TS/JS-shaped patterns never scan plist/xml/markdown trees
+ * by default; the common core pattern (INJ-SQL-CONCAT) additionally applies to
+ * Markdown so security documentation is still reviewed.
+ */
+export const JS_CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+const COMMON_CORE_EXTENSIONS = [...JS_CODE_EXTENSIONS, ".md"];
+
+/** Exported for tests: does a pattern's family apply to this file extension? */
+export function injectionPatternAppliesToFile(
+  pattern: { extensions?: string[] },
   fileExt: string,
 ): boolean {
-  const allowed = pattern.extensions ?? [".swift"];
-  if (allowed.includes(fileExt)) return true;
-  if (
-    (pattern.id === "SWIFT-ATS-ARBITRARY" || pattern.id === "SWIFT-ATS-EXCEPTION") &&
-    (fileExt === ".plist" || fileExt === ".xml")
-  ) {
-    return true;
-  }
-  return false;
+  return (pattern.extensions ?? JS_CODE_EXTENSIONS).includes(fileExt);
 }
 
-export function shouldRunNextjsInjectionDetectors(stack: "auto" | StackFocus): boolean {
-  return stack === "auto" || stack === "nextjs";
+/** Exported for tests: Next.js detectors run only for nextjs focus or detected nextjs. */
+export function shouldRunNextjsInjectionDetectors(
+  stack: InjectionStackFocus,
+  detectedStacks?: readonly StackFocus[],
+): boolean {
+  if (stack === "auto") return detectedStacks?.includes("nextjs") === true;
+  return stack === "nextjs";
+}
+
+/** Exported for tests: Swift detectors run only for swift focus or detected swift. */
+export function shouldRunSwiftInjectionDetectors(
+  stack: InjectionStackFocus,
+  detectedStacks?: readonly StackFocus[],
+): boolean {
+  if (stack === "auto") return detectedStacks?.includes("swift") === true;
+  return stack === "swift";
+}
+
+function shouldRunCoreInjectionDetectors(stack: InjectionStackFocus): boolean {
+  // The common core family is the stack-agnostic baseline: available under
+  // auto and every non-Swift forced focus, never under a forced Swift scan.
+  if (stack === "auto") return true;
+  return stack !== "swift";
+}
+
+/** Exported for tests: detector families configured for a stack focus. */
+export function injectionDetectorFamiliesForStack(
+  stack: InjectionStackFocus,
+  detectedStacks?: readonly StackFocus[],
+): InjectionDetectorFamily[] {
+  const families: InjectionDetectorFamily[] = [];
+  if (shouldRunCoreInjectionDetectors(stack)) families.push("core.injection");
+  if (shouldRunNextjsInjectionDetectors(stack, detectedStacks)) families.push("web-next.injection");
+  if (shouldRunSwiftInjectionDetectors(stack, detectedStacks)) {
+    families.push(
+      "swift-ios.injection",
+      "swift-ios.configuration",
+      "swift-ios.cryptography",
+    );
+  }
+  return families;
+}
+
+/** Exported for tests: packs behind the configured families (consulted). */
+export function injectionPackIdsForStack(
+  stack: InjectionStackFocus,
+  detectedStacks?: readonly StackFocus[],
+): PackId[] {
+  return uniquePackIds(
+    injectionDetectorFamiliesForStack(stack, detectedStacks).map(
+      (family) => PACK_ID_BY_DETECTOR_FAMILY[family],
+    ),
+  );
+}
+
+/** Exported for tests: packs behind families that actually evaluated content. */
+export function appliedInjectionPackIds(evaluatedFamilies: readonly string[]): PackId[] {
+  const set = new Set(evaluatedFamilies);
+  const ids: PackId[] = [];
+  for (const family of INJECTION_DETECTOR_FAMILIES) {
+    if (!set.has(family)) continue;
+    const packId = PACK_ID_BY_DETECTOR_FAMILY[family];
+    if (packId && !ids.includes(packId)) ids.push(packId);
+  }
+  return ids;
+}
+
+interface InjectionPattern {
+  id: string;
+  title: string;
+  regex: RegExp;
+  severity: Finding["severity"];
+  cwe?: string;
+  remediation: string;
+  impact: string;
+  stack: Finding["stack"];
+  confidence?: Finding["confidence"];
+  category?: string;
+  extensions?: string[];
+  filter?: (match: string, content: string) => boolean;
+  packId: PackId;
+  detectorFamily: InjectionDetectorFamily;
+}
+
+/** Decorate knowledge patterns with explicit applicability and routing ids. */
+function coreInjectionPatterns(patternStacks: readonly StackFocus[]): InjectionPattern[] {
+  return INJECTION_PATTERNS.filter((p) => patternStacks.includes(p.stack)).map((p) => ({
+    id: p.id,
+    title: p.title,
+    regex: p.regex,
+    severity: p.severity,
+    cwe: p.cwe,
+    remediation: p.recommendation,
+    impact: p.impact_if_unremediated,
+    stack: p.stack,
+    confidence: "medium",
+    category: "injection-risk",
+    extensions: p.stack === "common" ? COMMON_CORE_EXTENSIONS : JS_CODE_EXTENSIONS,
+    packId: "core",
+    detectorFamily: "core.injection",
+  }));
+}
+
+function webNextInjectionPatterns(): InjectionPattern[] {
+  return NEXTJS_PATTERNS.filter(
+    (p) => !p.id.includes("PUBLIC") && !p.id.includes("USE-CLIENT"),
+  ).map((p) => ({
+    id: p.id,
+    title: p.title,
+    regex: p.regex,
+    severity: p.severity,
+    cwe: p.cwe,
+    remediation: p.recommendation,
+    impact: p.impact_if_unremediated,
+    stack: "nextjs",
+    confidence: "medium",
+    category: "injection-risk",
+    extensions: JS_CODE_EXTENSIONS,
+    packId: "web-next",
+    detectorFamily: "web-next.injection",
+  }));
+}
+
+function swiftInjectionPatterns(): InjectionPattern[] {
+  return [
+    ...SWIFT_INJECTION_PATTERNS,
+    ...SWIFT_CONFIG_PATTERNS,
+    ...SWIFT_CRYPTO_PATTERNS,
+  ].map((p) => ({
+    id: p.id,
+    title: p.title,
+    regex: p.regex,
+    severity: p.severity,
+    cwe: p.cwe,
+    remediation: p.recommendation,
+    impact: p.impact_if_unremediated,
+    stack: "swift",
+    confidence: p.confidence,
+    category: p.category,
+    extensions: p.extensions ?? [".swift"],
+    filter: p.filter,
+    packId: "swift-ios",
+    detectorFamily:
+      p.category === "configuration"
+        ? "swift-ios.configuration"
+        : p.category === "cryptography"
+          ? "swift-ios.cryptography"
+          : "swift-ios.injection",
+  }));
+}
+
+function buildInjectionPatterns(
+  stack: InjectionStackFocus,
+  detectedStacks: readonly StackFocus[],
+): InjectionPattern[] {
+  const families = injectionDetectorFamiliesForStack(stack, detectedStacks);
+  const patterns: InjectionPattern[] = [];
+  if (families.includes("core.injection")) {
+    // Under a forced focus, only the pattern stacks of that focus run (a
+    // forced common scan never runs TypeScript-only core patterns). Auto
+    // always keeps the full core family; extension applicability guards it.
+    const coreStacks: StackFocus[] =
+      stack === "auto" ? ["common", "typescript"] : PATTERN_STACKS_BY_FOCUS[stack];
+    patterns.push(...coreInjectionPatterns(coreStacks));
+  }
+  if (families.includes("web-next.injection")) patterns.push(...webNextInjectionPatterns());
+  if (
+    families.includes("swift-ios.injection") ||
+    families.includes("swift-ios.configuration") ||
+    families.includes("swift-ios.cryptography")
+  ) {
+    patterns.push(...swiftInjectionPatterns());
+  }
+  return patterns;
 }
 
 export function registerAnalyzeInjectionRisks(
@@ -95,6 +312,27 @@ export function registerAnalyzeInjectionRisks(
         const filesScanned: string[] = [];
 
         const stack = params.stack ?? "auto";
+        // Auto mode routes by the stacks detected in the actual project, so a
+        // Swift-only repo never configures Next.js families (and vice versa).
+        const profile =
+          stack === "auto"
+            ? await profileProject(root, {
+                focusPrefixes: params.focus_paths,
+                maxFiles: params.max_files ?? config.defaultMaxFiles,
+                maxDepth: config.maxDepth,
+                maxFileBytes: config.maxFileBytes,
+                maxTotalBytes: config.maxTotalBytes,
+                allowedRoots: config.allowedRoots,
+              })
+            : undefined;
+        const detectedStacks = (profile?.likelyStacks ?? []) as StackFocus[];
+        const patterns = buildInjectionPatterns(stack, detectedStacks);
+        const consultedPackIds = uniquePackIds(patterns.map((pattern) => pattern.packId));
+        const detectorFamiliesAvailable = new Set(
+          injectionDetectorFamiliesForStack(stack, detectedStacks),
+        );
+        const detectorFamiliesRun = new Set<InjectionDetectorFamily>();
+
         const extensions = new Set([
           ".ts",
           ".tsx",
@@ -110,7 +348,7 @@ export function registerAnalyzeInjectionRisks(
           ".md",
         ]);
 
-        const { files, coverage } = await walkProject(root, {
+        const { files, coverageSession } = await walkProject(root, {
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
@@ -120,101 +358,9 @@ export function registerAnalyzeInjectionRisks(
           focusPrefixes: params.focus_paths,
         });
 
-        const patterns: {
-          id: string;
-          title: string;
-          regex: RegExp;
-          severity: Finding["severity"];
-          cwe?: string;
-          remediation: string;
-          impact: string;
-          stack: Finding["stack"];
-          confidence?: Finding["confidence"];
-          category?: string;
-          extensions?: string[];
-          filter?: (match: string, content: string) => boolean;
-          packId: PackId;
-          detectorFamily: string;
-        }[] = [];
-
-        if (
-          stack === "auto" ||
-          stack === "common" ||
-          stack === "typescript" ||
-          stack === "nextjs"
-        ) {
-          for (const p of INJECTION_PATTERNS) {
-            patterns.push({
-              id: p.id,
-              title: p.title,
-              regex: p.regex,
-              severity: p.severity,
-              cwe: p.cwe,
-              remediation: p.recommendation,
-              impact: p.impact_if_unremediated,
-              stack: p.stack,
-              confidence: "medium",
-              category: "injection-risk",
-              packId: "core",
-              detectorFamily: "core.injection",
-            });
-          }
-        }
-        if (shouldRunNextjsInjectionDetectors(stack)) {
-          for (const p of NEXTJS_PATTERNS) {
-            if (p.id.includes("PUBLIC") || p.id.includes("USE-CLIENT")) continue;
-            patterns.push({
-              id: p.id,
-              title: p.title,
-              regex: p.regex,
-              severity: p.severity,
-              cwe: p.cwe,
-              remediation: p.recommendation,
-              impact: p.impact_if_unremediated,
-              stack: "nextjs",
-              confidence: "medium",
-              category: "injection-risk",
-              packId: "web-next",
-              detectorFamily: "web-next.injection",
-            });
-          }
-        }
-        if (stack === "auto" || stack === "swift") {
-          for (const p of [
-            ...SWIFT_INJECTION_PATTERNS,
-            ...SWIFT_CONFIG_PATTERNS,
-            ...SWIFT_CRYPTO_PATTERNS,
-          ]) {
-            patterns.push({
-              id: p.id,
-              title: p.title,
-              regex: p.regex,
-              severity: p.severity,
-              cwe: p.cwe,
-              remediation: p.recommendation,
-              impact: p.impact_if_unremediated,
-              stack: "swift",
-              confidence: p.confidence,
-              category: p.category,
-              extensions: p.extensions,
-              filter: p.filter,
-              packId: "swift-ios",
-              detectorFamily:
-                p.category === "configuration"
-                  ? "swift-ios.configuration"
-                  : p.category === "cryptography"
-                    ? "swift-ios.cryptography"
-                    : "swift-ios.injection",
-            });
-          }
-        }
-
-        const consultedPackIds = [...new Set(patterns.map((pattern) => pattern.packId))];
-        const detectorFamiliesRun = new Set<string>();
-
         for (const file of files) {
           if (file.size > config.maxFileBytes) {
-            recordCoverageExclusion(coverage, {
+            coverageSession.recordExclusion({
               path: file.relativePath,
               kind: "file",
               reason: "max_file_bytes",
@@ -225,10 +371,24 @@ export function registerAnalyzeInjectionRisks(
             file.relativePath.endsWith(".md") &&
             !file.relativePath.toLowerCase().includes("security")
           ) {
-            recordCoverageExclusion(coverage, {
+            coverageSession.recordExclusion({
               path: file.relativePath,
               kind: "file",
               reason: "non_security_documentation",
+            });
+            continue;
+          }
+
+          // Explicit per-family extension applicability: a file is scanned
+          // only by the patterns whose families declare its extension.
+          const applicablePatterns = patterns.filter((pattern) =>
+            injectionPatternAppliesToFile(pattern, file.ext),
+          );
+          if (applicablePatterns.length === 0) {
+            coverageSession.recordExclusion({
+              path: file.relativePath,
+              kind: "file",
+              reason: "no_applicable_injection_detectors",
             });
             continue;
           }
@@ -244,7 +404,7 @@ export function registerAnalyzeInjectionRisks(
               )
             ).content;
           } catch {
-            recordCoverageExclusion(coverage, {
+            coverageSession.recordExclusion({
               path: file.relativePath,
               kind: "file",
               reason: "file_read_error",
@@ -252,17 +412,9 @@ export function registerAnalyzeInjectionRisks(
             continue;
           }
           filesScanned.push(file.relativePath);
+          coverageSession.recordReviewedFile(file.relativePath);
 
-          for (const pattern of patterns) {
-            if (pattern.stack === "swift" && !swiftPatternAppliesToFile(pattern, file.ext)) {
-              continue;
-            }
-            if (
-              (pattern.stack === "typescript" || pattern.stack === "nextjs") &&
-              file.ext === ".swift"
-            ) {
-              continue;
-            }
+          for (const pattern of applicablePatterns) {
             detectorFamiliesRun.add(pattern.detectorFamily);
 
             let hits = 0;
@@ -312,10 +464,10 @@ export function registerAnalyzeInjectionRisks(
           }
         }
 
-        const order = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
-        findings.sort((a, b) => order[b.severity] - order[a.severity]);
-        const finalizedCoverage = finalizeCoverage(coverage, filesScanned, findings);
+        findings.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
+        const finalizedCoverage = coverageSession.finish(findings);
         const safeFindings = redactFindings(findings);
+        const appliedPackIds = appliedInjectionPackIds([...detectorFamiliesRun]);
 
         const data = {
           ok: true as const,
@@ -326,16 +478,13 @@ export function registerAnalyzeInjectionRisks(
           files_reviewed: redactedSecretPaths(filesScanned),
           truncated: finalizedCoverage.truncation.truncated,
           coverage: redactCoverageReport(finalizedCoverage),
-          applied_pack_ids: consultedPackIds,
+          applied_pack_ids: appliedPackIds,
           knowledge_pack_traceability: {
             consulted_pack_ids: consultedPackIds,
-            detector_families_run: [...detectorFamiliesRun],
-            detector_families_not_run: consultedPackIds.length
-              ? patterns
-                  .map((pattern) => pattern.detectorFamily)
-                  .filter((family, index, all) => all.indexOf(family) === index)
-                  .filter((family) => !detectorFamiliesRun.has(family))
-              : [],
+            detector_families_run: [...detectorFamiliesRun].sort(),
+            detector_families_not_run: [...detectorFamiliesAvailable]
+              .filter((family) => !detectorFamiliesRun.has(family))
+              .sort(),
             consulted_via: "bundled detector mappings; no remote pack lookup",
           },
           notes: [
@@ -346,18 +495,12 @@ export function registerAnalyzeInjectionRisks(
           ],
         };
 
-        const md = [
-          `# Injection-risk review (remediation focused)`,
-          data.summary,
-          "",
-          ...safeFindings.slice(0, 50).map(
-            (f) =>
-              `### ${escapeMarkdown(f.id)} [${escapeMarkdown(f.severity)}] ${escapeMarkdown(f.title)}\n` +
-              `- Evidence: ${escapeMarkdown(`${f.file ?? "?"}:${f.line ?? "?"}`)}\n` +
-              `- Impact if unremediated: ${escapeMarkdown(f.impact_if_unremediated)}\n` +
-              `- Remediation: ${escapeMarkdown(f.remediation)}\n`,
-          ),
-        ].join("\n");
+        const md = renderMarkdownDocument({
+          title: "Injection-risk review (remediation focused)",
+          summary: data.summary,
+          findings: safeFindings.slice(0, 50),
+          findingOptions: { detail: "compact", headingLevel: 3 },
+        });
 
         return toolSuccess(data, {
           responseFormat: params.response_format,

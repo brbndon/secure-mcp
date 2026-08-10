@@ -1,4 +1,5 @@
 import type { CoverageReport, Finding } from "./types.js";
+import { SECRET_TOKEN_REGEXES } from "./secret-tokens.js";
 
 /**
  * Repository and caller-controlled strings can cross into an agent context.
@@ -16,7 +17,7 @@ export function sanitizeUntrustedText(value: string): string {
 }
 
 const SECRET_BASENAME_RE =
-  /^(?:\.env(?:\.[^/\\:\s]+)?|credentials?(?:\.[^/\\:\s]+)?|service-account(?:\.[^/\\:\s]+)?|GoogleService-Info\.plist|id_(?:rsa|ed25519)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))$/i;
+  /^(?:\.env(?:\.[^/\\:\s]+)?|credentials?(?:\.[^/\\:\s]+)?|service-account(?:\.[^/\\:\s]+)?|GoogleService-Info\.plist|id_(?:rsa|ed25519)|\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))$/i;
 /**
  * Secret-like path names embedded in free text. A name must appear in a
  * path-like context to avoid redacting ordinary prose: either with a filename
@@ -82,10 +83,13 @@ const SECRET_VALUE_PATTERNS: RegExp[] = [
   ),
   // URI userinfo credentials: scheme://user:pass@host (also redis://:pass@).
   /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\/@\s]+)@/g,
-  /\bAKIA[0-9A-Z]{16}\b/gi,
+  // Standalone token shapes from lib/secret-tokens.ts — the same set the
+  // secrets detector uses, so a detected token is always masked here.
+  ...SECRET_TOKEN_REGEXES,
   /\b(Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
-  /\b(?:sk|pk|ghp|github_pat|xox[baprs]-)[A-Za-z0-9_\-]{12,}\b/gi,
+  // Legacy output-only catch-all (sk_test_, pk_*, malformed ghp*, …). These
+  // conservative masks intentionally have no detector shape.
+  /\b(?:sk|pk|ghp)[A-Za-z0-9_\-]{12,}\b/gi,
 ];
 
 /** Redact a path whose name commonly identifies credential material. */
@@ -106,56 +110,212 @@ export function redactedSecretPaths(paths: readonly string[]): string[] {
   return paths.map(redactedSecretPath);
 }
 
-/** Redact secret-like values while preserving enough context for remediation. */
-export function redactedEvidence(raw: string): string {
-  const marker = "[REDACTED:****]";
-  let output = sanitizeUntrustedText(raw);
+const VALUE_MARKER = "[REDACTED:****]";
+const PATH_MARKER = "[redacted-secret-file]";
+
+/** A secret span in original-input coordinates, with its replacement text. */
+interface SecretPortionEdit {
+  start: number;
+  end: number;
+  replacement: string;
+}
+
+/**
+ * One full policy sweep over untrusted text: value patterns, then whole-path
+ * basenames, then embedded path names. Edits record only the secret portion
+ * (not kept labels/prefixes) in original coordinates so a de-escaped match
+ * can be mapped back onto still-escaped presentation without rewriting it.
+ */
+function collectSecretPortionEdits(input: string): SecretPortionEdit[] {
+  let text = sanitizeUntrustedText(input);
+  // Each working-string character maps back to an [start,end) range in input.
+  let cells: Array<{ start: number; end: number }> = Array.from(text, (_, i) => ({
+    start: i,
+    end: i + 1,
+  }));
+  const edits: SecretPortionEdit[] = [];
+
+  const originRange = (from: number, to: number): { start: number; end: number } => {
+    if (to <= from) {
+      const at = from < cells.length ? cells[from].start : (cells.at(-1)?.end ?? 0);
+      return { start: at, end: at };
+    }
+    return { start: cells[from].start, end: cells[to - 1].end };
+  };
+
+  const replacePortion = (from: number, to: number, replacement: string): void => {
+    if (to <= from) return;
+    const origin = originRange(from, to);
+    edits.push({ start: origin.start, end: origin.end, replacement });
+    const newCells = Array.from(replacement, () => ({
+      start: origin.start,
+      end: origin.end,
+    }));
+    text = text.slice(0, from) + replacement + text.slice(to);
+    cells = cells.slice(0, from).concat(newCells, cells.slice(to));
+  };
+
   for (let i = 0; i < SECRET_VALUE_PATTERNS.length; i++) {
     const pattern = SECRET_VALUE_PATTERNS[i];
-    pattern.lastIndex = 0;
-    output = output.replace(pattern, (...args: unknown[]) => {
-      const match = args[0];
-      if (typeof match !== "string") return marker;
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    const matches = [...text.matchAll(new RegExp(pattern.source, flags))];
+    for (const match of matches.reverse()) {
+      const index = match.index ?? 0;
+      const full = match[0];
       switch (i) {
         case 2: {
-          // Authorization header: keep the label.
-          const prefix = typeof args[1] === "string" ? args[1] : "";
-          return `${prefix}${marker}`;
+          // Authorization header: keep the label, redact the scheme+token.
+          const prefix = match[1] ?? "";
+          replacePortion(index + prefix.length, index + full.length, VALUE_MARKER);
+          break;
         }
         case 3: {
-          // YAML block scalar: keep the key line, replace the body.
-          const prefix = typeof args[1] === "string" ? args[1] : "";
-          return `${prefix}${marker}\n`;
+          // YAML block scalar: keep the key line, redact the body.
+          const prefix = match[1] ?? "";
+          replacePortion(index + prefix.length, index + full.length, `${VALUE_MARKER}\n`);
+          break;
         }
         case 4: {
-          // Quoted labeled value: keep key + surrounding quotes.
-          const prefix = typeof args[1] === "string" ? args[1] : "";
-          const quote = typeof args[2] === "string" ? args[2] : "";
-          return `${prefix}${quote}${marker}${quote}`;
+          // Quoted labeled value: keep key + quotes, redact the value.
+          const prefix = match[1] ?? "";
+          const quote = match[2] ?? "";
+          const value = match[3] ?? "";
+          const valueStart = index + prefix.length + quote.length;
+          replacePortion(valueStart, valueStart + value.length, VALUE_MARKER);
+          break;
         }
         case 5: {
-          // Unquoted labeled value: keep key + optional trailing quote.
-          const prefix = typeof args[1] === "string" ? args[1] : "";
-          const suffix = typeof args[3] === "string" ? args[3] : "";
-          return `${prefix}${marker}${suffix}`;
+          // Unquoted labeled value: keep key, redact the value.
+          const prefix = match[1] ?? "";
+          const value = match[2] ?? "";
+          const valueStart = index + prefix.length;
+          replacePortion(valueStart, valueStart + value.length, VALUE_MARKER);
+          break;
         }
         case 6: {
-          // URI userinfo: keep the scheme, redact user:pass.
-          const scheme = typeof args[1] === "string" ? args[1] : "";
-          return `${scheme}${marker}@`;
+          // URI userinfo: keep the scheme and @, redact user:pass.
+          const scheme = match[1] ?? "";
+          const userinfo = match[2] ?? "";
+          const userStart = index + scheme.length;
+          replacePortion(userStart, userStart + userinfo.length, VALUE_MARKER);
+          break;
         }
         default:
-          return marker;
+          replacePortion(index, index + full.length, VALUE_MARKER);
+          break;
       }
-    });
+    }
   }
 
-  // Basename pass is safe on multi-word prose (it only rewrites whole path
-  // segments that match SECRET_BASENAME_RE). Always run it so root-level
-  // names like `.env` still redact. Embedded path tokens without needing a
-  // slash-bearing whole string are handled by SECRET_PATH_NAME_RE.
-  output = redactedSecretPath(output);
-  return output.replace(SECRET_PATH_NAME_RE, "[redacted-secret-file]");
+  // Basename pass: whole path segments that look like credential files.
+  // Re-scan after each edit because replacements change offsets.
+  for (let guard = 0; guard < 64; guard++) {
+    let offset = 0;
+    let replaced = false;
+    const parts = text.split("/");
+    for (let p = 0; p < parts.length; p++) {
+      const part = parts[p];
+      const loc = LOCATION_SUFFIX_RE.exec(part);
+      const basename = loc?.[1] ?? part;
+      if (SECRET_BASENAME_RE.test(basename)) {
+        replacePortion(offset, offset + basename.length, PATH_MARKER);
+        replaced = true;
+        break;
+      }
+      offset += part.length + (p < parts.length - 1 ? 1 : 0);
+    }
+    if (!replaced) break;
+  }
+
+  // Embedded path tokens in free text (after basename pass).
+  {
+    const flags = SECRET_PATH_NAME_RE.flags.includes("g")
+      ? SECRET_PATH_NAME_RE.flags
+      : `${SECRET_PATH_NAME_RE.flags}g`;
+    const pathMatches = [...text.matchAll(new RegExp(SECRET_PATH_NAME_RE.source, flags))];
+    for (const match of pathMatches.reverse()) {
+      const index = match.index ?? 0;
+      replacePortion(index, index + match[0].length, PATH_MARKER);
+    }
+  }
+
+  return edits;
+}
+
+/** Punctuation that escapeMarkdown escapes with a leading backslash. */
+const ESCAPABLE_MARKDOWN_PUNCTUATION =
+  /[\\`*_{}[\]()#+.!|<>~=\-:\/@&$%^?'",;]/;
+
+interface DeescapeMap {
+  plain: string;
+  origStart: number[];
+  origEnd: number[];
+}
+
+/**
+ * Map every character of the de-escaped text back to the span it occupies in
+ * the still-escaped original, so redactions found on the de-escaped copy can
+ * be spliced into the original without disturbing non-secret presentation.
+ */
+function buildDeescapeMap(text: string): DeescapeMap {
+  let plain = "";
+  const origStart: number[] = [];
+  const origEnd: number[] = [];
+  for (let i = 0; i < text.length; ) {
+    if (
+      text[i] === "\\" &&
+      i + 1 < text.length &&
+      ESCAPABLE_MARKDOWN_PUNCTUATION.test(text[i + 1])
+    ) {
+      plain += text[i + 1];
+      origStart.push(i);
+      origEnd.push(i + 2);
+      i += 2;
+    } else {
+      plain += text[i];
+      origStart.push(i);
+      origEnd.push(i + 1);
+      i += 1;
+    }
+  }
+  return { plain, origStart, origEnd };
+}
+
+/**
+ * Apply secret-portion edits (in de-escaped coordinates) onto the still-escaped
+ * original via the de-escape map. Only secret spans are replaced; every
+ * untouched character — including Markdown backslash escapes — is preserved.
+ */
+function applyPortionEditsToEscaped(
+  escaped: string,
+  edits: readonly SecretPortionEdit[],
+  origStart: number[],
+  origEnd: number[],
+): string {
+  if (edits.length === 0) return escaped;
+  let result = escaped;
+  for (const edit of [...edits].sort((a, b) => b.start - a.start)) {
+    if (edit.end <= edit.start) continue;
+    const escStart = origStart[edit.start] ?? escaped.length;
+    const escEnd = origEnd[edit.end - 1] ?? escaped.length;
+    result = result.slice(0, escStart) + edit.replacement + result.slice(escEnd);
+  }
+  return result;
+}
+
+/** Redact secret-like values while preserving enough context for remediation. */
+export function redactedEvidence(raw: string): string {
+  // Sanitize first, then run the secret policy on a one-layer Markdown
+  // de-escaped copy. Only secret portions are written back into the still-
+  // escaped original so pre-escaped secrets (`token\=value`, `ghp\_AAAA`,
+  // `config/\.env`) are masked without rewriting untouched escapes.
+  // Double-escaped input is out of scope: callers that escape after redacting
+  // (escapeMarkdown) stay safe because redaction runs first.
+  const sanitized = sanitizeUntrustedText(raw);
+  const { plain, origStart, origEnd } = buildDeescapeMap(sanitized);
+  const edits = collectSecretPortionEdits(plain);
+  if (edits.length === 0) return sanitized;
+  return applyPortionEditsToEscaped(sanitized, edits, origStart, origEnd);
 }
 
 /**
@@ -181,14 +341,32 @@ const DYNAMIC_OBJECT_FIELDS = new Set([
   "items_per_pack",
 ]);
 
+/**
+ * Sanitize an object key through the same secret policy as values, so
+ * repository-controlled keys (extension histograms, identifier maps) cannot
+ * smuggle a secret-shaped name across the output boundary. Distinct keys that
+ * redact to the same marker are disambiguated deterministically in insertion
+ * order (`[redacted-secret-file]`, `[redacted-secret-file]#2`, …).
+ */
+function sanitizeStructuralKey(key: string, usedKeys: Map<string, number>): string {
+  const safe = redactedEvidence(key);
+  const seen = usedKeys.get(safe) ?? 0;
+  usedKeys.set(safe, seen + 1);
+  return seen === 0 ? safe : `${safe}#${seen + 1}`;
+}
+
 export function redactValue(value: unknown, parentField?: string): unknown {
   if (typeof value === "string") return redactedEvidence(value);
   if (Array.isArray(value)) return value.map((item) => redactValue(item, parentField));
   if (value !== null && typeof value === "object") {
     const next: Record<string, unknown> = {};
+    const usedKeys = new Map<string, number>();
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
       const isDynamicMapKey = DYNAMIC_OBJECT_FIELDS.has(parentField ?? "");
-      next[key] =
+      const safeKey = sanitizeStructuralKey(key, usedKeys);
+      // Field-name redaction keys off the ORIGINAL key: sanitized keys are for
+      // output only, and dynamic identifier maps must never trigger it.
+      next[safeKey] =
         !isDynamicMapKey && SECRET_KEY_NAME_RE.test(key)
           ? "[REDACTED:****]"
           : redactValue(item, key);
@@ -202,7 +380,9 @@ export function redactValue(value: unknown, parentField?: string): unknown {
  * Redact secret-like strings on a finding before it crosses an MCP output
  * boundary. Every field — including category, CWE, OWASP, stack, tags, paths,
  * and auxiliary evidence — is routed through the same recursive policy, so no
- * caller-supplied field can carry an unredacted secret into output.
+ * caller-supplied field can carry an unredacted secret into output. Tools use
+ * this earlier pass to bound normalized findings; toolSuccess intentionally
+ * repeats structural redaction as the final policy seam for every response.
  */
 export function redactFinding(finding: Finding): Finding {
   return redactValue(finding) as Finding;
