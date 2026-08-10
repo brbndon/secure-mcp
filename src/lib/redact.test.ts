@@ -293,6 +293,19 @@ describe("structural and URI secret redaction", () => {
     );
   });
 
+  it("redacts quoted values over 2048 chars including multi-word passphrases", () => {
+    // The quoted rule bounds its value group; the unquoted fallback stops at
+    // the first space, so an over-long multi-word value must not leak its tail.
+    const long = `${"a".repeat(2500)} ${"b".repeat(60)}`;
+    assert.ok(long.length > 2048);
+    const raw = `password="${long}"`;
+    const safe = redactedEvidence(raw);
+    assert.ok(!safe.includes(long));
+    assert.ok(!safe.includes("b".repeat(60)));
+    assert.ok(!safe.includes("a".repeat(2500)));
+    assert.equal(safe, `password="[REDACTED:****]"`);
+  });
+
   it("redacts YAML block scalars", () => {
     const safe = redactedEvidence(
       "api:\n  secret: |\n    first-line-value\n    second-line-value\n  other: 1",

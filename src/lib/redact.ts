@@ -155,6 +155,31 @@ const SECRET_VALUE_RULES: readonly SecretValueRule[] = [
     },
   },
   {
+    name: "quoted-labeled-long",
+    // Quoted values beyond the bounded rule's reach (multi-word passphrases
+    // over 2048 chars). The value group stops at the first quote of any kind
+    // and only closes on the captured quote, so a labeled span is redacted in
+    // full instead of leaking its tail through the whitespace-limited
+    // unquoted fallback. The dedupe keeps this rule's edit over the unquoted
+    // rematch of the same span (it is ordered first and more specific). The
+    // upper bound keeps per-start scan work bounded on adversarial input.
+    pattern: new RegExp(
+      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])((?:[^\\\\"'\\\`]|\\\\.){2048,65536}?)\\2`,
+      "gi",
+    ),
+    portion: (match, index) => {
+      const prefix = match[1] ?? "";
+      const quote = match[2] ?? "";
+      const value = match[3] ?? "";
+      const valueStart = index + prefix.length + quote.length;
+      return {
+        start: valueStart,
+        end: valueStart + value.length,
+        replacement: VALUE_MARKER,
+      };
+    },
+  },
+  {
     name: "unquoted-labeled",
     // Env files, URL query tokens, config. `&` is an RFC 3986 query separator.
     pattern: new RegExp(
