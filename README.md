@@ -1,6 +1,7 @@
 # secure-mcp
 
 [![CI](https://github.com/brbndon/secure-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/brbndon/secure-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@brdndon/secure-mcp.svg)](https://www.npmjs.com/package/@brdndon/secure-mcp)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Local **Model Context Protocol (MCP)** server that helps coding agents run defensive, remediation-focused secure code review of source repositories.
@@ -54,18 +55,82 @@ Findings can also include stable traceability fields such as `rule_family`, `roo
 ## Requirements
 
 - Node.js 20 or newer
-- pnpm 10 (preferred) or npm
+- npm 10+ (or pnpm 10 for development from a checkout)
 - One or more local paths that the server is authorized to inspect
 
-## Quick start
+## Quick start (npm)
+
+Install and run the published package. `SECURE_MCP_ALLOWED_ROOTS` is required for filesystem tools (`:` on macOS/Linux, `;` on Windows):
+
+```bash
+export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
+
+# One-shot (downloads if needed)
+npx -y @brdndon/secure-mcp
+
+# Or install the bin globally / in a project
+npm install -g @brdndon/secure-mcp
+secure-mcp
+```
+
+### Connect from common MCP clients
+
+Point your client at the `secure-mcp` bin (or `npx`). Keep allowlisted roots narrow—one checkout is better than your entire home directory.
+
+#### Claude Desktop / Claude Code
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "npx",
+      "args": ["-y", "@brdndon/secure-mcp"],
+      "env": {
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+      }
+    }
+  }
+}
+```
+
+#### pi
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "npx",
+      "args": ["-y", "@brdndon/secure-mcp"],
+      "env": {
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+      },
+      "lifecycle": "lazy",
+      "directTools": true,
+      "toolPrefix": "none"
+    }
+  }
+}
+```
+
+`directTools: true` and `toolPrefix: "none"` expose the canonical `secure_mcp_*` tool names used by the master skill.
+
+Cursor and other stdio clients use the same `command`, `args`, and `env` shape. If `npx` is inconvenient, use `"command": "secure-mcp"` after a global install, or `"command": "node"` with `"args": ["/absolute/path/to/node_modules/@brdndon/secure-mcp/dist/index.js"]`. The `project_root` passed to a tool must be visible to the machine running the MCP server; absolute paths are safest.
+
+## Filesystem authorization
+
+`SECURE_MCP_ALLOWED_ROOTS` is required for tools that read a repository. It is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected.
+
+```bash
+export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code/example-app
+```
+
+## Develop from a checkout
 
 ```bash
 git clone https://github.com/brbndon/secure-mcp.git
 cd secure-mcp
 pnpm install --frozen-lockfile
 pnpm build
-
-# Required for filesystem tools. Use `:` between roots on macOS/Linux and `;` on Windows.
 export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
 pnpm start
 ```
@@ -83,75 +148,30 @@ The smoke test scopes itself to the bundled fixtures:
 pnpm smoke
 ```
 
-## MCP v2 protocol support
+Checkout-based MCP configs can point at `dist/index.js` instead of `npx`:
 
-`secure-mcp` uses MCP SDK v2 and serves stateless stdio connections. Modern clients negotiate protocol version `2026-07-28` through `server/discover` without the legacy `initialize` exchange.
-
-Existing client configuration does not need to change. The server still accepts the v1 handshake used by older clients, with compatibility tested against MCP SDK v1.30.0. Both protocol flows use the same built entrypoint:
-
-```bash
-node /absolute/path/to/secure-mcp/dist/index.js
+```json
+{
+  "command": "node",
+  "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+  "env": {
+    "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+  }
+}
 ```
 
-After updating an existing checkout, reinstall from the lockfile and rebuild the entrypoint before restarting the MCP client:
+## MCP v2 protocol support
+
+`secure-mcp` on the default branch uses MCP SDK v2 and serves stateless stdio connections. Modern clients negotiate protocol version `2026-07-28` through `server/discover` without the legacy `initialize` exchange.
+
+Existing client configuration does not need to change. The server still accepts the v1 handshake used by older clients, with compatibility tested against MCP SDK v1.30.0.
+
+After updating a git checkout, reinstall from the lockfile and rebuild before restarting the MCP client:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
 ```
-
-## Filesystem authorization
-
-`SECURE_MCP_ALLOWED_ROOTS` is required for tools that read a repository. It is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected.
-
-Keep the allowlist as narrow as practical. For example, authorize one checkout instead of your entire home directory:
-
-```bash
-export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code/example-app
-```
-
-## Connect from common MCP clients
-
-Build the project, then point your client at `dist/index.js`. The paths below must be absolute.
-
-### Claude Desktop / Claude Code
-
-```json
-{
-  "mcpServers": {
-    "secure-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
-      "env": {
-        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
-      }
-    }
-  }
-}
-```
-
-### pi
-
-```json
-{
-  "mcpServers": {
-    "secure-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
-      "env": {
-        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
-      },
-      "lifecycle": "lazy",
-      "directTools": true,
-      "toolPrefix": "none"
-    }
-  }
-}
-```
-
-`directTools: true` and `toolPrefix: "none"` expose the canonical `secure_mcp_*` tool names used by the master skill.
-
-Cursor and other stdio clients use the same `command`, `args`, and `env` shape. The `project_root` passed to a tool must be visible to the machine running the MCP server; absolute paths are safest.
 
 ## Install the skill for coding agents
 
@@ -245,11 +265,18 @@ pnpm docs:validate
 - Coverage distinguishes “no candidate in files reviewed” from a partial or truncated scan.
 - Use the project only for authorized defensive review of codebases you own or are engaged to harden.
 
-For bugs, questions, and feature requests, use [GitHub Issues](https://github.com/brbndon/secure-mcp/issues). Prefer a private contact for anything that would leak secrets or sensitive audit output if posted publicly.
+**Product vulnerabilities:** report privately via
+[GitHub Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories/new)
+(see [SECURITY.md](SECURITY.md)). Do not open a public issue for vulnerabilities.
+
+**Bugs, questions, and features:** use [GitHub Issues](https://github.com/brbndon/secure-mcp/issues).
+Never paste live credentials, private source, or sensitive audit output into public issues.
 
 ## Contributing
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Keep changes read-only and remediation-focused.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request. Keep changes
+read-only and remediation-focused.
 
 ## License
 
