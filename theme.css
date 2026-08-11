@@ -1,12 +1,7 @@
-:root {
-  --blume-foreground: #10201c;
-  --blume-muted: #e7efeb;
-  --blume-muted-foreground: #547068;
-  --blume-border: #cadbd4;
-  --blume-code-background: #eaf2ee;
-}
+/* Dark-only docs site. Light mode and the header theme toggle are disabled. */
 
-:root[data-theme="dark"] {
+:root {
+  color-scheme: dark;
   --blume-foreground: #e3f0eb;
   --blume-muted: #16231f;
   --blume-muted-foreground: #91b0a5;
@@ -14,16 +9,38 @@
   --blume-code-background: #111d19;
 }
 
-body {
-  background-image:
-    radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--blume-accent) 12%, transparent), transparent 26rem),
-    linear-gradient(140deg, color-mix(in srgb, var(--blume-action) 4%, transparent), transparent 42%);
+/* Keep tokens dark even if a stale localStorage value briefly sets light. */
+:root[data-theme="light"],
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --blume-foreground: #e3f0eb;
+  --blume-muted: #16231f;
+  --blume-muted-foreground: #91b0a5;
+  --blume-border: #29433a;
+  --blume-code-background: #111d19;
 }
 
-:root[data-theme="dark"] body {
+/* Remove the stock Blume sun/moon control from the header. */
+[data-blume-theme-toggle] {
+  display: none !important;
+}
+
+body {
   background-image:
     radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--blume-accent) 15%, transparent), transparent 26rem),
     linear-gradient(140deg, color-mix(in srgb, var(--blume-action) 7%, transparent), transparent 42%);
+}
+
+/* Always prefer the dark Shiki palette (dual-theme spans ship both). */
+.prose :where(pre.astro-code) {
+  color: var(--shiki-dark, var(--blume-foreground)) !important;
+}
+
+.prose :where(pre.astro-code span) {
+  color: var(--shiki-dark, inherit) !important;
+  font-style: var(--shiki-dark-font-style, inherit);
+  font-weight: var(--shiki-dark-font-weight, inherit);
+  text-decoration: var(--shiki-dark-text-decoration, inherit);
 }
 
 ::selection {

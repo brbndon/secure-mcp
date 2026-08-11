@@ -1,0 +1,30 @@
+---
+/**
+ * Site header with the theme toggle removed and color mode locked to dark.
+ * Wraps Blume's stock Header so search, nav, and repo chrome stay upstream.
+ */
+import Header from "blume/components/layout/Header.astro";
+---
+
+<script is:inline>
+  (() => {
+    const root = document.documentElement;
+    const lockDark = () => {
+      if (root.dataset.theme !== "dark") {
+        root.dataset.theme = "dark";
+      }
+      try {
+        localStorage.setItem("blume-theme", "dark");
+      } catch {
+        /* private mode / disabled storage */
+      }
+    };
+    lockDark();
+    new MutationObserver(lockDark).observe(root, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+  })();
+</script>
+
+<Header {...Astro.props} />
