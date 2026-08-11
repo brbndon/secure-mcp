@@ -52,4 +52,14 @@ npm publish --access public
 2. Push the tag.
 3. Create a GitHub release whose notes match the changelog and include any security-relevant upgrade guidance.
 
-Before the first public release, make the repository public, confirm Issues work, and verify documentation hosting if you use it. Those are repository-owner actions and are intentionally not automated from a local checkout.
+```bash
+git tag -a "vX.Y.Z" -m "vX.Y.Z"
+git push origin "vX.Y.Z"
+gh release create "vX.Y.Z" --title "vX.Y.Z" --notes-file - <<'EOF'
+See CHANGELOG.md for this version.
+EOF
+```
+
+Keep the GitHub release, git tag, `package.json` version, and npm publish on the same commit. After a security fix, publish the advisory from [Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories) once the patched version is available.
+
+Before a public release, confirm the repository is public, Issues and private vulnerability reporting work, and documentation hosting (if any) is live. Those are repository-owner actions and are intentionally not automated from a local checkout.

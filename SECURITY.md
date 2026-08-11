@@ -8,13 +8,24 @@
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities by opening a
-[GitHub issue](https://github.com/brbndon/secure-mcp/issues) with the `security`
-label. Include the version and environment you observed the issue in, a minimal
-reproduction or proof of concept, and your impact assessment if you have one.
+**Do not open a public GitHub issue for security vulnerabilities.**
 
-You should receive an acknowledgment within 7 days. We ask that you avoid
-public disclosure until the report has been triaged and addressed.
+Report suspected vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories/new).
+
+Include:
+
+- secure-mcp version or commit SHA
+- environment (Node.js version, OS, MCP client)
+- minimal reproduction or proof of concept using fake data only
+- impact assessment if you have one
+
+You should receive an acknowledgment within 7 days. Please avoid public
+disclosure until the report has been triaged and a fix or advisory is available.
+
+If you cannot use Security Advisories, open a normal issue **without**
+sensitive details and ask for a private channel, or contact the maintainer
+listed on the [GitHub profile for @brbndon](https://github.com/brbndon).
 
 ## Scope
 
@@ -23,3 +34,9 @@ repositories you explicitly authorize. Reports may target the server (`src/`),
 the knowledge packs (`src/knowledge/`), the installer scripts (`scripts/`), or
 the documentation site (`pages/`, `docs/`). The threat model assumes a trusted
 local user; issues triggered by malicious repository content are in scope.
+
+Out of scope:
+
+- Findings produced when reviewing third-party code (product output, not
+  product defects), unless they reveal a server, pack, or docs defect
+- Requests for exploit development or live-target attacks

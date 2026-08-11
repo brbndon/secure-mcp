@@ -5,8 +5,10 @@ Thanks for helping improve defensive, agent-first code review. Contributions of 
 ## Before you start
 
 - Use [GitHub Issues](https://github.com/brbndon/secure-mcp/issues) for reproducible bugs and focused feature proposals.
+- Report product vulnerabilities privately via [GitHub Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories/new) ([SECURITY.md](SECURITY.md))—not public issues.
 - Do not post live credentials, private source, or sensitive audit output in public issues.
 - Keep all work defensive and remediation-focused. Exploit generation, live-target interaction, credential use, and offensive bypass guidance are out of scope.
+- Follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 - For larger changes, open an issue first so tool contracts and trust-boundary implications can be discussed before implementation.
 
 ## Development setup
