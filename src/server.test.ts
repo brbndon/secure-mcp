@@ -211,7 +211,8 @@ describe("server configuration and stack scoping", () => {
   it("does not add Next.js injection detectors to explicit TypeScript scans", () => {
     assert.equal(shouldRunNextjsInjectionDetectors("typescript"), false);
     assert.equal(shouldRunNextjsInjectionDetectors("nextjs"), true);
-    assert.equal(shouldRunNextjsInjectionDetectors("auto"), true);
+    assert.equal(shouldRunNextjsInjectionDetectors("auto", ["common", "nextjs"]), true);
+    assert.equal(shouldRunNextjsInjectionDetectors("auto", ["common", "swift"]), false);
   });
 
   it("keeps Next.js findings out of a TypeScript-focused MCP scan", async () => {

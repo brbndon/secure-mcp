@@ -10,10 +10,11 @@ import { appleDesktopPack } from "./packs/apple-desktop.js";
 import type { PackItem } from "./packs/types.js";
 import { swiftIosPack } from "./packs/swift-ios.js";
 
+/** @deprecated Prefer PackItem from packs/types — kept for existing imports. */
 export type ChecklistItem = PackItem;
 
 /** Combined Swift checklist (iOS + desktop entitlements item for compatibility). */
-export const SWIFT_CHECKLIST: ChecklistItem[] = [
+export const SWIFT_CHECKLIST: PackItem[] = [
   ...swiftIosPack.items,
   ...appleDesktopPack.items.filter((i) => i.id === "MAC-ENTITLEMENTS"),
 ];

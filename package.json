@@ -19,7 +19,7 @@
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test src/config.test.ts src/server.test.ts src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/knowledge/findings-schema.test.ts src/knowledge/common.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/tools/checkAuthentication.test.ts src/tools/produceFindings.test.ts src/tools/reviewSecrets.test.ts src/tools/buildRemediationThreatModel.test.ts scripts/modern-protocol.test.ts scripts/legacy-v1-compat.test.ts",
+    "test": "tsx --test src/config.test.ts src/server.test.ts src/knowledge/packs/registry.test.ts src/knowledge/swift.test.ts src/knowledge/findings-schema.test.ts src/knowledge/common.test.ts src/lib/filesystem.test.ts src/lib/coverage.test.ts src/lib/redact.test.ts src/tools/analyzeInjectionRisks.test.ts src/tools/checkAuthentication.test.ts src/tools/produceFindings.test.ts src/tools/reviewSecrets.test.ts src/tools/buildRemediationThreatModel.test.ts scripts/modern-protocol.test.ts scripts/legacy-v1-compat.test.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "verify": "pnpm typecheck && pnpm build && pnpm test && pnpm smoke",
