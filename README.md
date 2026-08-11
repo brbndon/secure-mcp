@@ -162,9 +162,9 @@ Checkout-based MCP configs can point at `dist/index.js` instead of `npx`:
 
 ## MCP v2 protocol support
 
-`secure-mcp` on the default branch uses MCP SDK v2 and serves stateless stdio connections. Modern clients negotiate protocol version `2026-07-28` through `server/discover` without the legacy `initialize` exchange.
+Published npm `@brdndon/secure-mcp@1.0.0` still ships **MCP SDK v1** (`@modelcontextprotocol/sdk`). MCP SDK v2 is on the default branch (and other development checkouts) under **Unreleased** until the next versioned publish.
 
-Existing client configuration does not need to change. The server still accepts the v1 handshake used by older clients, with compatibility tested against MCP SDK v1.30.0.
+On a checkout with SDK v2, the server serves stateless stdio connections. Modern clients negotiate protocol version `2026-07-28` through `server/discover` without the legacy `initialize` exchange. Existing client configuration does not need to change: the server still accepts the v1 handshake used by older clients, with compatibility tested against MCP SDK v1.30.0.
 
 After updating a git checkout, reinstall from the lockfile and rebuild before restarting the MCP client:
 

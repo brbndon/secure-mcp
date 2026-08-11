@@ -7,7 +7,9 @@ body:
     attributes:
       value: |
         Do not include credentials, private source code, or sensitive audit output.
-        Report product vulnerabilities privately via GitHub Security Advisories (see SECURITY.md)—not this form.
+        Report product vulnerabilities privately via
+        [GitHub Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories/new)
+        (see [SECURITY.md](https://github.com/brbndon/secure-mcp/blob/main/SECURITY.md))—not this form.
   - type: input
     id: version
     attributes:
