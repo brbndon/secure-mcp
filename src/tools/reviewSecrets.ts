@@ -59,8 +59,8 @@ export function secretsPackIdsForStack(stack: StackFocus | "auto" | undefined): 
   return ids;
 }
 
-const FALSE_POSITIVE_HINTS =
-  /example|sample|placeholder|your[_-]?key|xxx+|todo|changeme|dummy|fake|test[_-]?key|process\.env/i;
+export const FALSE_POSITIVE_HINTS =
+  /example|sample|placeholder|your[_\-]?(?:\w+[_\-]?)*(?:key|token|secret|password)[_\-]?(?:here)?|xxx+|todo|changeme|replace[_\-]?me|dummy|fake|test[_-]?key|process\.env/i;
 
 const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential hardcoded secrets and unsafe secret handling so the development team can rotate credentials and harden configuration.
 
