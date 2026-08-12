@@ -6,7 +6,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Do not include credentials, private source code, sensitive audit output, or security vulnerabilities. Use the process in SECURITY.md for vulnerabilities.
+        Do not include credentials, private source code, or sensitive audit output.
+        Report product vulnerabilities privately via
+        [GitHub Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories/new)
+        (see [SECURITY.md](https://github.com/brbndon/secure-mcp/blob/main/SECURITY.md))—not this form.
   - type: input
     id: version
     attributes:

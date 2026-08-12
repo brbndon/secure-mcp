@@ -19,7 +19,7 @@ Releases are maintainer-driven. Do not publish from an unreviewed or dirty check
 pnpm release:check
 ```
 
-This runs type checking, tests, the build and MCP smoke test, documentation build and link validation, a dependency audit at every severity, and an npm tarball dry run. Do not publish while any step fails. Inspect the tarball list and confirm it contains only compiled server files and public project documents—never local configuration, fixtures, source maps with private paths, or credentials.
+This runs type checking, tests, the build and MCP smoke test, documentation build and link validation, a dependency audit at every severity, and an npm tarball dry run. Do not publish while any step fails. Inspect the tarball list and confirm it contains only compiled server files and public project documents—never local configuration, fixtures, source maps with private paths, or credentials. The published tarball includes `README.md` and `CHANGELOG.md`: confirm they still describe the npm install path, Security Advisories reporting, and which MCP SDK version this package version ships before you publish.
 
 ## 3. Publish
 
@@ -52,4 +52,14 @@ npm publish --access public
 2. Push the tag.
 3. Create a GitHub release whose notes match the changelog and include any security-relevant upgrade guidance.
 
-Before the first public release, make the repository public, confirm Issues work, and verify documentation hosting if you use it. Those are repository-owner actions and are intentionally not automated from a local checkout.
+```bash
+git tag -a "vX.Y.Z" -m "vX.Y.Z"
+git push origin "vX.Y.Z"
+gh release create "vX.Y.Z" --title "vX.Y.Z" --notes-file - <<'EOF'
+See CHANGELOG.md for this version.
+EOF
+```
+
+Keep the GitHub release, git tag, `package.json` version, and npm publish on the same commit. After a security fix, publish the advisory from [Security Advisories](https://github.com/brbndon/secure-mcp/security/advisories) once the patched version is available.
+
+Before a public release, confirm the repository is public, Issues and private vulnerability reporting work, and documentation hosting (if any) is live. Those are repository-owner actions and are intentionally not automated from a local checkout.
