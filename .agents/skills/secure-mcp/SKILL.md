@@ -86,7 +86,16 @@ If the server becomes unavailable mid-review, stop claiming MCP-backed phases af
 
 ### Phase 2: architecture and progressive guidance
 
-Call `secure_mcp_analyze_architecture` with the same root and the stack forced by preflight when a single-stack package is confirmed. Preserve `stacks`, `detection`, `surface`, `trust_boundaries`, `coverage`, `recommended_packs`, `pack_batches`, and `next_tools`.
+Call `secure_mcp_analyze_architecture` with the same root and the stack forced by preflight when a single-stack package is confirmed. Architecture is the security brief for the rest of the audit — there is no separate project-brief tool. Preserve and retain:
+
+- `stacks`, `detection`, `trust_boundaries`, `coverage`, `recommended_packs`, `pack_batches`, `checklist_seed`, `next_tools`
+- legacy `surface` path buckets (compat)
+- typed `surfaces` (kind, exposure, auth_expectation, paths)
+- `coverage_gaps` (high-value surfaces without category-detector evidence yet)
+- `priority_paths` (follow-up focus order)
+- `security_brief` when present (compact derived summary from those fields; no extra walk)
+
+Treat pack summaries and `checklist_seed` as the short threat shortlist. Do not invent a public `threat_highlights` field.
 
 Load `secure_mcp_get_knowledge_pack` only after architecture analysis:
 
@@ -116,17 +125,33 @@ After architecture and initial pack loading, call these tools with the same root
 
 Run the three tools in parallel when the client supports it. Retain each result's findings, coverage, candidate dispositions, and scan status. Do not merge away the source tool or coverage metadata.
 
+After category tools return, reconcile architecture `coverage_gaps` and `priority_paths`:
+
+1. Build the set of high-value surface paths from architecture (`surfaces` / `priority_paths`).
+2. Compare against files that produced candidates in auth, injection, and secrets results.
+3. Sample high-value surface files with **zero detector hits** using local read-only tools (and optional focused re-runs with `focus_paths` on those prefixes). Do not only chase candidates.
+4. Record zero-hit sampling outcomes in the coverage-qualified narrative (still present / needs_review / not_applicable), with reasons.
+
 For a confirmed single-stack package, pass the explicit valid stack to architecture and category tools: `nextjs`, `expo`, `swift`, or `typescript` as applicable. `stack: "auto"` is useful for discovery and mixed detection, but it is not a substitute for package-scoped routing. In particular, `secure_mcp_check_authentication` uses path heuristics for Swift under auto; use `stack: "swift"` to scan all Swift files within the bounded budget. A `swift` result alone does not establish iOS or macOS. When preflight says library/dev-only Expo tooling, keep category tools on `typescript` or `common` even if inventory listed `expo`.
 
-### Phase 4: manual confirmation
+### Phase 4: manual confirmation and revalidation
 
 Read the cited files with local read-only tools and trace source → control → sink. For every candidate:
 
 - Confirm whether the code path is reachable and in scope.
 - Check both authentication and authorization; do not treat a login check as an ownership check.
 - Compare the observed code with configuration, tests, dependency usage, and counterevidence.
-- Mark candidates `reportable`, `needs_review`, `suppressed`, `not_applicable`, or `deferred`, with a reason.
-- Set `disposition: "reportable"` only after manual confirmation; keep all other dispositions out of the final findings-tool input and retain them in the coverage-qualified narrative.
+- Mark candidates with a disposition and a `disposition_reason` plus evidence:
+  - `reportable` — confirmed weakness still open
+  - `needs_review` — insufficient proof; keep investigating
+  - `suppressed` — known false positive / intentional with documented rationale
+  - `not_applicable` — out of scope or not present for this product surface
+  - `deferred` — real but postponed with owner/context
+  - `fixed` — revalidation proved the remediation (cite the fixed code path and verification evidence)
+- Set `disposition: "reportable"` only after manual confirmation of an open weakness.
+- Set `disposition: "fixed"` only after revalidation: open the cited location, confirm the control is in place, and record reason + evidence. Git “still present” / blame / history checks are **agent-side only** — the server does not run git on the target.
+- Keep non-reportable dispositions (including `fixed`) out of the final findings-tool input unless the handoff explicitly needs a fixed ledger; retain them in the coverage-qualified narrative. If `fixed` findings are passed to `secure_mcp_produce_findings`, they are counted but do not dominate `remediation_priority`.
+- Also sample zero-hit high-value surfaces from architecture (see Phase 3 reconciliation), not only detector candidates.
 - Open every high or critical candidate at its cited line before prioritizing it.
 - For a suspected live secret, redact evidence, recommend immediate rotation and removal from source/history, and never test the credential.
 
@@ -166,6 +191,16 @@ Apply only the branches supported by the preflight and architecture results:
 - Expo/React Native: distinguish SecureStore/Keychain from AsyncStorage, inspect Expo config and client-bundle exposure, EAS/OTA update trust, deep links/AuthSession, native modules, WebViews, and backend session/authz controls.
 
 For a mixed repository, run inventory, architecture, and category reviews per deployable package root. Use `focus_paths` for a bounded drill-down inside that package, not as a replacement for changing `project_root`. Reconcile shared libraries separately and preserve each package's coverage; do not let a root-level profile hide a nested app's platform or dependencies.
+
+## PR and scoped-diff recipe (host agent; no server git)
+
+`focus_paths` already scopes inventory, architecture, and category tools. For pull-request or local-diff reviews:
+
+1. Resolve changed paths with **host-agent** git only (for example `git diff --name-only` against the base branch, plus optionally staged/untracked when the user includes working-tree risk). The MCP server never runs git or writes the target tree.
+2. Filter noise before calling tools: drop untracked build junk, generated artifacts, lockfiles, vendored trees, and out-of-scope build output (`node_modules`, `dist`, `.next`, `Pods`, coverage reports, binary assets) unless the user explicitly put them in scope.
+3. Map remaining paths to relative prefixes under `project_root` and pass them as `focus_paths` (array, max 50). Prefer package roots for monorepos rather than stuffing unrelated packages into one call.
+4. Respect `max_files` and coverage truncation: if `coverage.scan_status` is `truncated` or `partial`, shrink prefixes or raise `max_files` deliberately, then re-run. Do not claim full-repo coverage from a focused diff pass.
+5. Still run architecture on the scoped root so `surfaces`, `coverage_gaps`, and `priority_paths` reflect the PR surface; sample zero-hit high-value paths inside the diff set.
 
 ## Hardening mode
 

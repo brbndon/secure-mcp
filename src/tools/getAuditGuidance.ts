@@ -6,7 +6,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { toolError, toolSuccess } from "../lib/filesystem.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 
 const InputSchema = z
   .object({
@@ -46,18 +46,19 @@ Call secure_mcp_get_audit_guidance with other sections for details. Prefer multi
 
   workflow: `MANDATORY MULTI-PHASE AGENT WORKFLOW (defensive only)
 Phase 1: secure_mcp_list_project_structure (inventory)
-Phase 2: secure_mcp_analyze_architecture (stacks, surfaces, recommended_packs, pack_batches, trust boundaries)
+Phase 2: secure_mcp_analyze_architecture (stacks, typed surfaces, coverage_gaps, priority_paths, security_brief, recommended_packs, pack_batches, trust boundaries)
          secure_mcp_get_knowledge_pack (start with pack_batches[0], detail=summary; max 6 ids/call; fair sample)
          (optional) secure_mcp_build_remediation_threat_model
 Phase 3: secure_mcp_check_authentication
          secure_mcp_analyze_injection_risks
          secure_mcp_review_secrets   (parallel ok)
-Phase 4: Open files for evidence, trace data flows (read-only), confirm/downgrade findings.
-Phase 5: secure_mcp_produce_findings (pass collected Finding[] with full fields)
+         then sample zero-hit high-value surfaces from architecture priority_paths/coverage_gaps
+Phase 4: Open files for evidence, trace data flows (read-only); disposition = reportable|needs_review|suppressed|not_applicable|deferred|fixed with reason/evidence.
+Phase 5: secure_mcp_produce_findings (prefer reportable open findings; fixed is counted but not prioritised over open work)
 Phase 6: Human narrative from the report.
 
-PROGRESSIVE RULE: Do not load packs before architecture. Use focus_paths for scoped drill-down on large projects.
-Never treat heuristic output as final without reading source. Keep intermediate artifacts.
+PROGRESSIVE RULE: Do not load packs before architecture. Use focus_paths for scoped drill-down / PR diffs (host resolves git paths; server never runs git).
+Never treat heuristic output as final without reading source. Keep intermediate artifacts (architecture is the security brief).
 Sub-agents must stay defensive (mapper, specialist, reporter — no "exploit" roles).
 `,
 
@@ -81,14 +82,15 @@ PURPOSE (defensive): STRIDE fragments to prioritise controls and hardening (S/T/
 WORKFLOW: after arch, call with optional focus_area/assets; use recommended_controls while doing category scans; convert high residual to seeds.
 GUARDRAILS: only for owners strengthening their own system; no attack plans.`,
 
-  architecture: `secure_mcp_analyze_architecture + list
-PURPOSE: detect stacks, surfaces (auth/api/config/data), trust boundaries, recommended_packs + pack_batches for progressive loading.
-WORKFLOW: list first → arch (stack=auto or forced) → load packs from batches[0] → category tools.
-Use focus_paths for drill-down on subdirs.
-`,
+  architecture: `secure_mcp_analyze_architecture
+Returns stacks, legacy surface path buckets, typed surfaces (kind/exposure/auth_expectation/paths), coverage_gaps, priority_paths, security_brief, trust boundaries, recommended_packs/pack_batches, checklist_seed.
+Retain architecture as the security brief. After category tools, sample zero-hit high-value surfaces from coverage_gaps/priority_paths.
+Host agents may map PR diffs into focus_paths; the server does not run git.`,
 
   findings: `secure_mcp_produce_findings
 Every finding passed in must have: evidence, impact_if_unremediated, remediation, residual_risk, verification_suggestion + classification.
+Dispositions: reportable (open confirmed), needs_review, suppressed, not_applicable, deferred, fixed (revalidated remediation with reason/evidence).
+Prefer reportable for the final rollup; fixed is counted in candidate_disposition_counts but does not dominate remediation_priority.
 Use dedupe, filters. Output is prioritised remediation report.
 Never rewrite into exploit content.`,
 

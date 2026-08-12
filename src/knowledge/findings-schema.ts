@@ -41,6 +41,7 @@ export const CandidateDispositionSchema = z.enum([
   "suppressed",
   "not_applicable",
   "deferred",
+  "fixed",
 ]);
 
 /**
@@ -143,7 +144,7 @@ export const FindingSchema = z
       .optional()
       .describe("Stable identity for the same source instance across audit runs"),
     disposition: CandidateDispositionSchema.optional().describe(
-      "Candidate disposition before human/data-flow confirmation",
+      "Candidate disposition: reportable after confirmation; fixed after revalidation proves remediation; needs_review/suppressed/not_applicable/deferred otherwise",
     ),
     disposition_reason: z.string().min(1).max(MAX_FINDING_DISPOSITION_REASON).optional(),
     source: z.string().min(1).max(MAX_FINDING_NARRATIVE).optional().describe("Evidence-backed input/source context"),
@@ -166,6 +167,176 @@ export const FindingSchema = z
 
 export type FindingInput = z.infer<typeof FindingSchema>;
 
+type FindingMergeStrategy =
+  | "first"
+  | "first-defined"
+  | "longest"
+  | "severity-max"
+  | "confidence-max"
+  | "reportable"
+  | "unique-list";
+
+interface FindingFieldMetadata {
+  merge: FindingMergeStrategy;
+  maxChars?: number;
+  maxItems?: number;
+  itemMaxChars?: number;
+  omitWhenEmpty?: boolean;
+}
+
+/**
+ * Exhaustive policy for merging and bounding every field in FindingSchema.
+ * Adding a schema field requires a policy here, preventing dedupe or output
+ * bounding from silently dropping it in a distant tool module.
+ */
+export const FINDING_FIELD_METADATA = {
+  id: { merge: "first", maxChars: MAX_FINDING_ID },
+  title: { merge: "first", maxChars: MAX_FINDING_TITLE },
+  description: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  severity: { merge: "severity-max" },
+  confidence: { merge: "confidence-max" },
+  category: { merge: "first", maxChars: MAX_FINDING_CATEGORY },
+  stack: { merge: "first-defined" },
+  file: { merge: "first-defined", maxChars: MAX_FINDING_PATH },
+  line: { merge: "first-defined" },
+  evidence: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  impact_if_unremediated: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  remediation: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  residual_risk: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  verification_suggestion: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  cwe: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  owasp: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  tags: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_TAGS,
+    itemMaxChars: MAX_FINDING_TAG,
+    omitWhenEmpty: true,
+  },
+  rule_family: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  root_control: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  instance_id: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  disposition: { merge: "reportable" },
+  disposition_reason: {
+    merge: "first-defined",
+    maxChars: MAX_FINDING_DISPOSITION_REASON,
+  },
+  source: { merge: "first-defined", maxChars: MAX_FINDING_NARRATIVE },
+  control: { merge: "first-defined", maxChars: MAX_FINDING_NARRATIVE },
+  sink: { merge: "first-defined", maxChars: MAX_FINDING_NARRATIVE },
+  counterevidence: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_LIST_ITEMS,
+    itemMaxChars: MAX_FINDING_LIST_ITEM,
+  },
+  proof_gap: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_LIST_ITEMS,
+    itemMaxChars: MAX_FINDING_LIST_ITEM,
+  },
+  validation: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_LIST_ITEMS,
+    itemMaxChars: MAX_FINDING_LIST_ITEM,
+  },
+} as const satisfies Record<keyof FindingInput, FindingFieldMetadata>;
+
+const FINDING_FIELDS = Object.keys(FINDING_FIELD_METADATA) as Array<keyof FindingInput>;
+const CONFIDENCE_RANK = Object.fromEntries(
+  ConfidenceSchema.options.map((confidence, index, confidences) => [
+    confidence,
+    confidences.length - index,
+  ]),
+) as Record<z.infer<typeof ConfidenceSchema>, number>;
+const SEVERITY_RANK = Object.fromEntries(
+  SeveritySchema.options.map((severity, index, severities) => [
+    severity,
+    severities.length - index,
+  ]),
+) as Record<z.infer<typeof SeveritySchema>, number>;
+const OUTPUT_TRUNCATION_MARKER = "…[truncated]";
+
+function mergeField(
+  strategy: FindingMergeStrategy,
+  left: unknown,
+  right: unknown,
+  maxItems?: number,
+): unknown {
+  switch (strategy) {
+    case "first":
+      return left;
+    case "first-defined":
+      return left ?? right;
+    case "longest":
+      return typeof left === "string" && typeof right === "string" && right.length > left.length
+        ? right
+        : left;
+    case "severity-max":
+      return SEVERITY_RANK[right as z.infer<typeof SeveritySchema>] >
+        SEVERITY_RANK[left as z.infer<typeof SeveritySchema>]
+        ? right
+        : left;
+    case "confidence-max":
+      return CONFIDENCE_RANK[right as z.infer<typeof ConfidenceSchema>] >
+        CONFIDENCE_RANK[left as z.infer<typeof ConfidenceSchema>]
+        ? right
+        : left;
+    case "reportable":
+      return left === "reportable" || right === "reportable" ? "reportable" : left ?? right;
+    case "unique-list": {
+      const merged = [
+        ...new Set([
+          ...(Array.isArray(left) ? left : []),
+          ...(Array.isArray(right) ? right : []),
+        ]),
+      ];
+      return merged.slice(0, maxItems ?? merged.length);
+    }
+  }
+}
+
+/** Merge duplicate findings according to the exhaustive schema field policy. */
+export function mergeFindings(left: FindingInput, right: FindingInput): FindingInput {
+  const merged: Record<string, unknown> = {};
+  for (const field of FINDING_FIELDS) {
+    const metadata: FindingFieldMetadata = FINDING_FIELD_METADATA[field];
+    const value = mergeField(metadata.merge, left[field], right[field], metadata.maxItems);
+    if (metadata.omitWhenEmpty && Array.isArray(value) && value.length === 0) continue;
+    if (value !== undefined) merged[field] = value;
+  }
+  return merged as FindingInput;
+}
+
+/** Deterministically bound text while preserving an explicit truncation marker. */
+export function boundText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  if (limit <= OUTPUT_TRUNCATION_MARKER.length) return value.slice(0, limit);
+  return `${value.slice(0, limit - OUTPUT_TRUNCATION_MARKER.length)}${OUTPUT_TRUNCATION_MARKER}`;
+}
+
+/** Keep post-redaction/merge fields within the same deterministic budgets as input. */
+export function boundFinding(finding: FindingInput): FindingInput {
+  const bounded: Record<string, unknown> = {};
+  for (const field of FINDING_FIELDS) {
+    const metadata: FindingFieldMetadata = FINDING_FIELD_METADATA[field];
+    const value = finding[field];
+    if (value === undefined) continue;
+    if (typeof value === "string" && metadata.maxChars !== undefined) {
+      bounded[field] = boundText(value, metadata.maxChars);
+    } else if (Array.isArray(value)) {
+      bounded[field] = value
+        .slice(0, metadata.maxItems ?? value.length)
+        .map((item) =>
+          typeof item === "string" && metadata.itemMaxChars !== undefined
+            ? boundText(item, metadata.itemMaxChars)
+            : item,
+        );
+    } else {
+      bounded[field] = value;
+    }
+  }
+  return bounded as FindingInput;
+}
+
 export const ProjectRootInput = z
   .object({
     project_root: z
@@ -176,7 +347,7 @@ export const ProjectRootInput = z
         "Absolute path (preferred) or path relative to the MCP server process cwd of the codebase to review for defensive hardening",
       ),
     stack: z
-      .enum(["auto", "common", "typescript", "nextjs", "swift", "expo"])
+      .enum(["auto", ...StackFocusSchema.options])
       .default("auto")
       .describe("Optional stack focus. Use auto to detect from project files."),
     max_files: z

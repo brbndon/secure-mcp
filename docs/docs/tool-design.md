@@ -3,7 +3,7 @@ title: Tool design
 description: Learn how secure-mcp names tools, shapes responses, models findings, and stays remediation-oriented as the defensive audit surface grows.
 sidebar:
   label: Tool design
-  order: 7
+  order: 8
 ---
 
 ## Framing
@@ -18,7 +18,7 @@ Tools use snake_case with a service prefix:
 secure_mcp_<action>_<resource>
 ```
 
-### Current stable names (v1)
+### Current stable names
 
 | Tool | Role |
 |------|------|
@@ -67,7 +67,7 @@ Most tools accept:
 
 `secure_mcp_get_knowledge_pack` does **not** require `project_root` (packs are server-bundled). Inputs: `pack_ids` (required, max **6**), optional `categories`, `max_items` (default **24**, hard max **60**), `detail` (`summary` default \| `full`), `include_index` (default **false** — omit `available_packs` catalog). Items are **round-robin fair-sampled** across `pack_ids` so stack packs are not starved; response includes `items_per_pack`. `truncated_by_max_items` is true only when `max_items` cut the category-filtered stream (a narrow `categories` filter alone is not truncation). Prefer architecture `pack_batches` when recommendations span multiple calls.
 
-`secure_mcp_analyze_architecture` with `stack=auto` unions detected stacks; a concrete `stack` value exclusively focuses pack routing (does not re-OR unrelated profile flags).
+`secure_mcp_analyze_architecture` with `stack=auto` unions detected stacks; a concrete `stack` value exclusively focuses pack routing (does not re-OR unrelated profile flags). The response keeps legacy path-bucket `surface` fields and adds typed `surfaces`, architecture-time `coverage_gaps`, `priority_paths`, and a compact derived `security_brief` (no extra walk). Pack summaries and `checklist_seed` are the threat shortlist — there is no public `threat_highlights` or `noise_tier` field on findings.
 
 `secure_mcp_check_authentication` derives `applied_pack_ids` from the routed packs for the detected (or forced) stacks, narrowed to packs with authn/authz items — so an Expo-only project reports `core` + `expo-rn`, not `auth-web`. Its Expo/React Native heuristics cover token writes to AsyncStorage/MMKV, credential-shaped `EXPO_PUBLIC_` names, and SecureStore access-control review. Its Swift heuristics cover UserDefaults/app-group token storage, overly broad Keychain accessibility (`kSecAttrAccessibleAlways`), and URLSession server-trust handlers that appear to disable validation. Swift injection/config heuristics (WebView bridges, deep-link handlers, ATS exceptions, weak hashes) live in `analyze_injection_risks`; pasteboard/logging/hardcoded secret patterns live in `review_secrets`.
 
@@ -101,13 +101,13 @@ Success payloads include at least:
 
 Category tools include `findings: Finding[]`.
 
-Read-only inventory and category tools also return `coverage`. It records included paths, excluded/ignored paths with reasons, file/depth/size caps, truncation causes, files actually reviewed, and all candidate dispositions (`reportable`, `needs_review`, `suppressed`, `not_applicable`, `deferred`). `not_observed_means` explicitly distinguishes an empty result within reviewed files from an incomplete scan.
+Read-only inventory and category tools also return `coverage`. It records included paths, excluded/ignored paths with reasons, file/depth/size caps, truncation causes, files actually reviewed, and all candidate dispositions (`reportable`, `needs_review`, `suppressed`, `not_applicable`, `deferred`, `fixed`). `not_observed_means` explicitly distinguishes an empty result within reviewed files from an incomplete scan.
 
 Inventory and architecture responses expose a bounded top-level entry preview; `topLevelEntriesTruncated` / `top_level_truncated` indicates when the preview was shortened while stack signals were still collected from the full root directory stream.
 
 Errors use `isError: true` and `{ "ok": false, "error": "...", "hint": "..." }`.
 
-## Annotations (all v1 tools)
+## Annotations (all tools)
 
 | Annotation | Value |
 |------------|-------|
@@ -122,7 +122,7 @@ Heuristics over-flag by design. Response:
 
 1. Always set `confidence`
 2. Include `notes` teaching verification
-3. Prefer candidates with remediation over silent misses for v1
+3. Prefer candidates with remediation over silent misses
 
 ## Adding a new tool
 

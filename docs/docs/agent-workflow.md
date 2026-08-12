@@ -3,7 +3,7 @@ title: Agent workflow
 description: Follow secure-mcp's multi-phase, remediation-focused sequence for an authorized code review, from bounded inventory to confirmed findings and human handoff.
 sidebar:
   label: Agent workflow
-  order: 8
+  order: 9
 ---
 
 How a coding agent should use `secure-mcp` for **defensive, remediation-focused** secure code review.
@@ -33,7 +33,7 @@ Prefer long, multi-phase analysis with intermediate artifacts when thoroughness 
 
 ```text
 Phase 1  list_project_structure          → inventory artifact (no packs yet)
-Phase 2  analyze_architecture            → stacks + recommended_packs + pack_batches
+Phase 2  analyze_architecture            → stacks + typed surfaces/gaps + recommended_packs + pack_batches
          get_knowledge_pack              → pack_batches[0] first (summary); more batches only if needed
          build_remediation_threat_model  → evidence-backed assets/boundaries + controls (optional)
 Phase 3  check_authentication
@@ -56,7 +56,7 @@ After each phase, retain structured notes the final report can cite:
 |----------|----------|
 | Inventory | stacks, file counts, sample paths |
 | Coverage | included/reviewed paths, ignored/excluded reasons, caps, truncation, and candidate dispositions |
-| Architecture | surfaces, evidence-backed trust boundaries, `recommended_packs`, `pack_batches`, small `checklist_seed` |
+| Architecture | legacy `surface` buckets, typed `surfaces`, `coverage_gaps`, `priority_paths`, optional `security_brief`, trust boundaries, `recommended_packs`, `pack_batches`, small `checklist_seed` |
 | Knowledge packs | checklist items for detected stacks only |
 | Threat model (remediation) | STRIDE items + recommended controls |
 | Category findings | raw tool findings with confidence |
@@ -103,9 +103,24 @@ Every finding passed to `secure_mcp_produce_findings` must include:
 5. **residual_risk**
 6. **verification_suggestion**
 
-## False positive hygiene
+## False positive hygiene and revalidation
 
 Treat `coverage.not_observed_means` as authoritative: only `no_candidate_in_files_reviewed` describes an empty result for the reviewed scope. A partial/truncated status requires a scoped follow-up before claiming a category was reviewed.
+
+Dispositions for candidates and revalidated work:
+
+| Disposition | Meaning |
+|-------------|---------|
+| `reportable` | Confirmed open weakness |
+| `needs_review` | Insufficient proof |
+| `suppressed` | Documented false positive / intentional |
+| `not_applicable` | Out of scope or not present |
+| `deferred` | Real but postponed |
+| `fixed` | Remediation revalidated with evidence |
+
+Pass primarily `reportable` findings into `secure_mcp_produce_findings`. If `fixed` items are included, they are counted in `candidate_disposition_counts` but do not dominate `remediation_priority`. Git “still present” checks stay on the host agent; the server does not run git.
+
+After category tools, sample high-value architecture surfaces (`surfaces` / `priority_paths` / `coverage_gaps`) that had **zero detector hits** — do not only chase candidates.
 
 Before final report:
 
@@ -113,6 +128,16 @@ Before final report:
 2. Drop pure test fixtures if out of scope (or mark as info).
 3. Merge duplicates via `secure_mcp_produce_findings` with `dedupe: true`.
 4. Keep residual low-confidence items in an appendix if useful.
+5. Record revalidation outcomes (`fixed` vs still open) with reason and evidence.
+
+## PR / diff reviews with `focus_paths`
+
+Host agents resolve git paths; the server never executes git or writes the target tree.
+
+1. Collect changed relative paths from the host (`git diff --name-only`, staged set, optional untracked when in scope).
+2. Filter untracked noise, generated artifacts, lockfiles, vendored trees, and build output when out of scope.
+3. Pass remaining prefixes as `focus_paths` (still subject to `max_files` and coverage truncation).
+4. Run architecture on the same scope so typed surfaces and gaps match the PR surface, then sample zero-hit high-value paths inside that set.
 
 ## Example parameters
 

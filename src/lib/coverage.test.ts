@@ -4,16 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { boundStructuredPayload, CHARACTER_LIMIT, toolError, toolSuccess } from "./envelope.js";
 import {
-  boundStructuredPayload,
-  CHARACTER_LIMIT,
-  finalizeCoverage,
-  finalizeInventoryCoverage,
   normalizeAuthorizedProjectRoot,
   readProjectFile,
-  recordCoverageExclusion,
-  toolError,
-  toolSuccess,
   verifyOpenedFileHandle,
   verifyOpenedDirHandle,
   walkProject,
@@ -139,47 +133,53 @@ describe("bounded coverage accounting", () => {
         maxCoverageEvents: 2,
         extensions: new Set([".ts"]),
       });
+      // Complete field tuple: the walk-time included-path cap makes the event
+      // log truncated (not just flagged), keeps scan_status partial under the
+      // accounting-cap policy, and states that scope accounting is incomplete.
+      assert.equal(result.coverage.truncation.truncated, true);
       assert.equal(result.coverage.truncation.coverage_events_truncated, true);
       assert.ok(result.coverage.truncation.reasons.includes("included_paths_cap"));
-      assert.notEqual(result.coverage.scan_status, "complete");
+      assert.equal(result.coverage.scan_status, "partial");
       assert.equal(result.coverage.not_observed_means, "scope_was_truncated_or_partial");
       assert.ok(result.coverage.included_paths.length <= 2);
       assert.ok(
         result.coverage.excluded_paths.some((item) => item.reason === "included_paths_cap"),
       );
+
+      const finalized = result.coverageSession.finish();
+      assert.ok(finalized.included_paths.length <= 2);
+      assert.equal(finalized.truncation.truncated, true);
+      assert.equal(finalized.truncation.coverage_events_truncated, true);
+      assert.equal(finalized.scan_status, "partial");
     });
   });
 
-  it("marks coverage_events_truncated when recordCoverageExclusion overflows", () => {
-    const coverage = {
-      included_paths: [],
-      excluded_paths: [
-        { path: "a", kind: "file" as const, reason: "x" },
-        { path: "b", kind: "file" as const, reason: "x" },
-      ],
-      ignored_paths: [],
-      caps: { max_files: 10, max_depth: 5, max_file_bytes: 100 },
-      truncation: { truncated: false, reasons: [], coverage_events_truncated: false },
-      files_reviewed: [],
-      candidate_dispositions: [],
-      candidate_disposition_counts: {
-        reportable: 0,
-        needs_review: 0,
-        suppressed: 0,
-        not_applicable: 0,
-        deferred: 0,
-      },
-      scan_status: "complete" as const,
-      not_observed_means: "no_candidate_in_files_reviewed" as const,
-    };
-    recordCoverageExclusion(
-      coverage,
-      { path: "c", kind: "file", reason: "extra" },
-      2,
-    );
-    assert.equal(coverage.truncation.coverage_events_truncated, true);
-    assert.ok(coverage.truncation.reasons.includes("coverage_events_cap"));
-    assert.notEqual(coverage.scan_status, "complete");
+  it("marks the full truncation tuple when session exclusions overflow with unknown reasons", async () => {
+    await withTempTree(async (root) => {
+      await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+      const { coverage, coverageSession } = await walkProject(root, { maxCoverageEvents: 2 });
+      coverageSession.recordExclusion({ path: "a", kind: "file", reason: "scanner_unknown_reason" });
+      coverageSession.recordExclusion({ path: "b", kind: "file", reason: "scanner_unknown_reason" });
+      coverageSession.recordExclusion({ path: "c", kind: "file", reason: "scanner_unknown_reason" });
+      // The overflow reason is not a walk-policy reason; the event-cap overflow
+      // itself must still flip truncation.truncated while scan_status stays
+      // partial (accounting caps never claim a truncated walk).
+      assert.equal(coverage.truncation.truncated, true);
+      assert.equal(coverage.truncation.coverage_events_truncated, true);
+      assert.ok(coverage.truncation.reasons.includes("coverage_events_cap"));
+      assert.ok(coverage.truncation.reasons.includes("scanner_unknown_reason"));
+      assert.equal(coverage.scan_status, "partial");
+      assert.equal(coverage.not_observed_means, "scope_was_truncated_or_partial");
+      assert.ok(coverage.excluded_paths.length <= 2);
+
+      coverageSession.recordReviewedFile("a.ts");
+      const finalized = coverageSession.finish();
+      assert.equal(finalized.review_basis, "content_review");
+      assert.equal(finalized.truncation.truncated, true);
+      assert.equal(finalized.truncation.coverage_events_truncated, true);
+      assert.equal(finalized.scan_status, "partial");
+      assert.equal(finalized.not_observed_means, "scope_was_truncated_or_partial");
+    });
   });
 
   it("bounds structured tool payloads, not only text", () => {
@@ -229,6 +229,7 @@ describe("bounded coverage accounting", () => {
           suppressed: 0,
           not_applicable: 0,
           deferred: 0,
+          fixed: 0,
         },
         scan_status: "complete" as const,
         not_observed_means: "no_candidate_in_files_reviewed" as const,
@@ -264,8 +265,8 @@ describe("inventory vs content-review coverage", () => {
     await withTempTree(async (root) => {
       await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
       await fs.writeFile(path.join(root, "b.ts"), "export const b = 2;\n", "utf8");
-      const { coverage } = await walkProject(root);
-      const finalized = finalizeInventoryCoverage(coverage, coverage.included_paths);
+      const { coverageSession } = await walkProject(root);
+      const finalized = coverageSession.finish();
       assert.equal(finalized.scan_status, "partial");
       assert.equal(finalized.not_observed_means, "inventory_only_contents_not_reviewed");
       assert.equal(finalized.review_basis, "inventory_only");
@@ -278,8 +279,8 @@ describe("inventory vs content-review coverage", () => {
     await withTempTree(async (root) => {
       await fs.writeFile(path.join(root, "a.ts"), "x", "utf8");
       await fs.writeFile(path.join(root, "b.ts"), "y", "utf8");
-      const { coverage } = await walkProject(root, { maxFiles: 1 });
-      const finalized = finalizeInventoryCoverage(coverage, coverage.included_paths);
+      const { coverageSession } = await walkProject(root, { maxFiles: 1 });
+      const finalized = coverageSession.finish();
       assert.equal(finalized.scan_status, "truncated");
       assert.equal(finalized.not_observed_means, "inventory_only_contents_not_reviewed");
     });
@@ -290,8 +291,8 @@ describe("inventory vs content-review coverage", () => {
       await fs.writeFile(path.join(root, "a.ts"), "x", "utf8");
       await fs.mkdir(path.join(root, "node_modules"));
       await fs.writeFile(path.join(root, "node_modules", "n.ts"), "y", "utf8");
-      const { coverage } = await walkProject(root);
-      const finalized = finalizeInventoryCoverage(coverage, coverage.included_paths);
+      const { coverageSession } = await walkProject(root);
+      const finalized = coverageSession.finish();
       assert.equal(finalized.scan_status, "partial");
       assert.equal(finalized.not_observed_means, "inventory_only_contents_not_reviewed");
       assert.ok(finalized.ignored_paths.some((item) => item.path === "node_modules"));
@@ -301,8 +302,9 @@ describe("inventory vs content-review coverage", () => {
   it("keeps complete and no_candidate only when content review receipts exist", async () => {
     await withTempTree(async (root) => {
       await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
-      const { coverage } = await walkProject(root);
-      const reviewed = finalizeCoverage(coverage, ["a.ts"], []);
+      const { coverageSession } = await walkProject(root);
+      coverageSession.recordReviewedFile("a.ts");
+      const reviewed = coverageSession.finish();
       assert.equal(reviewed.scan_status, "complete");
       assert.equal(reviewed.not_observed_means, "no_candidate_in_files_reviewed");
       assert.equal(reviewed.review_basis, "content_review");
@@ -314,8 +316,9 @@ describe("inventory vs content-review coverage", () => {
     await withTempTree(async (root) => {
       await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
       await fs.writeFile(path.join(root, "b.ts"), "export const b = 2;\n", "utf8");
-      const { coverage } = await walkProject(root);
-      const reviewed = finalizeCoverage(coverage, ["a.ts"], []);
+      const { coverageSession } = await walkProject(root);
+      coverageSession.recordReviewedFile("a.ts");
+      const reviewed = coverageSession.finish();
       assert.equal(reviewed.scan_status, "partial");
       assert.equal(reviewed.review_basis, "content_review");
       assert.equal(reviewed.not_observed_means, "scope_was_truncated_or_partial");
@@ -326,12 +329,89 @@ describe("inventory vs content-review coverage", () => {
   it("does not turn an empty receipt set into a no-candidate claim", async () => {
     await withTempTree(async (root) => {
       await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
-      const { coverage } = await walkProject(root);
-      const finalized = finalizeCoverage(coverage, [], []);
+      const { coverageSession } = await walkProject(root);
+      const finalized = coverageSession.finish();
       assert.equal(finalized.scan_status, "partial");
       assert.equal(finalized.review_basis, "inventory_only");
       assert.equal(finalized.not_observed_means, "inventory_only_contents_not_reviewed");
       assert.deepEqual(finalized.files_reviewed, []);
+    });
+  });
+
+  it("retains candidate dispositions on an inventory-only finish", async () => {
+    await withTempTree(async (root) => {
+      await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+      const { coverageSession } = await walkProject(root);
+      const finalized = coverageSession.finish([
+        {
+          id: "C-1",
+          disposition: "reportable",
+          disposition_reason: "Synthetic candidate retained for coverage accounting.",
+          file: "a.ts",
+          line: 1,
+        },
+      ]);
+
+      assert.equal(finalized.review_basis, "inventory_only");
+      assert.equal(finalized.scan_status, "partial");
+      assert.equal(finalized.not_observed_means, "inventory_only_contents_not_reviewed");
+      assert.deepEqual(finalized.files_reviewed, []);
+      assert.equal(finalized.candidate_dispositions.length, 1);
+      assert.equal(finalized.candidate_disposition_counts.reportable, 1);
+    });
+  });
+
+  it("rejects review receipts for paths outside the walk inventory", async () => {
+    await withTempTree(async (root) => {
+      const { coverageSession } = await walkProject(root);
+      assert.throws(
+        () => coverageSession.recordReviewedFile("not-in-inventory.ts"),
+        /not part of the coverage inventory/i,
+      );
+
+      const finalized = coverageSession.finish();
+      assert.equal(finalized.review_basis, "inventory_only");
+      assert.equal(finalized.scan_status, "partial");
+      assert.deepEqual(finalized.files_reviewed, []);
+    });
+  });
+
+  it("rejects all session operations after finish", async () => {
+    await withTempTree(async (root) => {
+      await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+      const { coverageSession } = await walkProject(root);
+      coverageSession.finish();
+
+      assert.throws(() => coverageSession.finish(), /already been finished/i);
+      assert.throws(
+        () => coverageSession.recordReviewedFile("a.ts"),
+        /already been finished/i,
+      );
+      assert.throws(
+        () => coverageSession.recordExclusion({ path: "a.ts", kind: "file", reason: "late" }),
+        /already been finished/i,
+      );
+    });
+  });
+
+  it("does not let an inconsistent exclusion and receipt sequence report complete", async () => {
+    await withTempTree(async (root) => {
+      await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+      await fs.writeFile(path.join(root, "b.ts"), "export const b = 2;\n", "utf8");
+      const { coverageSession } = await walkProject(root);
+      coverageSession.recordExclusion({
+        path: "b.ts",
+        kind: "file",
+        reason: "scanner_candidate_filter_or_budget",
+      });
+      coverageSession.recordReviewedFile("a.ts");
+      coverageSession.recordReviewedFile("b.ts");
+
+      const finalized = coverageSession.finish();
+
+      assert.equal(finalized.review_basis, "content_review");
+      assert.equal(finalized.scan_status, "partial");
+      assert.equal(finalized.not_observed_means, "scope_was_truncated_or_partial");
     });
   });
 });
@@ -459,6 +539,7 @@ describe("bounded fallback envelope", () => {
             suppressed: 0,
             not_applicable: 0,
             deferred: 0,
+            fixed: 0,
           },
           scan_status: "complete" as const,
           not_observed_means: "no_candidate_in_files_reviewed" as const,

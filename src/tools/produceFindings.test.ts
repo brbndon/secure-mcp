@@ -278,3 +278,62 @@ describe("produceFindings bounded inputs and redaction", () => {
     assert.ok(!JSON.stringify(result.structured).includes(secret));
   });
 });
+
+describe("produceFindings disposition counting and priority", () => {
+  it("counts fixed dispositions without letting them dominate remediation_priority", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({
+          id: "OPEN-1",
+          title: "Open auth gap",
+          severity: "high",
+          confidence: "high",
+          disposition: "reportable",
+          file: "src/a.ts",
+          line: 1,
+        }),
+        makeFinding({
+          id: "FIXED-1",
+          title: "Already fixed injection",
+          severity: "critical",
+          confidence: "high",
+          disposition: "fixed",
+          disposition_reason: "Parameterized query landed; verified at sink.",
+          file: "src/b.ts",
+          line: 2,
+        }),
+        makeFinding({
+          id: "REVIEW-1",
+          title: "Needs review secret",
+          severity: "high",
+          confidence: "medium",
+          disposition: "needs_review",
+          file: "src/c.ts",
+          line: 3,
+        }),
+      ],
+      "Disposition report",
+      "json",
+    );
+    const counts = result.structured.candidate_disposition_counts as Record<string, number>;
+    assert.equal(counts.reportable, 1);
+    assert.equal(counts.fixed, 1);
+    assert.equal(counts.needs_review, 1);
+    assert.ok("fixed" in counts);
+
+    const priority = result.structured.executive_summary.remediation_priority as Array<{
+      title: string;
+      disposition?: string;
+    }>;
+    assert.ok(priority.some((item) => item.title === "Open auth gap"));
+    assert.ok(!priority.some((item) => item.title === "Already fixed injection"));
+
+    const findings = result.structured.findings as Array<{ title: string; disposition?: string }>;
+    // Open reportable should sort ahead of fixed even if fixed is more severe.
+    const openIdx = findings.findIndex((f) => f.title === "Open auth gap");
+    const fixedIdx = findings.findIndex((f) => f.title === "Already fixed injection");
+    assert.ok(openIdx >= 0 && fixedIdx >= 0);
+    assert.ok(openIdx < fixedIdx);
+  });
+});
+

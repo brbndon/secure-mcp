@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  boundFinding,
   buildFinding,
   createFindingInstanceId,
   ensureFindingTraceability,
   FindingSchema,
+  mergeFindings,
   MAX_FINDING_NARRATIVE,
   MAX_FINDING_TITLE,
   ProjectRootInput,
@@ -104,6 +106,22 @@ describe("finding traceability", () => {
     assert.ok(enriched.validation?.length);
   });
 
+  it("preserves a traceability field through merge and post-redaction bounds", () => {
+    const first = { ...sampleFinding(12), source: undefined };
+    const second = {
+      ...sampleFinding(12),
+      source: "request.user.id",
+      validation: ["Confirm the authenticated principal reaches the ownership check."],
+    };
+
+    const bounded = boundFinding(mergeFindings(first, second));
+
+    assert.equal(bounded.source, second.source);
+    assert.ok(bounded.validation?.includes(second.validation[0]!));
+    assert.ok(bounded.validation?.includes(first.validation![0]!));
+    assert.equal(FindingSchema.safeParse(bounded).success, true);
+  });
+
 });
 
 describe("bounded finding payloads", () => {
@@ -156,5 +174,32 @@ describe("bounded finding payloads", () => {
       focus_paths: ["y".repeat(501)],
     });
     assert.equal(focusResult.success, false);
+  });
+});
+
+describe("candidate dispositions", () => {
+  it("accepts fixed disposition for revalidated remediations", () => {
+    const finding = buildFinding({
+      ...sampleFinding(12),
+      disposition: "fixed",
+      disposition_reason: "Control added at source and verified in review.",
+    });
+    assert.equal(FindingSchema.safeParse(finding).success, true);
+    assert.equal(finding.disposition, "fixed");
+  });
+
+  it("merges reportable over fixed when both exist for the same instance", () => {
+    const fixed = buildFinding({
+      ...sampleFinding(12),
+      disposition: "fixed",
+      disposition_reason: "Previously remediated.",
+    });
+    const open = buildFinding({
+      ...sampleFinding(12),
+      disposition: "reportable",
+      disposition_reason: "Regression still open.",
+    });
+    const merged = mergeFindings(fixed, open);
+    assert.equal(merged.disposition, "reportable");
   });
 });

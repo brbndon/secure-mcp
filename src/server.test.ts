@@ -208,7 +208,7 @@ describe("server configuration and stack scoping", () => {
     }
   });
 
-  it("does not add Next.js injection detectors to explicit TypeScript scans", () => {
+  it("adds Next.js injection detectors only for nextjs focus or detected nextjs", () => {
     assert.equal(shouldRunNextjsInjectionDetectors("typescript"), false);
     assert.equal(shouldRunNextjsInjectionDetectors("nextjs"), true);
     assert.equal(shouldRunNextjsInjectionDetectors("auto", ["common", "nextjs"]), true);
@@ -252,8 +252,108 @@ describe("server configuration and stack scoping", () => {
     }
   });
 
+  it("runs common injection detectors for an Expo-focused MCP scan", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-expo-injection-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 10,
+      maxFileBytes: 1024,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+
+    try {
+      await fs.writeFile(
+        path.join(root, "App.tsx"),
+        "export const run = (input: string) => eval(input);\n",
+        "utf8",
+      );
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_injection_risks",
+        arguments: { project_root: root, stack: "expo", response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        findings: Array<{ root_control?: string }>;
+        applied_pack_ids: string[];
+        coverage: {
+          files_reviewed: string[];
+          review_basis: string;
+          scan_status: string;
+          not_observed_means: string;
+        };
+        knowledge_pack_traceability: { detector_families_run: string[] };
+      };
+      assert.ok(data.findings.some((finding) => finding.root_control === "INJ-EVAL"));
+      assert.ok(data.applied_pack_ids.includes("core"));
+      assert.ok(data.knowledge_pack_traceability.detector_families_run.includes("core.injection"));
+      assert.deepEqual(data.coverage.files_reviewed, ["App.tsx"]);
+      assert.equal(data.coverage.review_basis, "content_review");
+      assert.equal(data.coverage.scan_status, "complete");
+      assert.equal(data.coverage.not_observed_means, "no_candidate_in_files_reviewed");
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not issue content-review receipts when no injection detector applies", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-injection-receipt-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 10,
+      maxFileBytes: 1024,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+
+    try {
+      await fs.writeFile(path.join(root, "App.tsx"), "export const safe = true;\n", "utf8");
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_injection_risks",
+        arguments: { project_root: root, stack: "swift", response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const coverage = (result.structuredContent as {
+        coverage: {
+          excluded_paths: Array<{ path: string; reason: string }>;
+          files_reviewed: string[];
+          review_basis: string;
+          scan_status: string;
+          not_observed_means: string;
+        };
+      }).coverage;
+      assert.deepEqual(coverage.files_reviewed, []);
+      assert.equal(coverage.review_basis, "inventory_only");
+      assert.equal(coverage.scan_status, "partial");
+      assert.equal(coverage.not_observed_means, "inventory_only_contents_not_reviewed");
+      assert.ok(
+        coverage.excluded_paths.some(
+          (entry) =>
+            entry.path === "App.tsx" && entry.reason === "no_applicable_injection_detectors",
+        ),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("applies caller file caps to profiling and redacts inventory paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-inventory-boundary-"));
+    const githubToken = `ghp_${"B".repeat(32)}`;
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), `secure-mcp-inventory-${githubToken}-`),
+    );
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createServer({
       name: "secure-mcp-test",
@@ -306,6 +406,8 @@ describe("server configuration and stack scoping", () => {
       assert.ok(markdownInventory);
       assert.ok(!markdownInventory.text.includes(".env.production"));
       assert.ok(!markdownInventory.text.includes("server.pem"));
+      assert.ok(!markdownInventory.text.replaceAll("\\", "").includes(githubToken));
+      assert.ok(!JSON.stringify(markdownInventoryResult.structuredContent).includes(githubToken));
 
       const architectureResult = await client.callTool({
         name: "secure_mcp_analyze_architecture",
@@ -356,3 +458,137 @@ describe("server configuration and stack scoping", () => {
     }
   });
 });
+
+describe("architecture typed surfaces", () => {
+  it("returns typed surfaces, coverage gaps, priority paths, and security brief", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-surfaces-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 50,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "fixture-next",
+          dependencies: { next: "15.0.0", react: "19.0.0" },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "next.config.js"), "module.exports = {};\n", "utf8");
+      await fs.mkdir(path.join(root, "app", "api", "items"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "items", "route.ts"),
+        "export async function GET() { return Response.json({}); }\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(root, "middleware.ts"),
+        "export function middleware() {}\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "lib"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "lib", "auth.ts"),
+        "export function requireUser() {}\n",
+        "utf8",
+      );
+
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_architecture",
+        arguments: { project_root: root, stack: "nextjs", max_files: 50, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        stacks: string[];
+        surface: Record<string, string[]>;
+        surfaces: Array<{
+          kind: string;
+          exposure: string;
+          paths: string[];
+          auth_expectation: string;
+        }>;
+        coverage_gaps: Array<{ kind: string; paths: string[]; suggested_tools: string[] }>;
+        priority_paths: string[];
+        security_brief: {
+          stacks: string[];
+          coverage_gap_count: number;
+          high_value_surfaces: unknown[];
+          priority_paths: string[];
+        };
+        trust_boundaries: string[];
+      };
+
+      assert.ok(data.stacks.includes("nextjs"));
+      assert.ok(Array.isArray(data.surface.api_routes));
+      assert.ok(data.surfaces.length > 0);
+      assert.ok(data.surfaces.some((s) => s.kind === "http_route"));
+      assert.ok(data.surfaces.some((s) => s.kind === "middleware" || s.kind === "auth_surface"));
+      for (const surface of data.surfaces) {
+        assert.ok(surface.auth_expectation.length > 0);
+        assert.ok(["public", "authenticated", "internal", "unknown"].includes(surface.exposure));
+        // stack-honest: nextjs forced should not invent pure mobile-only kinds without paths
+        assert.ok(!["deep_link", "webview", "secure_storage"].includes(surface.kind));
+      }
+      assert.ok(data.coverage_gaps.length > 0);
+      assert.ok(data.priority_paths.length > 0);
+      assert.ok(data.security_brief.coverage_gap_count === data.coverage_gaps.length);
+      assert.ok(data.security_brief.high_value_surfaces.length > 0);
+      assert.ok(data.trust_boundaries.length > 0);
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not invent Next-only surfaces for a Swift root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-swift-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 40,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await fs.writeFile(path.join(root, "Package.swift"), "// swift-tools-version: 5.9\n", "utf8");
+      await fs.writeFile(path.join(root, "App.swift"), "import SwiftUI\n@main struct App {}\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "KeychainStore.swift"),
+        "import Security\nenum KeychainStore {}\n",
+        "utf8",
+      );
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_architecture",
+        arguments: { project_root: root, stack: "swift", max_files: 40, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        stacks: string[];
+        surfaces: Array<{ kind: string }>;
+      };
+      assert.ok(data.stacks.includes("swift"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "server_action"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "middleware"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "page_entry"));
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+

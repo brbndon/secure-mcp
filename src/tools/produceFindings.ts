@@ -5,9 +5,9 @@
 
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { toolError, toolSuccess } from "../lib/filesystem.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 import { redactFindings, redactedEvidence } from "../lib/redact.js";
-import { escapeMarkdown, markdownCode } from "../lib/markdown.js";
+import { renderFindingsReportMarkdown } from "../lib/markdown.js";
 import {
   CANDIDATE_DISPOSITIONS,
   SEVERITY_ORDER,
@@ -16,21 +16,13 @@ import {
   type Severity,
 } from "../lib/types.js";
 import {
+  boundFinding,
+  boundText,
   ensureFindingTraceability,
   FindingSchema,
+  mergeFindings,
   MAX_FINDINGS,
   MAX_FINDINGS_DECODED_BYTES,
-  MAX_FINDING_CATEGORY,
-  MAX_FINDING_DISPOSITION_REASON,
-  MAX_FINDING_ID,
-  MAX_FINDING_LABEL,
-  MAX_FINDING_LIST_ITEM,
-  MAX_FINDING_LIST_ITEMS,
-  MAX_FINDING_NARRATIVE,
-  MAX_FINDING_PATH,
-  MAX_FINDING_TAG,
-  MAX_FINDING_TAGS,
-  MAX_FINDING_TITLE,
   MAX_PROJECT_ROOT_LENGTH,
   MAX_REPORT_TITLE,
 } from "../knowledge/findings-schema.js";
@@ -104,218 +96,6 @@ function dedupeKey(f: Finding): string {
   ).toLowerCase();
 }
 
-function mergeFindings(a: Finding, b: Finding): Finding {
-  const severity =
-    SEVERITY_ORDER[a.severity] >= SEVERITY_ORDER[b.severity] ? a.severity : b.severity;
-  const confidence =
-    CONFIDENCE_ORDER[a.confidence] >= CONFIDENCE_ORDER[b.confidence]
-      ? a.confidence
-      : b.confidence;
-  const mergeList = (left: string[] | undefined, right: string[] | undefined, limit: number) =>
-    [...new Set([...(left ?? []), ...(right ?? [])])].slice(0, limit);
-  const tags = mergeList(a.tags, b.tags, MAX_FINDING_TAGS);
-  return {
-    ...a,
-    severity,
-    confidence,
-    description: a.description.length >= b.description.length ? a.description : b.description,
-    evidence: a.evidence.length >= b.evidence.length ? a.evidence : b.evidence,
-    impact_if_unremediated:
-      a.impact_if_unremediated.length >= b.impact_if_unremediated.length
-        ? a.impact_if_unremediated
-        : b.impact_if_unremediated,
-    remediation: a.remediation.length >= b.remediation.length ? a.remediation : b.remediation,
-    residual_risk:
-      a.residual_risk.length >= b.residual_risk.length ? a.residual_risk : b.residual_risk,
-    verification_suggestion:
-      a.verification_suggestion.length >= b.verification_suggestion.length
-        ? a.verification_suggestion
-        : b.verification_suggestion,
-    cwe: a.cwe ?? b.cwe,
-    owasp: a.owasp ?? b.owasp,
-    rule_family: a.rule_family ?? b.rule_family,
-    root_control: a.root_control ?? b.root_control,
-    instance_id: a.instance_id ?? b.instance_id,
-    disposition:
-      a.disposition === "reportable" || b.disposition === "reportable"
-        ? "reportable"
-        : a.disposition ?? b.disposition,
-    disposition_reason: a.disposition_reason ?? b.disposition_reason,
-    source: a.source ?? b.source,
-    control: a.control ?? b.control,
-    sink: a.sink ?? b.sink,
-    counterevidence: mergeList(a.counterevidence, b.counterevidence, MAX_FINDING_LIST_ITEMS),
-    proof_gap: mergeList(a.proof_gap, b.proof_gap, MAX_FINDING_LIST_ITEMS),
-    validation: mergeList(a.validation, b.validation, MAX_FINDING_LIST_ITEMS),
-    tags: tags.length ? tags : undefined,
-  };
-}
-
-const OUTPUT_TRUNCATION_MARKER = "…[truncated]";
-
-function boundString(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  if (limit <= OUTPUT_TRUNCATION_MARKER.length) return value.slice(0, limit);
-  return `${value.slice(0, limit - OUTPUT_TRUNCATION_MARKER.length)}${OUTPUT_TRUNCATION_MARKER}`;
-}
-
-/** Keep post-redaction/merge fields within the same deterministic budgets as input. */
-function boundFinding(finding: Finding): Finding {
-  return {
-    ...finding,
-    id: boundString(finding.id, MAX_FINDING_ID),
-    title: boundString(finding.title, MAX_FINDING_TITLE),
-    description: boundString(finding.description, MAX_FINDING_NARRATIVE),
-    category: boundString(finding.category, MAX_FINDING_CATEGORY),
-    ...(finding.file !== undefined
-      ? { file: boundString(finding.file, MAX_FINDING_PATH) }
-      : {}),
-    evidence: boundString(finding.evidence, MAX_FINDING_NARRATIVE),
-    impact_if_unremediated: boundString(finding.impact_if_unremediated, MAX_FINDING_NARRATIVE),
-    remediation: boundString(finding.remediation, MAX_FINDING_NARRATIVE),
-    residual_risk: boundString(finding.residual_risk, MAX_FINDING_NARRATIVE),
-    verification_suggestion: boundString(
-      finding.verification_suggestion,
-      MAX_FINDING_NARRATIVE,
-    ),
-    ...(finding.cwe !== undefined ? { cwe: boundString(finding.cwe, MAX_FINDING_LABEL) } : {}),
-    ...(finding.owasp !== undefined
-      ? { owasp: boundString(finding.owasp, MAX_FINDING_LABEL) }
-      : {}),
-    ...(finding.tags !== undefined
-      ? { tags: finding.tags.slice(0, MAX_FINDING_TAGS).map((tag) => boundString(tag, MAX_FINDING_TAG)) }
-      : {}),
-    ...(finding.rule_family !== undefined
-      ? { rule_family: boundString(finding.rule_family, MAX_FINDING_LABEL) }
-      : {}),
-    ...(finding.root_control !== undefined
-      ? { root_control: boundString(finding.root_control, MAX_FINDING_LABEL) }
-      : {}),
-    ...(finding.instance_id !== undefined
-      ? { instance_id: boundString(finding.instance_id, MAX_FINDING_LABEL) }
-      : {}),
-    ...(finding.disposition_reason !== undefined
-      ? { disposition_reason: boundString(finding.disposition_reason, MAX_FINDING_DISPOSITION_REASON) }
-      : {}),
-    ...(finding.source !== undefined
-      ? { source: boundString(finding.source, MAX_FINDING_NARRATIVE) }
-      : {}),
-    ...(finding.control !== undefined
-      ? { control: boundString(finding.control, MAX_FINDING_NARRATIVE) }
-      : {}),
-    ...(finding.sink !== undefined
-      ? { sink: boundString(finding.sink, MAX_FINDING_NARRATIVE) }
-      : {}),
-    ...(finding.counterevidence !== undefined
-      ? {
-          counterevidence: finding.counterevidence
-            .slice(0, MAX_FINDING_LIST_ITEMS)
-            .map((item) => boundString(item, MAX_FINDING_LIST_ITEM)),
-        }
-      : {}),
-    ...(finding.proof_gap !== undefined
-      ? {
-          proof_gap: finding.proof_gap
-            .slice(0, MAX_FINDING_LIST_ITEMS)
-            .map((item) => boundString(item, MAX_FINDING_LIST_ITEM)),
-        }
-      : {}),
-    ...(finding.validation !== undefined
-      ? {
-          validation: finding.validation
-            .slice(0, MAX_FINDING_LIST_ITEMS)
-            .map((item) => boundString(item, MAX_FINDING_LIST_ITEM)),
-        }
-      : {}),
-  };
-}
-
-function buildMarkdown(
-  title: string,
-  projectRoot: string | undefined,
-  findings: Finding[],
-  counts: Record<string, number>,
-): string {
-  const lines: string[] = [
-    `# ${escapeMarkdown(title)}`,
-    "",
-    "> Defensive secure-code-review report. Goal: help the development team harden the codebase. Do not include exploit or attack PoC content.",
-    "",
-    projectRoot ? `**Project:** ${escapeMarkdown(projectRoot)}` : "",
-    `**Total findings:** ${findings.length}`,
-    "",
-    "## Summary by severity (remediation priority)",
-    ...Object.entries(counts).map(([k, v]) => `- **${k}**: ${v}`),
-    "",
-    "## Findings",
-  ];
-
-  for (const f of findings) {
-    lines.push("");
-    lines.push(`### ${escapeMarkdown(f.id)} — ${escapeMarkdown(f.title)}`);
-    lines.push("");
-    lines.push(`#### Classification`);
-    lines.push(`- **Severity:** ${f.severity}`);
-    lines.push(`- **Confidence:** ${f.confidence}`);
-    lines.push(`- **Category:** ${escapeMarkdown(f.category)}`);
-    if (f.cwe) lines.push(`- **CWE:** ${escapeMarkdown(f.cwe)}`);
-    if (f.owasp) lines.push(`- **OWASP:** ${escapeMarkdown(f.owasp)}`);
-    if (f.file) {
-      lines.push(
-        `- **Location:** ${escapeMarkdown(`${f.file}${f.line ? `:${f.line}` : ""}`)}`,
-      );
-    }
-    if (f.instance_id) lines.push(`- **Stable instance:** ${escapeMarkdown(f.instance_id)}`);
-    if (f.rule_family) lines.push(`- **Rule family:** ${escapeMarkdown(f.rule_family)}`);
-    if (f.root_control) lines.push(`- **Root control:** ${escapeMarkdown(f.root_control)}`);
-    if (f.disposition) lines.push(`- **Disposition:** ${escapeMarkdown(f.disposition)}`);
-    if (f.disposition_reason) {
-      lines.push(`- **Disposition reason:** ${escapeMarkdown(f.disposition_reason)}`);
-    }
-    lines.push("");
-    lines.push(`#### Evidence`);
-    lines.push(escapeMarkdown(f.description));
-    lines.push("");
-    lines.push(markdownCode(f.evidence));
-    if (f.source || f.control || f.sink) {
-      lines.push("");
-      lines.push(`#### Proof context`);
-      if (f.source) lines.push(`- **Source:** ${escapeMarkdown(f.source)}`);
-      if (f.control) lines.push(`- **Control:** ${escapeMarkdown(f.control)}`);
-      if (f.sink) lines.push(`- **Sink:** ${escapeMarkdown(f.sink)}`);
-    }
-    if (f.counterevidence?.length) {
-      lines.push("");
-      lines.push(`#### Counterevidence`);
-      for (const item of f.counterevidence) lines.push(`- ${escapeMarkdown(item)}`);
-    }
-    if (f.proof_gap?.length) {
-      lines.push("");
-      lines.push(`#### Proof gap`);
-      for (const item of f.proof_gap) lines.push(`- ${escapeMarkdown(item)}`);
-    }
-    if (f.validation?.length) {
-      lines.push("");
-      lines.push(`#### Validation`);
-      for (const item of f.validation) lines.push(`- ${escapeMarkdown(item)}`);
-    }
-    lines.push("");
-    lines.push(`#### Impact if unremediated`);
-    lines.push(escapeMarkdown(f.impact_if_unremediated));
-    lines.push("");
-    lines.push(`#### Remediation`);
-    lines.push(escapeMarkdown(f.remediation));
-    lines.push("");
-    lines.push(`#### Residual risk`);
-    lines.push(escapeMarkdown(f.residual_risk));
-    lines.push("");
-    lines.push(`#### Verification suggestion`);
-    lines.push(escapeMarkdown(f.verification_suggestion));
-  }
-
-  return lines.filter((l) => l !== undefined).join("\n");
-}
-
 /** Exported for tests: markdown includes additive proof/traceability fields. */
 export function findingsToMarkdown(
   title: string,
@@ -323,10 +103,10 @@ export function findingsToMarkdown(
   findings: Finding[],
   counts: Record<string, number>,
 ): string {
-  return buildMarkdown(title, projectRoot, findings, counts);
+  return renderFindingsReportMarkdown({ title, projectRoot, findings, counts });
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts.`;
+const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts, candidate_disposition_counts (includes fixed).\n\nDisposition: pass confirmed open findings as reportable; pass revalidated remediations as fixed with disposition_reason and evidence. Fixed findings are counted but ranked after open reportable work in remediation_priority.`;
 
 export function registerProduceFindings(server: McpServer): void {
   server.registerTool(
@@ -363,6 +143,25 @@ export function registerProduceFindings(server: McpServer): void {
         }
 
         list.sort((a, b) => {
+          // Open work first: fixed/suppressed/not_applicable/deferred rank after open candidates.
+          const openRank = (f: Finding): number => {
+            switch (f.disposition) {
+              case "fixed":
+                return 0;
+              case "suppressed":
+              case "not_applicable":
+              case "deferred":
+                return 1;
+              case "needs_review":
+                return 2;
+              case "reportable":
+              case undefined:
+              default:
+                return 3;
+            }
+          };
+          const open = openRank(b) - openRank(a);
+          if (open !== 0) return open;
           const sev = SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity];
           if (sev !== 0) return sev;
           const confidence = CONFIDENCE_ORDER[b.confidence] - CONFIDENCE_ORDER[a.confidence];
@@ -395,12 +194,12 @@ export function registerProduceFindings(server: McpServer): void {
         };
         for (const f of list) counts[f.severity]++;
 
-        const title = boundString(
+        const title = boundText(
           redactedEvidence(params.report_title ?? "Secure code review — remediation findings"),
           MAX_REPORT_TITLE,
         );
         const projectRoot = params.project_root
-          ? boundString(redactedEvidence(params.project_root), MAX_PROJECT_ROOT_LENGTH)
+          ? boundText(redactedEvidence(params.project_root), MAX_PROJECT_ROOT_LENGTH)
           : undefined;
         const risk_score =
           counts.critical * 10 + counts.high * 5 + counts.medium * 2 + counts.low * 1;
@@ -411,13 +210,20 @@ export function registerProduceFindings(server: McpServer): void {
           risk_score,
           top_categories: topCategories(list, 5),
           remediation_priority: list
-            .filter((f) => f.severity === "critical" || f.severity === "high")
+            .filter(
+              (f) =>
+                (f.severity === "critical" || f.severity === "high") &&
+                f.disposition !== "fixed" &&
+                f.disposition !== "suppressed" &&
+                f.disposition !== "not_applicable",
+            )
             .slice(0, 10)
             .map((f) => ({
               id: f.id,
               instance_id: f.instance_id,
               title: f.title,
               severity: f.severity,
+              disposition: f.disposition,
               remediation: f.remediation,
             })),
           framing:
@@ -433,13 +239,14 @@ export function registerProduceFindings(server: McpServer): void {
           candidate_disposition_counts: countDispositions(list),
           notes: [
             "Each finding follows evidence → classify → impact → remediate → verify.",
+            "Disposition fixed means revalidation confirmed the remediation; fixed items are counted but do not dominate remediation_priority.",
             "Do not expand this report into exploit or PoC attack material.",
           ],
         };
 
         return toolSuccess(data, {
           responseFormat: params.response_format,
-          markdown: buildMarkdown(title, projectRoot, list, counts),
+          markdown: renderFindingsReportMarkdown({ title, projectRoot, findings: list, counts }),
         });
       } catch (error) {
         return toolError(
@@ -451,7 +258,8 @@ export function registerProduceFindings(server: McpServer): void {
   );
 }
 
-function countDispositions(findings: Finding[]): Record<CandidateDisposition, number> {
+/** Exported for tests: disposition histogram including fixed revalidation outcomes. */
+export function countDispositions(findings: Finding[]): Record<CandidateDisposition, number> {
   const counts = Object.fromEntries(
     CANDIDATE_DISPOSITIONS.map((disposition) => [disposition, 0]),
   ) as Record<CandidateDisposition, number>;
