@@ -160,7 +160,7 @@ Checkout-based MCP configs can point at `dist/index.js` instead of `npx`:
 }
 ```
 
-## MCP v2 protocol support
+## MCP protocol / SDK versions
 
 Published npm `@brdndon/secure-mcp@1.0.0` still ships **MCP SDK v1** (`@modelcontextprotocol/sdk`). MCP SDK v2 is on the default branch (and other development checkouts) under **Unreleased** until the next versioned publish.
 

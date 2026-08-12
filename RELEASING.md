@@ -19,7 +19,7 @@ Releases are maintainer-driven. Do not publish from an unreviewed or dirty check
 pnpm release:check
 ```
 
-This runs type checking, tests, the build and MCP smoke test, documentation build and link validation, a dependency audit at every severity, and an npm tarball dry run. Do not publish while any step fails. Inspect the tarball list and confirm it contains only compiled server files and public project documents—never local configuration, fixtures, source maps with private paths, or credentials.
+This runs type checking, tests, the build and MCP smoke test, documentation build and link validation, a dependency audit at every severity, and an npm tarball dry run. Do not publish while any step fails. Inspect the tarball list and confirm it contains only compiled server files and public project documents—never local configuration, fixtures, source maps with private paths, or credentials. The published tarball includes `README.md` and `CHANGELOG.md`: confirm they still describe the npm install path, Security Advisories reporting, and which MCP SDK version this package version ships before you publish.
 
 ## 3. Publish
 

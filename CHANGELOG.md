@@ -12,6 +12,8 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 - Added Contributor Covenant code of conduct and clarified support vs security channels.
 - Clarified that npm `@brdndon/secure-mcp@1.0.0` ships MCP SDK v1 while the default branch may already include SDK v2 (Unreleased).
 - Linked the bug report template directly to Security Advisories (not only SECURITY.md by name).
+- Renamed the README protocol section to cover npm SDK v1 vs default-branch SDK v2 without a v2-only heading.
+- Added a Security Advisories contact link on the GitHub issue chooser (`contact_links`).
 
 ## 1.0.0 — 2026-08-09
 
