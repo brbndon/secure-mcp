@@ -291,10 +291,8 @@ function buildTypedSurfaces(
       collectKindPaths(
         relativePaths,
         (p, base) =>
-          base === "page.tsx" ||
-          base === "page.jsx" ||
-          base === "layout.tsx" ||
-          p.toLowerCase() === "app/page.tsx",
+          (base === "page.tsx" || base === "page.jsx" || base === "layout.tsx") &&
+          (p.toLowerCase().startsWith("app/") || p.toLowerCase().startsWith("pages/")),
       ),
       "unknown",
       "Confirm server-side data loaders enforce session/ownership before rendering sensitive data.",
@@ -351,7 +349,7 @@ function buildTypedSurfaces(
             p,
           ),
       ),
-      "authenticated",
+      "unknown",
       "Verify session establishment, refresh, logout, and object-level authorization together.",
       authStacks,
     );
@@ -362,10 +360,7 @@ function buildTypedSurfaces(
       "deep_link",
       collectKindPaths(
         relativePaths,
-        (p, base) =>
-          /deep.?link|universal.?link|onopenurl|linking|authsession|redirect/i.test(p) ||
-          base === "app.json" ||
-          base.startsWith("app.config"),
+        (p) => /deep.?link|universal.?link|onopenurl|linking|authsession|redirect/i.test(p),
       ),
       "public",
       "Validate deep-link/AuthSession targets before elevating session or navigation privileges.",
@@ -855,6 +850,14 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
             {
               heading: `Priority paths (${safePriorityPaths.length})`,
               bullets: safePriorityPaths.slice(0, 16),
+            },
+            {
+              heading: "Security brief",
+              bullets: [
+                `High-value surface count: ${security_brief.high_value_surfaces.length}`,
+                `Coverage gap count: ${security_brief.coverage_gap_count}`,
+                ...security_brief.notes,
+              ],
             },
             {
               heading: `Auth-related paths (${surface.auth_related.length})`,

@@ -17,12 +17,14 @@ import {
   focusedProfileForStack,
   getPack,
   packIdsWithCategories,
+  recommendCategoryPackIds,
   recommendPackIds,
   recommendPackPlan,
   uniquePackIds,
 } from "./registry.js";
 import type { StackFocus } from "../../lib/types.js";
 import type { KnowledgePack, PackItem } from "./types.js";
+import { recommendCategoryPackIds as recommendCategoryPackIdsFromBarrel } from "./index.js";
 
 const emptyProfile = {
   hasExpo: false,
@@ -30,6 +32,10 @@ const emptyProfile = {
   hasNextConfig: false,
   hasSwiftFiles: false,
 };
+
+it("keeps the published pack compatibility barrel available", () => {
+  assert.equal(recommendCategoryPackIdsFromBarrel, recommendCategoryPackIds);
+});
 
 function itemIdsFromPack(packId: string, items: PackItem[]): number {
   const pack = getPack(packId as Parameters<typeof getPack>[0]);

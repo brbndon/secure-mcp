@@ -156,3 +156,33 @@ export function renderMarkdownDocument(options: {
   }
   return lines.join("\n");
 }
+
+/** Full remediation report renderer retained as the produce-findings contract. */
+export function renderFindingsReportMarkdown(options: {
+  title: string;
+  projectRoot?: string;
+  findings: readonly Finding[];
+  counts: Readonly<Record<string, number>>;
+}): string {
+  return renderMarkdownDocument({
+    title: options.title,
+    notice:
+      "Defensive secure-code-review report. Goal: help the development team harden the codebase. Do not include exploit or attack PoC content.",
+    metadata: [
+      ...(options.projectRoot ? [{ label: "Project", value: options.projectRoot }] : []),
+      { label: "Total findings", value: String(options.findings.length) },
+    ],
+    sections: [
+      {
+        heading: "Summary by severity (remediation priority)",
+        fields: Object.entries(options.counts).map(([label, count]) => ({
+          label,
+          value: String(count),
+        })),
+      },
+      { heading: "Findings" },
+    ],
+    findings: options.findings,
+    findingOptions: { detail: "full", headingLevel: 3 },
+  });
+}

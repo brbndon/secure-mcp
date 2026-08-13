@@ -311,6 +311,15 @@ describe("produceFindings disposition counting and priority", () => {
           file: "src/c.ts",
           line: 3,
         }),
+        makeFinding({
+          id: "DEFERRED-1",
+          title: "Deferred high-risk work",
+          severity: "high",
+          confidence: "high",
+          disposition: "deferred",
+          file: "src/d.ts",
+          line: 4,
+        }),
       ],
       "Disposition report",
       "json",
@@ -327,6 +336,7 @@ describe("produceFindings disposition counting and priority", () => {
     }>;
     assert.ok(priority.some((item) => item.title === "Open auth gap"));
     assert.ok(!priority.some((item) => item.title === "Already fixed injection"));
+    assert.ok(priority.some((item) => item.title === "Deferred high-risk work"));
 
     const findings = result.structured.findings as Array<{ title: string; disposition?: string }>;
     // Open reportable should sort ahead of fixed even if fixed is more severe.
@@ -336,4 +346,3 @@ describe("produceFindings disposition counting and priority", () => {
     assert.ok(openIdx < fixedIdx);
   });
 });
-

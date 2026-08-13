@@ -6,12 +6,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 import {
-  finalizeInventoryCoverage,
   normalizeAuthorizedProjectRoot,
   profileProject,
-  toolError,
-  toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
 import {
@@ -20,14 +18,16 @@ import {
   redactedSecretPath,
   redactedSecretPaths,
 } from "../lib/redact.js";
-import { escapeMarkdown } from "../lib/markdown.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
 import {
   buildFinding,
   createFindingIdFactory,
   ProjectRootInput,
+  StackFocusSchema,
 } from "../knowledge/findings-schema.js";
 import {
-  recommendPackIds,
+  recommendCategoryPackIds,
+  uniquePackIds,
   type PackId,
 } from "../knowledge/packs/registry.js";
 import type { Finding, StackFocus } from "../lib/types.js";
@@ -233,19 +233,14 @@ function pathMatchesInventory(component: string, inventoryPath: string): boolean
 /** Pack ids claimed by the threat-model tool for the active stacks. */
 export function threatModelPackIds(stacks: readonly string[]): PackId[] {
   const stackFocus = stacks.filter((s): s is StackFocus =>
-    ["common", "typescript", "nextjs", "swift", "expo"].includes(s),
+    StackFocusSchema.options.includes(s as StackFocus),
   );
-  const recommended = recommendPackIds(stackFocus.length ? stackFocus : ["common"]);
-  const ids = new Set<PackId>(["threat-model", "core"]);
-  for (const id of recommended) {
-    if (id === "threat-model" || id === "core" || id === "secrets") ids.add(id);
-    if (stackFocus.includes("nextjs") && (id === "web-next" || id === "auth-web" || id === "web-api")) {
-      ids.add(id);
-    }
-    if (stackFocus.includes("swift") && (id === "swift-ios" || id === "apple-desktop")) ids.add(id);
-    if (stackFocus.includes("expo") && id === "expo-rn") ids.add(id);
-  }
-  return ["threat-model", "core", ...recommended.filter((id) => ids.has(id) && id !== "threat-model" && id !== "core")];
+  const routedStacks: StackFocus[] = stackFocus.length ? stackFocus : ["common"];
+  const categories = stackFocus.includes("nextjs")
+    ? ["authentication", "authorization", "secrets", "injection-risk", "configuration", "privacy"]
+    : ["secrets"];
+  const recommended = recommendCategoryPackIds(routedStacks, categories);
+  return uniquePackIds(["threat-model", "core", ...recommended]);
 }
 
 function buildThreats(
@@ -496,7 +491,7 @@ export function registerBuildRemediationThreatModel(
         const stacks =
           params.stack && params.stack !== "auto" ? [params.stack] : profile.likelyStacks;
 
-        const { files, coverage } = await walkProject(root, {
+        const { files, coverageSession } = await walkProject(root, {
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
@@ -597,12 +592,7 @@ export function registerBuildRemediationThreatModel(
           focus_area: params.focus_area ?? null,
           applied_pack_ids,
           findings,
-          coverage: redactCoverageReport(
-            finalizeInventoryCoverage(
-              coverage,
-              files.map((file) => file.relativePath),
-            ),
-          ),
+          coverage: redactCoverageReport(coverageSession.finish()),
           evidence,
           boundary_evidence: evidence.boundaries,
           assumptions: evidence.assumptions,
@@ -634,24 +624,36 @@ export function registerBuildRemediationThreatModel(
           ],
         };
 
-        const md = [
-          `# Remediation-focused threat model`,
-          escapeMarkdown(data.summary),
-          "",
-          `## Trust boundaries (for control placement)`,
-          ...data.trust_boundaries.map((b) => `- ${escapeMarkdown(b)}`),
-          "",
-          ...threats.map(
-            (t) =>
-              `## ${escapeMarkdown(t.id)} [${escapeMarkdown(t.stride_label)}] ${escapeMarkdown(t.title)}\n` +
-              `${escapeMarkdown(t.description)}\n` +
-              `- Evidence paths: ${escapeMarkdown(t.evidence_paths?.join(", ") || "none in bounded inventory")}\n` +
-              `- Recommended controls: ${escapeMarkdown(t.recommended_controls.join("; "))}\n` +
-              `- Proof gaps: ${escapeMarkdown(t.proof_gap?.join("; ") || "manual confirmation required")}\n` +
-              `- Residual risk: ${escapeMarkdown(t.residual_risk)}\n` +
-              `- Verify: ${escapeMarkdown(t.verification_suggestion)}\n`,
-          ),
-        ].join("\n");
+        const md = renderMarkdownDocument({
+          title: "Remediation-focused threat model",
+          summary: data.summary,
+          sections: [
+            {
+              heading: "Trust boundaries (for control placement)",
+              bullets: data.trust_boundaries,
+            },
+            ...threats.map((threat) => ({
+              heading: `${threat.id} [${threat.stride_label}] ${threat.title}`,
+              paragraphs: [threat.description],
+              fields: [
+                {
+                  label: "Evidence paths",
+                  value: threat.evidence_paths?.join(", ") || "none in bounded inventory",
+                },
+                {
+                  label: "Recommended controls",
+                  value: threat.recommended_controls.join("; "),
+                },
+                {
+                  label: "Proof gaps",
+                  value: threat.proof_gap?.join("; ") || "manual confirmation required",
+                },
+                { label: "Residual risk", value: threat.residual_risk },
+                { label: "Verify", value: threat.verification_suggestion },
+              ],
+            })),
+          ],
+        });
 
         return toolSuccess(data, {
           responseFormat: params.response_format,

@@ -93,7 +93,7 @@ Call `secure_mcp_analyze_architecture` with the same root and the stack forced b
 - typed `surfaces` (kind, exposure, auth_expectation, paths)
 - `coverage_gaps` (high-value surfaces without category-detector evidence yet)
 - `priority_paths` (follow-up focus order)
-- `security_brief` when present (compact derived summary from those fields; no extra walk)
+- `security_brief` (compact derived summary from those fields; no extra walk)
 
 Treat pack summaries and `checklist_seed` as the short threat shortlist. Do not invent a public `threat_highlights` field.
 

@@ -47,7 +47,7 @@ sidebar:
 
 ## Transport
 
-The server speaks the stateless MCP protocol revision `2026-07-28` over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained. The entry runs with `legacy: "reject"`, so 2025-era `initialize` openings are answered with the unsupported-protocol-version error and never served.
+The server speaks the stateless MCP protocol revision `2026-07-28` over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained. The entry runs with `legacy: "serve"`, so 2025-era `initialize` openings are accepted for compatibility while stateless requests remain the primary path.
 
 - Do **not** log to stdout (corrupts the protocol).
 - Use `console.error` for startup and failure messages.

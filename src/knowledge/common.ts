@@ -7,6 +7,13 @@
 
 import { corePack } from "./packs/core.js";
 import type { PackItem } from "./packs/types.js";
+import {
+  AWS_ACCESS_KEY_ID_SHAPE,
+  GITHUB_TOKEN_SHAPE,
+  JWT_LIKE_TOKEN_SHAPE,
+  SLACK_TOKEN_SHAPE,
+  STRIPE_SECRET_KEY_SHAPE,
+} from "../lib/secret-tokens.js";
 
 /** @deprecated Prefer PackItem from packs/types — kept for existing imports. */
 export type ChecklistItem = PackItem;
@@ -22,15 +29,7 @@ export const SECRET_PATTERNS: {
   impact_if_unremediated: string;
   remediation: string;
 }[] = [
-  {
-    name: "AWS access key id",
-    regex: /\bAKIA[0-9A-Z]{16}\b/g,
-    severity: "critical",
-    impact_if_unremediated:
-      "Cloud credentials in source may allow unauthorized access to cloud resources.",
-    remediation:
-      "Rotate the key in the cloud provider console; remove from source; use a secret manager or IAM roles.",
-  },
+  AWS_ACCESS_KEY_ID_SHAPE,
   {
     name: "Generic API key assignment",
     regex:
@@ -40,14 +39,7 @@ export const SECRET_PATTERNS: {
       "Hardcoded API credentials can be reused by anyone with repository access.",
     remediation: "Move secrets to environment variables or a secret manager; rotate if committed.",
   },
-  {
-    name: "JWT-like token",
-    regex: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
-    severity: "medium",
-    impact_if_unremediated:
-      "Embedded tokens may grant session or API access if still valid.",
-    remediation: "Remove embedded tokens from source; revoke/rotate; load at runtime only.",
-  },
+  JWT_LIKE_TOKEN_SHAPE,
   {
     name: "Private key block",
     regex: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
@@ -56,30 +48,12 @@ export const SECRET_PATTERNS: {
       "Private keys in repositories can fully compromise associated cryptographic identities.",
     remediation: "Revoke/replace the key pair; remove from git history; store keys in a HSM or secret manager.",
   },
-  {
-    name: "GitHub token",
-    regex: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
-    severity: "critical",
-    impact_if_unremediated:
-      "Repository or org tokens can allow unauthorized code or settings changes.",
-    remediation: "Revoke the token in GitHub settings immediately; use short-lived fine-scoped tokens.",
-  },
-  {
-    name: "Slack token",
-    regex: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
-    severity: "high",
-    impact_if_unremediated:
-      "Workspace tokens may allow message or admin operations unintended for the public codebase.",
-    remediation: "Revoke in Slack admin; store replacements in a secret manager.",
-  },
-  {
-    name: "Stripe secret key",
-    regex: /\bsk_live_[A-Za-z0-9]{16,}\b/g,
-    severity: "critical",
-    impact_if_unremediated:
-      "Live payment credentials can enable unauthorized financial API use.",
-    remediation: "Roll the key in Stripe Dashboard; never commit sk_live_ keys.",
-  },
+  // Standalone token shapes live in lib/secret-tokens.ts so the secrets
+  // detector and the output redactor share one source of truth and cannot
+  // drift apart (a detected token is always masked at the output seam).
+  GITHUB_TOKEN_SHAPE,
+  SLACK_TOKEN_SHAPE,
+  STRIPE_SECRET_KEY_SHAPE,
   {
     name: "Password assignment",
     regex: /\b(password|passwd|pwd)\b\s*[:=]\s*['"][^'"]{6,}['"]/gi,

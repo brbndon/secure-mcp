@@ -201,5 +201,22 @@ describe("candidate dispositions", () => {
     });
     const merged = mergeFindings(fixed, open);
     assert.equal(merged.disposition, "reportable");
+    assert.equal(merged.disposition_reason, "Regression still open.");
+  });
+
+  it("keeps the fixed reason when no reportable candidate is merged", () => {
+    const fixed = buildFinding({
+      ...sampleFinding(12),
+      disposition: "fixed",
+      disposition_reason: "Control verified at sink.",
+    });
+    const needsReview = buildFinding({
+      ...sampleFinding(12),
+      disposition: "needs_review",
+      disposition_reason: "Heuristic only.",
+    });
+    const merged = mergeFindings(fixed, needsReview);
+    assert.equal(merged.disposition, "fixed");
+    assert.equal(merged.disposition_reason, "Control verified at sink.");
   });
 });

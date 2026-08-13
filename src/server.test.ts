@@ -489,8 +489,26 @@ describe("architecture typed surfaces", () => {
         "utf8",
       );
       await fs.writeFile(
+        path.join(root, "app", "page.tsx"),
+        "export default function Page() { return null; }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "app", "api", "keys"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "keys", "service-account.json"),
+        "{}",
+        "utf8",
+      );
+      await fs.writeFile(
         path.join(root, "middleware.ts"),
         "export function middleware() {}\n",
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "app.json"), JSON.stringify({ expo: {} }), "utf8");
+      await fs.mkdir(path.join(root, "components"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "components", "page.tsx"),
+        "export default function Component() { return null; }\n",
         "utf8",
       );
       await fs.mkdir(path.join(root, "lib"), { recursive: true });
@@ -534,10 +552,17 @@ describe("architecture typed surfaces", () => {
       assert.ok(data.surfaces.some((s) => s.kind === "middleware" || s.kind === "auth_surface"));
       for (const surface of data.surfaces) {
         assert.ok(surface.auth_expectation.length > 0);
-        assert.ok(["public", "authenticated", "internal", "unknown"].includes(surface.exposure));
+        assert.ok(["public", "internal", "unknown"].includes(surface.exposure));
         // stack-honest: nextjs forced should not invent pure mobile-only kinds without paths
         assert.ok(!["deep_link", "webview", "secure_storage"].includes(surface.kind));
       }
+      const pageEntry = data.surfaces.find((s) => s.kind === "page_entry");
+      assert.ok(pageEntry);
+      assert.ok(!pageEntry.paths.includes("components/page.tsx"));
+      const authSurface = data.surfaces.find((s) => s.kind === "auth_surface");
+      assert.equal(authSurface?.exposure, "unknown");
+      assert.ok(!JSON.stringify(data).includes("service-account.json"));
+      assert.ok(JSON.stringify(data).includes("[redacted-secret-file]"));
       assert.ok(data.coverage_gaps.length > 0);
       assert.ok(data.priority_paths.length > 0);
       assert.ok(data.security_brief.coverage_gap_count === data.coverage_gaps.length);
@@ -569,6 +594,7 @@ describe("architecture typed surfaces", () => {
         "import Security\nenum KeychainStore {}\n",
         "utf8",
       );
+      await fs.writeFile(path.join(root, "app.json"), JSON.stringify({ expo: { name: "x" } }), "utf8");
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const result = await client.callTool({
@@ -584,6 +610,56 @@ describe("architecture typed surfaces", () => {
       assert.ok(!data.surfaces.some((s) => s.kind === "server_action"));
       assert.ok(!data.surfaces.some((s) => s.kind === "middleware"));
       assert.ok(!data.surfaces.some((s) => s.kind === "page_entry"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "deep_link"));
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("caps typed surface path lists and priority paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-caps-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 100,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "cap-fixture", dependencies: { next: "15.0.0" } }),
+        "utf8",
+      );
+      for (let i = 0; i < 15; i += 1) {
+        await fs.mkdir(path.join(root, "app", "api", `items-${i}`), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "app", "api", `items-${i}`, "route.ts"),
+          "export async function GET() { return Response.json({}); }\n",
+          "utf8",
+        );
+      }
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_architecture",
+        arguments: { project_root: root, stack: "nextjs", max_files: 100, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        surfaces: Array<{ kind: string; paths: string[] }>;
+        coverage_gaps: Array<{ paths: string[] }>;
+        priority_paths: string[];
+      };
+      const httpRoutes = data.surfaces.find((s) => s.kind === "http_route");
+      assert.ok(httpRoutes);
+      assert.ok(httpRoutes.paths.length <= 12);
+      assert.ok(data.coverage_gaps.every((gap) => gap.paths.length <= 6));
+      assert.ok(data.priority_paths.length <= 24);
     } finally {
       await client.close();
       await server.close();
@@ -591,4 +667,3 @@ describe("architecture typed surfaces", () => {
     }
   });
 });
-

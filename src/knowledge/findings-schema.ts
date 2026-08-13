@@ -303,6 +303,15 @@ export function mergeFindings(left: FindingInput, right: FindingInput): FindingI
     if (metadata.omitWhenEmpty && Array.isArray(value) && value.length === 0) continue;
     if (value !== undefined) merged[field] = value;
   }
+  if (merged.disposition === "reportable") {
+    // Keep the reason coherent with the winning disposition: reportable wins
+    // over fixed/deferred/suppressed, so its reason must not come from a
+    // losing side that describes a different candidate state.
+    const reportableSource = right.disposition === "reportable" ? right : left;
+    if (reportableSource.disposition_reason !== undefined) {
+      merged.disposition_reason = reportableSource.disposition_reason;
+    }
+  }
   return merged as FindingInput;
 }
 

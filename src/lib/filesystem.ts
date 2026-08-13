@@ -20,7 +20,7 @@ import type {
   StackFocus,
 } from "./types.js";
 import { CANDIDATE_DISPOSITIONS } from "./types.js";
-import { redactValue, redactedEvidence, UNTRUSTED_OUTPUT_NOTICE } from "./redact.js";
+import { redactedEvidence } from "./redact.js";
 
 /** Default directories/files to skip when walking a project. */
 export const DEFAULT_IGNORE_DIRS = new Set([
@@ -95,7 +95,6 @@ export const HARD_MAX_FILES = 1_000;
 export const HARD_MAX_FILE_BYTES = 1 * 1024 * 1024;
 export const HARD_MAX_DEPTH = 20;
 export const HARD_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
-export const CHARACTER_LIMIT = 25_000;
 
 export interface WalkOptions {
   maxFiles?: number;
@@ -117,7 +116,6 @@ export interface WalkOptions {
   maxCoverageEvents?: number;
 }
 
-/** Candidate fields a content reviewer can hand back for coverage accounting. */
 export type CoverageCandidate = Pick<
   Finding,
   | "id"
@@ -134,6 +132,33 @@ export interface CoverageSession {
   recordReviewedFile(relativePath: string): void;
   recordExclusion(event: CoveragePathDecision): void;
   finish(candidates?: ReadonlyArray<CoverageCandidate>): CoverageReport;
+}
+
+/**
+ * One vocabulary for reasons that make coverage incomplete. Accounting caps
+ * preserve the historical partial walk status; direct scope caps are truncated.
+ */
+const COVERAGE_TRUNCATION_REASON_POLICY = {
+  max_files: "truncated",
+  max_depth: "truncated",
+  max_file_bytes: "truncated",
+  max_total_bytes: "truncated",
+  response_size: "truncated",
+  symlink_containment: "truncated",
+  coverage_events_cap: "partial",
+  included_paths_cap: "partial",
+} as const;
+
+function coverageReasonStatus(reason: string): "partial" | "truncated" | undefined {
+  return COVERAGE_TRUNCATION_REASON_POLICY[
+    reason as keyof typeof COVERAGE_TRUNCATION_REASON_POLICY
+  ];
+}
+
+function hasTruncatingCoverageReason(coverage: CoverageReport): boolean {
+  return coverage.truncation.reasons.some(
+    (reason) => coverageReasonStatus(reason) === "truncated",
+  );
 }
 
 export interface ProfileOptions {
@@ -651,12 +676,7 @@ export async function walkProject(
   }
   const walkTruncated =
     truncated ||
-    truncationReasons.has("max_files") ||
-    truncationReasons.has("max_depth") ||
-    truncationReasons.has("max_file_bytes") ||
-    truncationReasons.has("max_total_bytes") ||
-    truncationReasons.has("symlink_containment") ||
-    truncationReasons.has("response_size");
+    [...truncationReasons].some((reason) => coverageReasonStatus(reason) === "truncated");
   const effectiveTruncated = walkTruncated;
   const hasScopeGaps =
     effectiveTruncated ||
@@ -690,8 +710,8 @@ export async function walkProject(
     candidate_dispositions: [],
     candidate_disposition_counts: candidateDispositionCounts,
     scan_status,
-    // The walk is inventory only: contents are never opened here. Content-review
-    // finalizers (finalizeCoverage) upgrade this; inventory finalizers keep it.
+    // The walk is inventory only: contents are never opened here. The session
+    // upgrades this only when callers record actual content-review receipts.
     review_basis: "inventory_only",
     not_observed_means:
       scan_status === "complete"
@@ -711,7 +731,7 @@ export async function walkProject(
 }
 
 /** Add a scanner-specific exclusion while keeping the walk's accounting honest. */
-export function recordCoverageExclusion(
+function recordCoverageExclusion(
   coverage: CoverageReport,
   event: CoveragePathDecision,
   maxCoverageEvents = 1000,
@@ -719,44 +739,31 @@ export function recordCoverageExclusion(
   if (coverage.excluded_paths.length < maxCoverageEvents) {
     coverage.excluded_paths.push(event);
   } else {
+    // The event log itself was capped: mirror the walk-time accounting-cap
+    // tuple. coverage_events_cap stays a "partial" scan-status reason, but the
+    // truncated flag must be set so session and walk reports cannot disagree.
     coverage.truncation.coverage_events_truncated = true;
+    coverage.truncation.truncated = true;
     coverage.truncation.reasons = [
       ...new Set([...coverage.truncation.reasons, "coverage_events_cap"]),
     ];
   }
   coverage.truncation.reasons = [...new Set([...coverage.truncation.reasons, event.reason])];
-  if (
-    [
-      "max_files",
-      "max_depth",
-      "max_file_bytes",
-      "max_total_bytes",
-      "response_size",
-      "symlink_containment",
-      "coverage_events_cap",
-      "included_paths_cap",
-    ].includes(event.reason)
-  ) {
+  if (coverageReasonStatus(event.reason) !== undefined) {
     coverage.truncation.truncated = true;
   }
-  if (coverage.truncation.coverage_events_truncated && !coverage.truncation.truncated) {
-    // Omitted accounting events make the report incomplete even when the walk finished.
-  }
-  coverage.scan_status = coverage.truncation.truncated
-    ? "truncated"
-    : coverage.truncation.coverage_events_truncated
-      ? "partial"
+  coverage.scan_status =
+    coverage.scan_status === "truncated" || hasTruncatingCoverageReason(coverage)
+      ? "truncated"
       : "partial";
   coverage.not_observed_means = "scope_was_truncated_or_partial";
 }
 
 /** Finalize a walk report with the files actually opened and candidate decisions. */
-export function finalizeCoverage(
+function finalizeCoverage(
   coverage: CoverageReport,
   filesReviewed: readonly string[],
-  candidates: ReadonlyArray<
-    Pick<Finding, "id" | "disposition" | "disposition_reason" | "file" | "line" | "rule_family" | "instance_id">
-  > = [],
+  candidates: ReadonlyArray<CoverageCandidate> = [],
 ): CoverageReport {
   const dispositions: CoverageCandidateDisposition[] = candidates.map((candidate) => ({
     id: candidate.id,
@@ -785,7 +792,7 @@ export function finalizeCoverage(
     reviewed.length > 0 && [...included].every((file) => reviewed.includes(file));
   if (reviewed.length === 0) {
     coverage.review_basis = "inventory_only";
-    coverage.scan_status = coverage.truncation.truncated ? "truncated" : "partial";
+    coverage.scan_status = hasTruncatingCoverageReason(coverage) ? "truncated" : "partial";
     coverage.not_observed_means = "inventory_only_contents_not_reviewed";
   } else {
     coverage.review_basis = "content_review";
@@ -802,30 +809,6 @@ export function finalizeCoverage(
   return coverage;
 }
 
-/**
- * Finalize a metadata-only inventory without implying that file contents were
- * reviewed. Inventory never proves complete content coverage or an absent
- * candidate: scan_status is forced to partial/truncated and
- * `not_observed_means` states that contents were not reviewed.
- */
-export function finalizeInventoryCoverage(
-  coverage: CoverageReport,
-  filesInventoried: readonly string[],
-): CoverageReport {
-  coverage.included_paths = [...new Set(filesInventoried)];
-  coverage.files_reviewed = [];
-  coverage.review_basis = "inventory_only";
-  coverage.not_observed_means = "inventory_only_contents_not_reviewed";
-  coverage.scan_status = coverage.truncation.truncated ? "truncated" : "partial";
-  return coverage;
-}
-
-/**
- * Receipt-oriented coverage session returned by walkProject. Callers record
- * exclusions and content-review receipts while scanning, then finalize once.
- * An inventory-only finish keeps the walk's accounting honest: no reviewed
- * file is claimed, and scan_status never implies complete content coverage.
- */
 class CoverageSessionImpl implements CoverageSession {
   readonly #reviewedFiles = new Set<string>();
   readonly #coverage: CoverageReport;
@@ -859,9 +842,10 @@ class CoverageSessionImpl implements CoverageSession {
   finish(candidates: ReadonlyArray<CoverageCandidate> = []): CoverageReport {
     this.#assertOpen();
     this.#finished = true;
-    return this.#reviewedFiles.size > 0
-      ? finalizeCoverage(this.#coverage, [...this.#reviewedFiles], candidates)
-      : finalizeInventoryCoverage(this.#coverage, [...this.#inventoriedFiles]);
+    // finalizeCoverage already preserves inventory-only semantics for an empty
+    // receipt set. Always use it so candidate dispositions are never silently
+    // discarded merely because a scanner produced no content-review receipt.
+    return finalizeCoverage(this.#coverage, [...this.#reviewedFiles], candidates);
   }
 
   #assertOpen(): void {
@@ -1431,319 +1415,6 @@ export async function profileProject(
   };
 }
 
-/**
- * Ensure tool text responses stay within a character budget for agent context.
- */
-export function truncateText(
-  text: string,
-  limit: number = CHARACTER_LIMIT,
-): { text: string; truncated: boolean } {
-  if (text.length <= limit) {
-    return { text, truncated: false };
-  }
-  const msg =
-    `\n\n…[truncated: response was ${text.length} chars; limit is ${limit}. ` +
-    `Narrow the project_root, lower max_files, or request a more focused tool.]\n`;
-  return {
-    text: text.slice(0, Math.max(0, limit - msg.length)) + msg,
-    truncated: true,
-  };
-}
-
-/** Build a standard MCP tool error payload. */
-export function toolError(
-  error: unknown,
-  hint?: string,
-): {
-  content: { type: "text"; text: string }[];
-  isError: true;
-  structuredContent: { ok: false; error: string; hint?: string };
-} {
-  // Error text can embed caller-controlled values (paths, snippets); route it
-  // through the same secret policy so fallback/error responses stay safe.
-  const message = truncateText(
-    redactedEvidence(error instanceof Error ? error.message : String(error)),
-    4_000,
-  ).text;
-  const safeHint = hint ? truncateText(redactedEvidence(hint), 2_000).text : undefined;
-  const base = {
-    ok: false as const,
-    error: message,
-    ...(safeHint ? { hint: safeHint } : {}),
-    output_trust: "untrusted" as const,
-    output_notice: UNTRUSTED_OUTPUT_NOTICE,
-  };
-  const bounded = boundStructuredPayload(base).data as {
-    ok: false;
-    error: string;
-    hint?: string;
-  };
-  const text = bounded.hint
-    ? `${UNTRUSTED_OUTPUT_NOTICE}\n\nError: ${bounded.error}\n\nHint: ${bounded.hint}`
-    : `${UNTRUSTED_OUTPUT_NOTICE}\n\nError: ${bounded.error}`;
-  return {
-    isError: true,
-    content: [{ type: "text", text }],
-    structuredContent: bounded,
-  };
-}
-
-/** Keys of large arrays we may shrink so structured MCP payloads stay bounded. */
-const SHRINKABLE_ARRAY_KEYS = [
-  "findings",
-  "items",
-  "files_reviewed",
-  "included_paths",
-  "sample_files",
-  "threats",
-  "finding_seeds",
-] as const;
-
-/** Nested coverage arrays that can dominate structuredContent size. */
-const COVERAGE_SHRINKABLE_ARRAY_KEYS = [
-  "included_paths",
-  "excluded_paths",
-  "ignored_paths",
-  "candidate_dispositions",
-  "files_reviewed",
-] as const;
-
-function halfArrayIfLarge(value: unknown): { value: unknown; shrunk: boolean } {
-  if (Array.isArray(value) && value.length > 1) {
-    return { value: value.slice(0, Math.max(1, Math.floor(value.length / 2))), shrunk: true };
-  }
-  return { value, shrunk: false };
-}
-
-function shrinkCoverageArrays(coverage: unknown): { coverage: unknown; shrunk: boolean } {
-  if (!coverage || typeof coverage !== "object") {
-    return { coverage, shrunk: false };
-  }
-  const next: Record<string, unknown> = { ...(coverage as Record<string, unknown>) };
-  let shrunk = false;
-  for (const key of COVERAGE_SHRINKABLE_ARRAY_KEYS) {
-    const result = halfArrayIfLarge(next[key]);
-    if (result.shrunk) {
-      next[key] = result.value;
-      shrunk = true;
-    }
-  }
-  return { coverage: next, shrunk };
-}
-
-/** Minimal coverage stub for last-resort envelopes — never re-attaches bulk path lists. */
-function hardCappedCoverageStub(coverage: CoverageReport | undefined): CoverageReport | undefined {
-  if (!coverage) return undefined;
-  return {
-    included_paths: [],
-    excluded_paths: [],
-    ignored_paths: [],
-    caps: coverage.caps,
-    truncation: {
-      truncated: true,
-      reasons: [...new Set([...coverage.truncation.reasons, "response_size"])],
-      coverage_events_truncated: coverage.truncation.coverage_events_truncated,
-    },
-    files_reviewed: [],
-    candidate_dispositions: [],
-    candidate_disposition_counts: coverage.candidate_disposition_counts,
-    ...(coverage.review_basis ? { review_basis: coverage.review_basis } : {}),
-    scan_status: "truncated",
-    not_observed_means: "scope_was_truncated_or_partial",
-  };
-}
-
-function markResponseSizeTruncation<T extends object>(data: T): T & { truncated: boolean } {
-  const coverage = (data as { coverage?: CoverageReport }).coverage;
-  return {
-    ...data,
-    truncated: true,
-    ...(coverage
-      ? {
-          coverage: {
-            ...coverage,
-            truncation: {
-              ...coverage.truncation,
-              truncated: true,
-              reasons: [...new Set([...coverage.truncation.reasons, "response_size"])],
-            },
-            scan_status: "truncated" as const,
-            not_observed_means: "scope_was_truncated_or_partial" as const,
-          },
-        }
-      : {}),
-  } as T & { truncated: boolean };
-}
-
-/** Bounded fragments for the last-resort envelope. */
-const MAX_ENVELOPE_PROJECT_ROOT_CHARS = 200;
-const MAX_ENVELOPE_SUMMARY_CHARS = 600;
-const ENVELOPE_TRUNCATION_MARKER = "…[truncated]";
-
-/** Deterministic truncation that keeps the result at or under the budget. */
-function truncateToBudget(text: string, budget: number): string {
-  if (text.length <= budget) return text;
-  if (budget <= ENVELOPE_TRUNCATION_MARKER.length) return text.slice(0, budget);
-  return `${text.slice(0, budget - ENVELOPE_TRUNCATION_MARKER.length)}${ENVELOPE_TRUNCATION_MARKER}`;
-}
-
-/**
- * Shrink large array fields until JSON stays under the character budget.
- * Ensures structuredContent is bounded, not only the text channel.
- */
-export function boundStructuredPayload<T extends object>(
-  data: T,
-  limit: number = CHARACTER_LIMIT,
-): { data: T; truncated: boolean } {
-  let current: object = data;
-  let truncated = false;
-  let encoded = JSON.stringify(current);
-  if (encoded.length <= limit) {
-    return { data, truncated: false };
-  }
-
-  truncated = true;
-  current = markResponseSizeTruncation(current as T);
-
-  // Progressively cut shrinkable arrays (halve each pass), including nested coverage.
-  for (let pass = 0; pass < 8; pass++) {
-    encoded = JSON.stringify(current);
-    if (encoded.length <= limit) break;
-    const next: Record<string, unknown> = { ...(current as Record<string, unknown>) };
-    let shrunk = false;
-    for (const key of SHRINKABLE_ARRAY_KEYS) {
-      const result = halfArrayIfLarge(next[key]);
-      if (result.shrunk) {
-        next[key] = result.value;
-        shrunk = true;
-      }
-    }
-    const coverageResult = shrinkCoverageArrays(next.coverage);
-    if (coverageResult.shrunk) {
-      next.coverage = coverageResult.coverage;
-      shrunk = true;
-    }
-    if (!shrunk) break;
-    current = next;
-  }
-
-  encoded = JSON.stringify(current);
-  if (encoded.length > limit) {
-    // Last resort: keep a summary envelope only. Every caller-controlled field
-    // (project_root, summary) is redacted and truncated up front so the
-    // envelope cannot stay oversized no matter what the caller supplied.
-    const base = current as Record<string, unknown>;
-    const coverageStub = hardCappedCoverageStub(
-      (base.coverage as CoverageReport | undefined) ?? undefined,
-    );
-    let envelope: Record<string, unknown> = markResponseSizeTruncation({
-      ok: base.ok ?? true,
-      project_root:
-        typeof base.project_root === "string"
-          ? redactedEvidence(truncateToBudget(base.project_root, MAX_ENVELOPE_PROJECT_ROOT_CHARS))
-          : (base.project_root ?? null),
-      summary:
-        typeof base.summary === "string"
-          ? truncateToBudget(base.summary, MAX_ENVELOPE_SUMMARY_CHARS)
-          : "Response truncated to stay within the MCP character budget.",
-      truncated: true,
-      notes: [
-        "structuredContent was reduced because the full payload exceeded CHARACTER_LIMIT.",
-        "Narrow project_root, lower max_files, or request a more focused tool.",
-      ],
-      ...(coverageStub ? { coverage: coverageStub } : {}),
-    });
-
-    // Final serialized-size assertion: drop pieces until the envelope is
-    // guaranteed to fit, so no caller-controlled field can keep it oversized.
-    let encodedEnvelope = JSON.stringify(envelope);
-    while (encodedEnvelope.length > limit) {
-      if (envelope.coverage !== undefined) {
-        const { coverage: _drop, ...rest } = envelope;
-        envelope = rest;
-      } else if (envelope.notes !== undefined) {
-        const { notes: _drop, ...rest } = envelope;
-        envelope = rest;
-      } else if (envelope.project_root !== null && envelope.project_root !== undefined) {
-        envelope = { ...envelope, project_root: null };
-      } else {
-        envelope = { ...envelope, summary: "" };
-      }
-      encodedEnvelope = JSON.stringify(envelope);
-    }
-    current = envelope;
-  }
-
-  return { data: current as T, truncated };
-}
-
-/** Build a standard MCP tool success payload with JSON text + structuredContent. */
-export function toolSuccess<T extends object>(
-  data: T,
-  options: { markdown?: string; responseFormat?: "json" | "markdown" } = {},
-): {
-  content: { type: "text"; text: string }[];
-  structuredContent: T;
-} {
-  // Keep this as the final output boundary as well as the finding-specific
-  // redaction callers. Static tools add caller/repository strings in more than
-  // one place, and a new caller must not be able to bypass the central policy.
-  const safeData = redactValue({
-    ...data,
-    output_trust: "untrusted" as const,
-    output_notice: UNTRUSTED_OUTPUT_NOTICE,
-  }) as T;
-  const contentPrefix = `${UNTRUSTED_OUTPUT_NOTICE}\n\n`;
-  const contentBudget = Math.max(1, CHARACTER_LIMIT - contentPrefix.length);
-  const boundedResult = boundStructuredPayload(safeData, contentBudget);
-  let structured = boundedResult.data;
-  const structuredTruncated = boundedResult.truncated;
-  const format = options.responseFormat ?? "json";
-  const safeMarkdown = options.markdown ? redactedEvidence(options.markdown) : undefined;
-
-  const renderMarkdown =
-    format === "markdown" &&
-    safeMarkdown !== undefined &&
-    !structuredTruncated &&
-    safeMarkdown.length <= contentBudget;
-
-  if (
-    format === "markdown" &&
-    safeMarkdown !== undefined &&
-    !renderMarkdown &&
-    !structuredTruncated
-  ) {
-    // The requested Markdown representation exceeded the response budget even
-    // though its structured source did not. Preserve a complete JSON fallback
-    // and mark the representation change instead of slicing Markdown mid-field.
-    structured = boundStructuredPayload(
-      markResponseSizeTruncation(structured),
-      contentBudget,
-    ).data as T;
-  }
-
-  let body = renderMarkdown ? safeMarkdown : JSON.stringify(structured, null, 2);
-  if (body.length > contentBudget) {
-    // Pretty-print whitespace can push an otherwise bounded JSON value over the
-    // text-channel limit. Compact serialization stays parseable and represents
-    // the same structuredContent without losing fields mid-token.
-    body = JSON.stringify(structured);
-  }
-
-  if (body.length > contentBudget) {
-    // Defensive backstop if a future serializer changes the size calculation.
-    structured = boundStructuredPayload(
-      markResponseSizeTruncation(structured),
-      contentBudget,
-    ).data as T;
-    body = JSON.stringify(structured);
-  }
-
-  return {
-    content: [{ type: "text", text: `${contentPrefix}${body}` }],
-    structuredContent: structured as T,
-  };
-}
 
 /** Simple line finder for evidence (1-based). */
 export function findLineNumber(content: string, matchIndex: number): number {

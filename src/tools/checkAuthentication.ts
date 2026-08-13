@@ -6,17 +6,14 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 import {
   detectWithBudget,
-  finalizeCoverage,
   findLineNumber,
   normalizeAuthorizedProjectRoot,
   profileProject,
-  recordCoverageExclusion,
   readProjectFile,
   snippetAround,
-  toolError,
-  toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
 import {
@@ -25,7 +22,7 @@ import {
   redactFindings,
   redactedSecretPaths,
 } from "../lib/redact.js";
-import { escapeMarkdown } from "../lib/markdown.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
 import type { Finding, ProjectProfile, StackFocus } from "../lib/types.js";
 import {
   buildFinding,
@@ -34,9 +31,7 @@ import {
 } from "../knowledge/findings-schema.js";
 import { NEXTJS_AUTH_FILE_HINTS } from "../knowledge/nextjs.js";
 import {
-  focusedProfileForStack,
-  packIdsWithCategories,
-  recommendPackIds,
+  recommendCategoryPackIds,
   type PackId,
 } from "../knowledge/packs/registry.js";
 import { SWIFT_AUTH_PATTERNS } from "../knowledge/swift.js";
@@ -142,11 +137,13 @@ export function authPackIdsForProfile(
 ): PackId[] {
   const forced = stack && stack !== "auto" ? stack : undefined;
   const stacks = forced ? [forced] : profile.likelyStacks;
-  const routed = recommendPackIds(
-    stacks,
-    forced ? focusedProfileForStack(forced, profile) : profile,
-  );
-  return packIdsWithCategories(routed, ["authentication", "authorization"]);
+  return recommendCategoryPackIds(stacks, ["authentication", "authorization"], {
+    profile,
+    focusedStack: forced,
+    // Preserve the historical unknown-stack route, where the threat-model
+    // pack contributes authentication/authorization guidance.
+    includeThreatModel: true,
+  });
 }
 
 /** Exported for tests; heuristics only — every hit needs manual confirmation. */
@@ -328,7 +325,7 @@ export function registerCheckAuthentication(
         const filesReviewed: string[] = [];
         const detectorFamiliesRun = new Set<string>();
 
-        const { files, coverage } = await walkProject(root, {
+        const { files, coverageSession } = await walkProject(root, {
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
@@ -371,7 +368,7 @@ export function registerCheckAuthentication(
         const scanPaths = new Set(toScan.map((file) => file.relativePath));
         for (const file of files) {
           if (!scanPaths.has(file.relativePath)) {
-            recordCoverageExclusion(coverage, {
+            coverageSession.recordExclusion({
               path: file.relativePath,
               kind: "file",
               reason: "authentication_candidate_filter_or_budget",
@@ -381,7 +378,7 @@ export function registerCheckAuthentication(
 
         for (const file of toScan) {
           if (file.size > config.maxFileBytes) {
-            recordCoverageExclusion(coverage, {
+            coverageSession.recordExclusion({
               path: file.relativePath,
               kind: "file",
               reason: "max_file_bytes",
@@ -399,7 +396,7 @@ export function registerCheckAuthentication(
               )
             ).content;
           } catch {
-            recordCoverageExclusion(coverage, {
+            coverageSession.recordExclusion({
               path: file.relativePath,
               kind: "file",
               reason: "file_read_error",
@@ -407,6 +404,7 @@ export function registerCheckAuthentication(
             continue;
           }
           filesReviewed.push(file.relativePath);
+          coverageSession.recordReviewedFile(file.relativePath);
 
           for (const pattern of AUTH_PATTERNS) {
             if (!authPatternAppliesToStack(pattern.stack, params.stack)) continue;
@@ -570,7 +568,7 @@ export function registerCheckAuthentication(
         }
 
         const applied_pack_ids = authPackIdsForProfile(profile, params.stack);
-        const finalizedCoverage = finalizeCoverage(coverage, filesReviewed, findings);
+        const finalizedCoverage = coverageSession.finish(findings);
         const safeFindings = redactFindings(findings);
 
         const data = {
@@ -598,22 +596,12 @@ export function registerCheckAuthentication(
           ],
         };
 
-        const md = [
-          `# Authentication review (remediation focused)`,
-          "",
-          data.summary,
-          "",
-          ...safeFindings.map(
-            (f) =>
-              `## [${escapeMarkdown(`${f.severity}/${f.confidence}`)}] ${escapeMarkdown(f.id)}: ${escapeMarkdown(f.title)}\n` +
-              `${escapeMarkdown(f.description)}\n` +
-              (f.file
-                ? `- Evidence location: ${escapeMarkdown(`${f.file}${f.line ? `:${f.line}` : ""}`)}\n`
-                : "") +
-              `- Impact if unremediated: ${escapeMarkdown(f.impact_if_unremediated)}\n` +
-              `- Remediation: ${escapeMarkdown(f.remediation)}\n`,
-          ),
-        ].join("\n");
+        const md = renderMarkdownDocument({
+          title: "Authentication review (remediation focused)",
+          summary: data.summary,
+          findings: safeFindings,
+          findingOptions: { detail: "compact", headingLevel: 2 },
+        });
 
         return toolSuccess(data, {
           responseFormat: params.response_format,

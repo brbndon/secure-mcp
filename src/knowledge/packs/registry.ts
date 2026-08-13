@@ -252,6 +252,34 @@ export function packIdsWithCategories(
   );
 }
 
+type PackRoutingProfile = Pick<
+  ProjectProfile,
+  "hasExpo" | "hasMacOS" | "hasNextConfig" | "hasSwiftFiles"
+>;
+
+/**
+ * Shared category-tool routing: recommend from stack/profile evidence, apply
+ * exclusive forced-stack flags when requested, then narrow to pack content the
+ * tool actually uses. The threat-model pack is opt-in for detector tools.
+ */
+export function recommendCategoryPackIds(
+  stacks: readonly StackFocus[],
+  categories: readonly string[],
+  options: {
+    profile?: PackRoutingProfile;
+    focusedStack?: StackFocus;
+    includeThreatModel?: boolean;
+  } = {},
+): PackId[] {
+  const profile = options.focusedStack
+    ? focusedProfileForStack(options.focusedStack, options.profile)
+    : options.profile;
+  const routed = packIdsWithCategories(recommendPackIds([...stacks], profile), categories);
+  return options.includeThreatModel
+    ? routed
+    : routed.filter((id) => id !== "threat-model");
+}
+
 /**
  * Unique items a request could return before the maxItems budget is applied.
  * Lets callers distinguish "cut by max_items" from "narrowed by categories".
@@ -274,10 +302,6 @@ export function countEligiblePackItems(
   return ids.size;
 }
 
-/**
- * Count how many returned items belong to each pack (by item id membership).
- * Used so agents can see fair multi-pack coverage (or truncation).
- */
 /** Preserve first-seen order while dropping duplicate pack ids. */
 export function uniquePackIds(packIds: readonly PackId[]): PackId[] {
   const seen = new Set<PackId>();
@@ -290,6 +314,10 @@ export function uniquePackIds(packIds: readonly PackId[]): PackId[] {
   return out;
 }
 
+/**
+ * Count how many returned items belong to each pack (by item id membership).
+ * Used so agents can see fair multi-pack coverage (or truncation).
+ */
 export function countItemsPerPack(
   items: ReadonlyArray<{ id: string }>,
   packIds: readonly PackId[],

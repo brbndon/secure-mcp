@@ -18,23 +18,27 @@ export function sanitizeUntrustedText(value: string): string {
 
 const SECRET_BASENAME_RE =
   /^(?:\.env(?:\.[^/\\:\s]+)?|credentials?(?:\.[^/\\:\s]+)?|service-account(?:\.[^/\\:\s]+)?|GoogleService-Info\.plist|id_(?:rsa|ed25519)|\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))$/i;
-/**
- * Secret-like path names embedded in free text. A name must appear in a
- * path-like context to avoid redacting ordinary prose: either with a filename
- * extension attached (`credentials.json`, `.env.production`) or directly
- * after a path separator (`config/.env`, `keys/credentials`). A bare word in
- * prose ("No hardcoded credentials") stays readable; the same text redacted
- * through structured fields still goes through redactedSecretPath().
- *
- * Matching stops at boundary punctuation (period, comma, semicolon, closing
- * brackets/quotes), so sentence-final names like `server.pem.` still redact
- * without swallowing the punctuation. The named-branch extension is matched
- * lazily so `(see credentials.json)` keeps its closing paren; the suffix
- * branch (`*.pem` etc.) backtracks to the last dot naturally.
- */
-const SECRET_PATH_NAME_RE =
-  /(?<![A-Za-z0-9_.-])(?:(?:\.env|credentials|service-account|GoogleService-Info\.plist|id_(?:rsa|ed25519))(?:\.[^/\\:\s]+?)|(?<=[\\/:])\.env|(?<=[\\/:])credentials|(?<=[\\/:])service-account|(?<=[\\/:])GoogleService-Info\.plist|(?<=[\\/:])id_(?:rsa|ed25519)|[^/\\:\s]+\.(?:pem|key|p12|pfx|jks|keystore|der|cer|crt))(?=[:.,;)\]}\s"'`]|$)/gi;
 const LOCATION_SUFFIX_RE = /^(.*?)(:\d+(?::\d+)?)?$/;
+
+const SECRET_PATH_BASES = [
+  ".env",
+  "credentials",
+  "service-account",
+  "googleservice-info.plist",
+  "id_rsa",
+  "id_ed25519",
+] as const;
+const SECRET_PATH_SUFFIXES = [
+  ".pem",
+  ".key",
+  ".p12",
+  ".pfx",
+  ".jks",
+  ".keystore",
+  ".der",
+  ".cer",
+  ".crt",
+] as const;
 
 /**
  * Secret-like key names, longest-first so compound keys (access_token,
@@ -90,22 +94,22 @@ const fullMatchPortion = (match: RegExpMatchArray, index: number): SecretPortion
 const YAML_BLOCK_INDICATOR_RE = /^[|>][+-]?\d*$/;
 
 /**
- * Secret-value rules. Whole PEM blocks must run before any BEGIN-only match
- * so key material between BEGIN/END is not left in the clear. Structured
- * formats (YAML block scalars, quoted JSON/YAML values, URI userinfo) run
- * before the generic single-line fallback.
+ * Prefix for a labeled quoted value. The value itself is scanned below rather
+ * than captured by a regex: a delimiter-aware scan can distinguish escaped
+ * quotes from closing quotes, allow other quote types inside the value, and
+ * fail closed on unterminated input without an arbitrary length ceiling.
+ */
+const QUOTED_SECRET_PREFIX_RE = new RegExp(
+  `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])`,
+  "gi",
+);
+
+/**
+ * Secret-value regex rules. Scanner-backed quoted values, PEM blocks, and URI
+ * userinfo are collected separately so their delimiter searches stay linear.
+ * Structured formats run before the generic single-line fallback.
  */
 const SECRET_VALUE_RULES: readonly SecretValueRule[] = [
-  {
-    name: "pem-block",
-    pattern: /-----BEGIN [^-]+-----[^]*?-----END [^-]+-----/g,
-    portion: fullMatchPortion,
-  },
-  {
-    name: "pem-begin-only",
-    pattern: /-----BEGIN [^-]+-----[^]*$/g,
-    portion: fullMatchPortion,
-  },
   {
     name: "authorization-header",
     pattern:
@@ -136,50 +140,6 @@ const SECRET_VALUE_RULES: readonly SecretValueRule[] = [
     },
   },
   {
-    name: "quoted-labeled",
-    // Quoted JSON/YAML/code values (single, double, or template quotes).
-    pattern: new RegExp(
-      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])((?:[^\\\\"'\\\`]|\\\\.){0,2048}?)\\2`,
-      "gi",
-    ),
-    portion: (match, index) => {
-      const prefix = match[1] ?? "";
-      const quote = match[2] ?? "";
-      const value = match[3] ?? "";
-      const valueStart = index + prefix.length + quote.length;
-      return {
-        start: valueStart,
-        end: valueStart + value.length,
-        replacement: VALUE_MARKER,
-      };
-    },
-  },
-  {
-    name: "quoted-labeled-long",
-    // Quoted values beyond the bounded rule's reach (multi-word passphrases
-    // over 2048 chars). The value group stops at the first quote of any kind
-    // and only closes on the captured quote, so a labeled span is redacted in
-    // full instead of leaking its tail through the whitespace-limited
-    // unquoted fallback. The dedupe keeps this rule's edit over the unquoted
-    // rematch of the same span (it is ordered first and more specific). The
-    // upper bound keeps per-start scan work bounded on adversarial input.
-    pattern: new RegExp(
-      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])((?:[^\\\\"'\\\`]|\\\\.){2048,65536}?)\\2`,
-      "gi",
-    ),
-    portion: (match, index) => {
-      const prefix = match[1] ?? "";
-      const quote = match[2] ?? "";
-      const value = match[3] ?? "";
-      const valueStart = index + prefix.length + quote.length;
-      return {
-        start: valueStart,
-        end: valueStart + value.length,
-        replacement: VALUE_MARKER,
-      };
-    },
-  },
-  {
     name: "unquoted-labeled",
     // Env files, URL query tokens, config. `&` is an RFC 3986 query separator.
     pattern: new RegExp(
@@ -194,21 +154,6 @@ const SECRET_VALUE_RULES: readonly SecretValueRule[] = [
       return {
         start: valueStart,
         end: valueStart + value.length,
-        replacement: VALUE_MARKER,
-      };
-    },
-  },
-  {
-    name: "uri-userinfo",
-    // scheme://user:pass@host (also redis://:pass@).
-    pattern: /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\/@\s]+)@/g,
-    portion: (match, index) => {
-      const scheme = match[1] ?? "";
-      const userinfo = match[2] ?? "";
-      const userStart = index + scheme.length;
-      return {
-        start: userStart,
-        end: userStart + userinfo.length,
         replacement: VALUE_MARKER,
       };
     },
@@ -260,21 +205,329 @@ export function redactedSecretPaths(paths: readonly string[]): string[] {
  * double-splices the same origin range (which garbles markers and drops quotes).
  */
 function dedupeOverlappingEdits(edits: readonly SecretPortionEdit[]): SecretPortionEdit[] {
-  const ranked = edits
-    .map((edit, order) => ({ edit, order }))
-    .filter(({ edit }) => edit.end > edit.start)
-    .sort((a, b) => a.edit.start - b.edit.start || a.order - b.order);
+  // Array sorting is stable on supported Node versions, so equal starts keep
+  // rule-collection priority without allocating a wrapper object per edit.
+  const ranked = edits.filter((edit) => edit.end > edit.start);
+  ranked.sort((a, b) => a.start - b.start);
   const kept: SecretPortionEdit[] = [];
-  for (const { edit } of ranked) {
-    if (kept.some((prior) => edit.start < prior.end && edit.end > prior.start)) continue;
+  let keptEnd = -1;
+  for (const edit of ranked) {
+    // Kept edits are ordered and non-overlapping, so only the rightmost kept
+    // end can overlap this edit.
+    if (edit.start < keptEnd) continue;
     kept.push(edit);
+    keptEnd = edit.end;
   }
   return kept;
 }
 
-function matchAllGlobal(text: string, pattern: RegExp): RegExpMatchArray[] {
+function* matchAllGlobal(text: string, pattern: RegExp): IterableIterator<RegExpExecArray> {
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  return [...text.matchAll(new RegExp(pattern.source, flags))];
+  const matcher = new RegExp(pattern.source, flags);
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(text)) !== null) {
+    yield match;
+    if (match[0].length === 0) matcher.lastIndex += 1;
+  }
+}
+
+const PEM_BEGIN_PREFIX = "-----BEGIN ";
+const PEM_END_PREFIX = "-----END ";
+const PEM_FENCE = "-----";
+
+interface PemHeader {
+  end: number;
+  label: string;
+}
+
+/** Return a valid PEM header's label and exclusive end, or null for a near-miss. */
+function parsePemHeader(text: string, prefixStart: number, prefix: string): PemHeader | null {
+  const labelStart = prefixStart + prefix.length;
+  if (labelStart >= text.length || text[labelStart] === "-") return null;
+  const labelEnd = text.indexOf("-", labelStart);
+  if (labelEnd < 0 || !text.startsWith(PEM_FENCE, labelEnd)) return null;
+  return {
+    end: labelEnd + PEM_FENCE.length,
+    label: text.slice(labelStart, labelEnd),
+  };
+}
+
+/**
+ * Scan PEM blocks monotonically. A complete block ends at the first valid END
+ * header with the same label. If a valid BEGIN has no matching END, redact from
+ * that BEGIN through EOF rather than letting a mismatched END expose a suffix.
+ */
+function collectPemEdits(text: string): SecretPortionEdit[] {
+  const edits: SecretPortionEdit[] = [];
+  let searchFrom = 0;
+
+  while (searchFrom < text.length) {
+    const begin = text.indexOf(PEM_BEGIN_PREFIX, searchFrom);
+    if (begin < 0) break;
+    const beginHeader = parsePemHeader(text, begin, PEM_BEGIN_PREFIX);
+    if (!beginHeader) {
+      searchFrom = begin + PEM_BEGIN_PREFIX.length;
+      continue;
+    }
+
+    let endSearchFrom = beginHeader.end;
+    let blockEnd = -1;
+    while (endSearchFrom < text.length) {
+      const end = text.indexOf(PEM_END_PREFIX, endSearchFrom);
+      if (end < 0) break;
+      const endHeader = parsePemHeader(text, end, PEM_END_PREFIX);
+      if (endHeader?.label === beginHeader.label) {
+        blockEnd = endHeader.end;
+        break;
+      }
+      endSearchFrom = end + PEM_END_PREFIX.length;
+    }
+
+    if (blockEnd < 0) {
+      edits.push({ start: begin, end: text.length, replacement: VALUE_MARKER });
+      break;
+    }
+    edits.push({ start: begin, end: blockEnd, replacement: VALUE_MARKER });
+    searchFrom = blockEnd;
+  }
+
+  return edits;
+}
+
+function isAsciiAlpha(char: string | undefined): boolean {
+  if (!char) return false;
+  const code = char.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isAsciiAlphanumeric(char: string | undefined): boolean {
+  if (!char) return false;
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122)
+  );
+}
+
+function isSchemeChar(char: string | undefined): boolean {
+  return isAsciiAlphanumeric(char) || char === "+" || char === "-" || char === ".";
+}
+
+/**
+ * Find scheme://userinfo@ spans from each literal :// once. Backward scheme
+ * scans cannot overlap because the slash delimiter ends the preceding run.
+ * A valid scheme suffix may follow punctuation, while alphanumeric prefixes
+ * remain part of the scheme rather than triggering suffix rescans.
+ */
+function collectUriUserinfoEdits(text: string): SecretPortionEdit[] {
+  const edits: SecretPortionEdit[] = [];
+  let searchFrom = 0;
+
+  while (searchFrom < text.length) {
+    const colon = text.indexOf("://", searchFrom);
+    if (colon < 0) break;
+
+    let runStart = colon;
+    while (runStart > 0 && isSchemeChar(text[runStart - 1])) runStart -= 1;
+
+    let schemeStart = -1;
+    for (let i = runStart; i < colon; i++) {
+      if (!isAsciiAlpha(text[i])) continue;
+      if (i === runStart || !isAsciiAlphanumeric(text[i - 1])) {
+        schemeStart = i;
+        break;
+      }
+    }
+
+    if (schemeStart >= 0) {
+      const userStart = colon + 3;
+      let cursor = userStart;
+      while (
+        cursor < text.length &&
+        text[cursor] !== "/" &&
+        text[cursor] !== "@" &&
+        !/\s/.test(text[cursor] ?? "")
+      ) {
+        cursor += 1;
+      }
+      if (cursor > userStart && text[cursor] === "@") {
+        edits.push({ start: userStart, end: cursor, replacement: VALUE_MARKER });
+      }
+    }
+
+    searchFrom = colon + 3;
+  }
+
+  return edits;
+}
+
+function isPathHardSeparator(char: string | undefined): boolean {
+  return char === "/" || char === "\\" || char === ":" || (char !== undefined && /\s/.test(char));
+}
+
+function isPathMatchEndBoundary(char: string | undefined): boolean {
+  return (
+    char === undefined ||
+    char === ":" ||
+    (char !== undefined && /\s/.test(char)) ||
+    char === "." ||
+    char === "," ||
+    char === ";" ||
+    char === ")" ||
+    char === "]" ||
+    char === "}" ||
+    char === '"' ||
+    char === "'" ||
+    char === "`"
+  );
+}
+
+function hasPathLeftBoundary(text: string, index: number): boolean {
+  const previous = text[index - 1];
+  return previous === undefined || !(/[A-Za-z0-9_.-]/.test(previous));
+}
+
+/**
+ * Scan secret-like path tokens monotonically. Suffix checks happen only at a
+ * dot and named candidates remain active until their first valid end boundary,
+ * avoiding the overlapping suffix search of the former global regex.
+ */
+function collectSecretPathEdits(text: string): SecretPortionEdit[] {
+  const edits: SecretPortionEdit[] = [];
+  const lower = text.toLowerCase();
+  let componentStart = 0;
+  let namedStart = -1;
+  let namedMinEnd = -1;
+  let namedDirectFallbackEnd = -1;
+
+  for (let i = 0; i <= text.length; i++) {
+    const char = text[i];
+
+    if (namedStart >= 0 && i >= namedMinEnd && isPathMatchEndBoundary(char)) {
+      edits.push({ start: namedStart, end: i, replacement: PATH_MARKER });
+      namedStart = -1;
+      namedMinEnd = -1;
+      namedDirectFallbackEnd = -1;
+    }
+
+    if (i === text.length) break;
+
+    // Embedded suffix matches need a filename stem. The basename pass already
+    // handles a whole path segment such as `.pem` without redacting prose that
+    // merely names the file format.
+    for (const suffix of SECRET_PATH_SUFFIXES) {
+      if (
+        i > componentStart &&
+        lower.startsWith(suffix, i) &&
+        isPathMatchEndBoundary(text[i + suffix.length])
+      ) {
+        edits.push({
+          start: componentStart,
+          end: i + suffix.length,
+          replacement: PATH_MARKER,
+        });
+        break;
+      }
+    }
+
+    if (namedStart < 0 && hasPathLeftBoundary(text, i)) {
+      for (const base of SECRET_PATH_BASES) {
+        if (!lower.startsWith(base, i)) continue;
+        const baseEnd = i + base.length;
+        const extensionStart = baseEnd + 1;
+        if (
+          text[baseEnd] === "." &&
+          extensionStart < text.length &&
+          !isPathHardSeparator(text[extensionStart])
+        ) {
+          namedStart = i;
+          namedMinEnd = extensionStart + 1;
+          namedDirectFallbackEnd =
+            text[i - 1] === "/" || text[i - 1] === "\\" || text[i - 1] === ":"
+              ? baseEnd
+              : -1;
+        } else if (
+          (text[i - 1] === "/" || text[i - 1] === "\\" || text[i - 1] === ":") &&
+          isPathMatchEndBoundary(text[baseEnd])
+        ) {
+          edits.push({ start: i, end: baseEnd, replacement: PATH_MARKER });
+        }
+        break;
+      }
+    }
+
+    if (isPathHardSeparator(char)) {
+      if (namedStart >= 0 && namedDirectFallbackEnd >= 0) {
+        edits.push({
+          start: namedStart,
+          end: namedDirectFallbackEnd,
+          replacement: PATH_MARKER,
+        });
+      }
+      componentStart = i + 1;
+      namedStart = -1;
+      namedMinEnd = -1;
+      namedDirectFallbackEnd = -1;
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Scan labeled quoted values once, preserving their surrounding delimiter.
+ *
+ * `presentationEscaped[i]` records whether plain character `i` came from a
+ * one-layer Markdown escape. A raw opening quote closes on a raw delimiter and
+ * therefore ignores JSON/code escapes such as `\"`; a presentation-escaped
+ * opening quote closes on the corresponding presentation-escaped delimiter.
+ * Other quote types are ordinary value characters. If no matching delimiter
+ * exists, redact through end-of-input rather than exposing a suffix.
+ */
+function collectQuotedLabeledEdits(
+  text: string,
+  presentationEscaped: readonly boolean[],
+  precededByOddPlainBackslashRun: readonly boolean[],
+): SecretPortionEdit[] {
+  const edits: SecretPortionEdit[] = [];
+  const pattern = new RegExp(QUOTED_SECRET_PREFIX_RE.source, QUOTED_SECRET_PREFIX_RE.flags);
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const quote = match[2];
+    if (!quote) continue;
+    const openIndex = match.index + match[0].length - quote.length;
+    const valueStart = openIndex + quote.length;
+    const delimiterIsPresentationEscaped = presentationEscaped[openIndex] ?? false;
+    let valueEnd = text.length;
+    let closed = false;
+
+    for (let i = valueStart; i < text.length; i++) {
+      if (
+        text[i] === quote &&
+        (presentationEscaped[i] ?? false) === delimiterIsPresentationEscaped &&
+        // In raw input, presentationEscaped already represents source
+        // backslash parity: an odd run consumed the quote into the plain view.
+        // In one-layer input, remove that presentation layer conceptually and
+        // use the remaining plain backslash parity for semantic quote escapes.
+        (!delimiterIsPresentationEscaped ||
+          !(precededByOddPlainBackslashRun[i] ?? false))
+      ) {
+        valueEnd = i;
+        pattern.lastIndex = i + quote.length;
+        closed = true;
+        break;
+      }
+    }
+
+    if (valueEnd > valueStart) {
+      edits.push({ start: valueStart, end: valueEnd, replacement: VALUE_MARKER });
+    }
+    if (!closed) break;
+  }
+
+  return edits;
 }
 
 /**
@@ -284,9 +537,21 @@ function matchAllGlobal(text: string, pattern: RegExp): RegExpMatchArray[] {
  * the secret portion in original coordinates so a de-escaped match can be
  * mapped back onto still-escaped presentation without rewriting it.
  */
-function collectSecretPortionEdits(input: string): SecretPortionEdit[] {
-  const text = sanitizeUntrustedText(input);
-  const edits: SecretPortionEdit[] = [];
+function collectSecretPortionEdits(
+  input: string,
+  presentationEscaped: readonly boolean[],
+  precededByOddPlainBackslashRun: readonly boolean[],
+): SecretPortionEdit[] {
+  const text = input;
+  const edits: SecretPortionEdit[] = [
+    ...collectPemEdits(text),
+    ...collectQuotedLabeledEdits(
+      text,
+      presentationEscaped,
+      precededByOddPlainBackslashRun,
+    ),
+    ...collectUriUserinfoEdits(text),
+  ];
 
   for (const rule of SECRET_VALUE_RULES) {
     for (const match of matchAllGlobal(text, rule.pattern)) {
@@ -316,14 +581,7 @@ function collectSecretPortionEdits(input: string): SecretPortionEdit[] {
   }
 
   // Embedded path tokens in free text (after basename candidates).
-  for (const match of matchAllGlobal(text, SECRET_PATH_NAME_RE)) {
-    const index = match.index ?? 0;
-    edits.push({
-      start: index,
-      end: index + match[0].length,
-      replacement: PATH_MARKER,
-    });
-  }
+  edits.push(...collectSecretPathEdits(text));
 
   return dedupeOverlappingEdits(edits);
 }
@@ -336,6 +594,8 @@ interface DeescapeMap {
   plain: string;
   origStart: number[];
   origEnd: number[];
+  presentationEscaped: boolean[];
+  precededByOddPlainBackslashRun: boolean[];
 }
 
 /**
@@ -344,35 +604,53 @@ interface DeescapeMap {
  * be spliced into the original without disturbing non-secret presentation.
  */
 function buildDeescapeMap(text: string): DeescapeMap {
-  let plain = "";
+  const plainCharacters: string[] = [];
   const origStart: number[] = [];
   const origEnd: number[] = [];
+  const presentationEscaped: boolean[] = [];
+  const precededByOddPlainBackslashRun: boolean[] = [];
+  let plainBackslashRun = 0;
   for (let i = 0; i < text.length; ) {
+    let plainCharacter: string;
+    let escapedForPresentation: boolean;
+    let sourceEnd: number;
     if (
       text[i] === "\\" &&
       i + 1 < text.length &&
       ESCAPABLE_MARKDOWN_PUNCTUATION.test(text[i + 1])
     ) {
-      plain += text[i + 1];
-      origStart.push(i);
-      origEnd.push(i + 2);
-      i += 2;
+      plainCharacter = text[i + 1] ?? "";
+      escapedForPresentation = true;
+      sourceEnd = i + 2;
     } else {
-      plain += text[i];
-      origStart.push(i);
-      origEnd.push(i + 1);
-      i += 1;
+      plainCharacter = text[i] ?? "";
+      escapedForPresentation = false;
+      sourceEnd = i + 1;
     }
+
+    plainCharacters.push(plainCharacter);
+    origStart.push(i);
+    origEnd.push(sourceEnd);
+    presentationEscaped.push(escapedForPresentation);
+    precededByOddPlainBackslashRun.push(plainBackslashRun % 2 === 1);
+    plainBackslashRun = plainCharacter === "\\" ? plainBackslashRun + 1 : 0;
+    i = sourceEnd;
   }
-  return { plain, origStart, origEnd };
+  return {
+    plain: plainCharacters.join(""),
+    origStart,
+    origEnd,
+    presentationEscaped,
+    precededByOddPlainBackslashRun,
+  };
 }
 
 /**
  * Apply secret-portion edits (in de-escaped coordinates) onto the still-escaped
  * original via the de-escape map. Only secret spans are replaced; every
  * untouched character — including Markdown backslash escapes — is preserved.
- * Right-to-left apply with non-overlapping plain spans keeps original escape
- * indices valid; any residual overlap is skipped as a safety net.
+ * Edits arrive ordered and non-overlapping from dedupeOverlappingEdits, so one
+ * forward assembly copies every untouched source character at most once.
  */
 function applyPortionEditsToEscaped(
   escaped: string,
@@ -381,22 +659,20 @@ function applyPortionEditsToEscaped(
   origEnd: number[],
 ): string {
   if (edits.length === 0) return escaped;
-  let result = escaped;
-  // Right-to-left so earlier (left) indices stay valid on the mutated string.
-  const ordered = [...edits]
-    .filter((edit) => edit.end > edit.start)
-    .sort((a, b) => b.start - a.start || b.end - a.end);
-  let minPlainStart = Number.POSITIVE_INFINITY;
-  for (const edit of ordered) {
-    // Skip if this plain span overlaps an already-applied (further-right) edit.
-    if (edit.end > minPlainStart) continue;
+  const portions: string[] = [];
+  let escapedCursor = 0;
+  let plainEnd = -1;
+  for (const edit of edits) {
+    if (edit.end <= edit.start || edit.start < plainEnd) continue;
     const escStart = origStart[edit.start] ?? escaped.length;
     const escEnd = origEnd[edit.end - 1] ?? escaped.length;
     if (escEnd <= escStart) continue;
-    result = result.slice(0, escStart) + edit.replacement + result.slice(escEnd);
-    minPlainStart = edit.start;
+    portions.push(escaped.slice(escapedCursor, escStart), edit.replacement);
+    escapedCursor = escEnd;
+    plainEnd = edit.end;
   }
-  return result;
+  portions.push(escaped.slice(escapedCursor));
+  return portions.join("");
 }
 
 /** Redact secret-like values while preserving enough context for remediation. */
@@ -408,8 +684,18 @@ export function redactedEvidence(raw: string): string {
   // Double-escaped input is out of scope: callers that escape after redacting
   // (escapeMarkdown) stay safe because redaction runs first.
   const sanitized = sanitizeUntrustedText(raw);
-  const { plain, origStart, origEnd } = buildDeescapeMap(sanitized);
-  const edits = collectSecretPortionEdits(plain);
+  const {
+    plain,
+    origStart,
+    origEnd,
+    presentationEscaped,
+    precededByOddPlainBackslashRun,
+  } = buildDeescapeMap(sanitized);
+  const edits = collectSecretPortionEdits(
+    plain,
+    presentationEscaped,
+    precededByOddPlainBackslashRun,
+  );
   if (edits.length === 0) return sanitized;
   return applyPortionEditsToEscaped(sanitized, edits, origStart, origEnd);
 }
