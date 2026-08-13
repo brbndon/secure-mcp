@@ -90,11 +90,13 @@ describe("threat-model inventory coverage", () => {
         });
         assert.equal(result.isError, undefined);
         const structured = result.structuredContent as {
+          findings?: unknown[];
           coverage?: {
             scan_status: string;
             not_observed_means: string;
             review_basis?: string;
             files_reviewed: unknown[];
+            candidate_disposition_counts: Record<string, number>;
           };
         };
         const coverage = structured.coverage;
@@ -106,6 +108,12 @@ describe("threat-model inventory coverage", () => {
         assert.equal(coverage.review_basis, "inventory_only");
         assert.deepEqual(coverage.files_reviewed, []);
         assert.notEqual(coverage.not_observed_means, "no_candidate_in_files_reviewed");
+        assert.ok(coverage.candidate_disposition_counts.needs_review > 0);
+        assert.equal(coverage.candidate_disposition_counts.needs_review, 3);
+        assert.ok(
+          coverage.candidate_disposition_counts.needs_review >=
+            (structured.findings?.length ?? 0),
+        );
       } finally {
         await client.close();
         await server.close();

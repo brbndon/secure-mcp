@@ -217,15 +217,26 @@ function collectKindPaths(
   return uniqPaths(matches);
 }
 
+function isJavaScriptOrTypeScriptPath(relativePath: string): boolean {
+  return /\.(?:[cm]?[jt]sx?)$/i.test(relativePath);
+}
+
+function isSwiftPath(relativePath: string): boolean {
+  return /\.swift$/i.test(relativePath);
+}
+
+function isNextRouteRoot(relativePath: string, root: "app" | "pages"): boolean {
+  return new RegExp(`^(?:src/)?${root}/`, "i").test(relativePath);
+}
+
+function isNamedSurfacePath(relativePath: string, pattern: RegExp): boolean {
+  return pattern.test(relativePath) && isJavaScriptOrTypeScriptPath(relativePath);
+}
+
 function buildTypedSurfaces(
   relativePaths: string[],
   stacks: StackFocus[],
 ): TypedSurface[] {
-  const hasNext = stacks.includes("nextjs");
-  const hasTsWeb =
-    hasNext || stacks.includes("typescript") || stacks.includes("common");
-  const hasSwift = stacks.includes("swift");
-  const hasExpo = stacks.includes("expo");
   const surfaces: TypedSurface[] = [];
 
   const push = (
@@ -248,197 +259,214 @@ function buildTypedSurfaces(
     });
   };
 
-  if (hasNext || hasTsWeb) {
-    push(
-      "http_route",
-      collectKindPaths(
-        relativePaths,
-        (p, base) =>
-          p.toLowerCase().includes("/api/") ||
-          /route\.(ts|js|tsx|jsx)$/.test(base),
-      ),
-      "public",
-      "Authenticate and authorize every method; do not rely on middleware alone.",
-      hasNext ? ["nextjs"] : ["typescript"],
-    );
-  }
+  const authName = /auth|session|login|clerk|nextauth|credential|keychain|securestore|secure-store/i;
+  const deepLinkName = /deep.?link|universal.?link|onopenurl|linking|authsession|redirect/i;
+  const webviewName = /webview|wkwebview|wkscript|javascriptbridge|react-native-webview/i;
+  const secureStorageName = /keychain|securestore|secure-store|secentitlement|ksecattr/i;
+  const dataName = /prisma|drizzle|supabase|repository|swiftdata|coredata|model\//i;
 
-  if (hasNext) {
-    push(
-      "server_action",
-      collectKindPaths(
-        relativePaths,
-        (p, base) =>
-          /actions?\.(ts|js|tsx|jsx)$/.test(base) ||
-          p.toLowerCase().includes("/actions/"),
-      ),
-      "public",
-      "Treat as HTTP-invocable: schema-validate inputs and enforce object-level authz.",
-      ["nextjs"],
-    );
-    push(
-      "middleware",
-      collectKindPaths(
-        relativePaths,
-        (_p, base) => base === "middleware.ts" || base === "middleware.js",
-      ),
-      "public",
-      "Matcher coverage is incomplete by design; re-check authz at each sensitive entrypoint.",
-      ["nextjs"],
-    );
-    push(
-      "page_entry",
-      collectKindPaths(
-        relativePaths,
-        (p, base) =>
-          (base === "page.tsx" || base === "page.jsx" || base === "layout.tsx") &&
-          (p.toLowerCase().startsWith("app/") || p.toLowerCase().startsWith("pages/")),
-      ),
-      "unknown",
-      "Confirm server-side data loaders enforce session/ownership before rendering sensitive data.",
-      ["nextjs"],
-    );
-  }
+  // When Next is detected, its TS/JS paths are represented by the more precise
+  // Next surfaces. Avoid duplicating them as generic TypeScript surfaces.
+  const activeStacks = [...new Set(stacks)].filter(
+    (stack) =>
+      !(stack === "typescript" && stacks.includes("nextjs")) &&
+      !(stack === "common" && stacks.some((candidate) => candidate !== "common")),
+  );
 
-  if (hasSwift || hasExpo) {
-    push(
-      "app_entry",
-      collectKindPaths(
-        relativePaths,
-        (p, base) =>
-          base === "main.swift" ||
-          base === "app.swift" ||
-          base === "app.tsx" ||
-          base === "_layout.tsx" ||
-          base === "index.tsx" ||
-          p.toLowerCase().endsWith("appdelegate.swift"),
-      ),
-      "internal",
-      "Confirm launch/deep-link handlers do not grant privileged state before auth.",
-      hasSwift && hasExpo ? ["swift", "expo"] : hasSwift ? ["swift"] : ["expo"],
-    );
-  } else if (hasTsWeb) {
-    push(
-      "app_entry",
-      collectKindPaths(
-        relativePaths,
-        (p, base) =>
-          base === "index.ts" ||
-          base === "index.tsx" ||
-          p.toLowerCase() === "src/index.ts",
-      ),
-      "internal",
-      "Confirm process entrypoints do not expose privileged operations without auth checks.",
-      stacks.includes("typescript") ? ["typescript"] : ["common"],
-    );
-  }
+  for (const stack of activeStacks) {
+    const stackPaths = (matcher: (path: string, base: string) => boolean): string[] =>
+      collectKindPaths(relativePaths, matcher);
 
-  {
-    const authStacks: StackFocus[] = [];
-    if (hasNext) authStacks.push("nextjs");
-    else if (stacks.includes("typescript")) authStacks.push("typescript");
-    if (hasSwift) authStacks.push("swift");
-    if (hasExpo) authStacks.push("expo");
-    if (authStacks.length === 0 && stacks.includes("common")) authStacks.push("common");
+    if (stack === "nextjs") {
+      push(
+        "http_route",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          ((isNextRouteRoot(path, "app") && /^route\.[cm]?[jt]sx?$/i.test(base)) ||
+            (isNextRouteRoot(path, "pages") && /^(?:src\/)?pages\/api\//i.test(path))),
+        ),
+        "public",
+        "Authenticate and authorize every method; do not rely on middleware alone.",
+        [stack],
+      );
+      push(
+        "server_action",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/^actions?\.[cm]?[jt]sx?$/i.test(base) || /(^|\/)actions?\//i.test(path)),
+        ),
+        "public",
+        "Treat as HTTP-invocable: schema-validate inputs and enforce object-level authz.",
+        [stack],
+      );
+      push(
+        "middleware",
+        stackPaths((_path, base) => /^middleware\.[cm]?[jt]s$/i.test(base)),
+        "public",
+        "Matcher coverage is incomplete by design; re-check authz at each sensitive entrypoint.",
+        [stack],
+      );
+      push(
+        "page_entry",
+        stackPaths((path, base) => {
+          if (!isJavaScriptOrTypeScriptPath(path)) return false;
+          if (isNextRouteRoot(path, "app")) return /^(?:page|layout)\.[cm]?[jt]sx?$/i.test(base);
+          return isNextRouteRoot(path, "pages") && !/^(?:src\/)?pages\/api\//i.test(path);
+        }),
+        "unknown",
+        "Confirm server-side data loaders enforce session/ownership before rendering sensitive data.",
+        [stack],
+      );
+    } else if (stack === "typescript") {
+      push(
+        "http_route",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/\/(?:api|routes?)\//i.test(`/${path}`) || /^route\.[cm]?[jt]sx?$/i.test(base)),
+        ),
+        "public",
+        "Authenticate, authorize, and validate every externally reachable handler.",
+        [stack],
+      );
+      push(
+        "app_entry",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/^(?:index|main|app)\.[cm]?[jt]sx?$/i.test(base) || /^src\/index\.[cm]?[jt]s$/i.test(path)),
+        ),
+        "internal",
+        "Confirm process entrypoints do not expose privileged operations without auth checks.",
+        [stack],
+      );
+    } else if (stack === "swift") {
+      push(
+        "app_entry",
+        stackPaths((path, base) =>
+          isSwiftPath(path) &&
+          (base === "main.swift" || base === "app.swift" || /appdelegate\.swift$/i.test(path)),
+        ),
+        "internal",
+        "Confirm launch/deep-link handlers do not grant privileged state before auth.",
+        [stack],
+      );
+      push(
+        "deep_link",
+        stackPaths((path) => isSwiftPath(path) && deepLinkName.test(path)),
+        "public",
+        "Validate deep-link targets before elevating session or navigation privileges.",
+        [stack],
+      );
+      push(
+        "webview",
+        stackPaths((path) => isSwiftPath(path) && webviewName.test(path)),
+        "public",
+        "Restrict script bridges and navigation allowlists; treat WebView content as untrusted.",
+        [stack],
+      );
+      push(
+        "secure_storage",
+        stackPaths(
+          (path) =>
+            (isSwiftPath(path) && secureStorageName.test(path)) || /\.entitlements$/i.test(path),
+        ),
+        "internal",
+        "Use Keychain with least accessibility; never store tokens in plain preferences.",
+        [stack],
+      );
+    } else if (stack === "expo") {
+      push(
+        "app_entry",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/^(?:app|_layout|index)\.[cm]?[jt]sx?$/i.test(base) || /^src\/index\.[cm]?[jt]s$/i.test(path)),
+        ),
+        "internal",
+        "Confirm launch/deep-link handlers do not grant privileged state before auth.",
+        [stack],
+      );
+      push(
+        "deep_link",
+        stackPaths((path) => isNamedSurfacePath(path, deepLinkName)),
+        "public",
+        "Validate deep-link/AuthSession targets before elevating session or navigation privileges.",
+        [stack],
+      );
+      push(
+        "webview",
+        stackPaths((path) => isNamedSurfacePath(path, webviewName)),
+        "public",
+        "Restrict script bridges and navigation allowlists; treat WebView content as untrusted.",
+        [stack],
+      );
+      push(
+        "secure_storage",
+        stackPaths((path) => isNamedSurfacePath(path, secureStorageName)),
+        "internal",
+        "Use SecureStore with least accessibility; never store tokens in plain preferences.",
+        [stack],
+      );
+    }
+
+    const sourceMatchesStack = (path: string): boolean =>
+      stack === "swift"
+        ? isSwiftPath(path)
+        : stack === "common"
+          ? false
+          : isJavaScriptOrTypeScriptPath(path);
     push(
       "auth_surface",
-      collectKindPaths(
-        relativePaths,
-        (p) =>
-          /auth|session|login|clerk|nextauth|credential|keychain|securestore|secure-store/i.test(
-            p,
-          ),
-      ),
+      stackPaths((path) => sourceMatchesStack(path) && authName.test(path)),
       "unknown",
       "Verify session establishment, refresh, logout, and object-level authorization together.",
-      authStacks,
+      [stack],
     );
-  }
 
-  if (hasSwift || hasExpo) {
-    push(
-      "deep_link",
-      collectKindPaths(
-        relativePaths,
-        (p) => /deep.?link|universal.?link|onopenurl|linking|authsession|redirect/i.test(p),
-      ),
-      "public",
-      "Validate deep-link/AuthSession targets before elevating session or navigation privileges.",
-      hasSwift && hasExpo ? ["swift", "expo"] : hasSwift ? ["swift"] : ["expo"],
-    );
-    push(
-      "webview",
-      collectKindPaths(relativePaths, (p) =>
-        /webview|wkwebview|wkscript|javascriptbridge|react-native-webview/i.test(p),
-      ),
-      "public",
-      "Restrict script bridges and navigation allowlists; treat WebView content as untrusted.",
-      hasSwift && hasExpo ? ["swift", "expo"] : hasSwift ? ["swift"] : ["expo"],
-    );
-    push(
-      "secure_storage",
-      collectKindPaths(
-        relativePaths,
-        (p) =>
-          /keychain|securestore|secure-store|secentitlement|ksecattr/i.test(p) ||
-          p.toLowerCase().endsWith(".entitlements"),
-      ),
-      "internal",
-      "Use Keychain/SecureStore with least accessibility; never store tokens in plain preferences.",
-      hasSwift && hasExpo ? ["swift", "expo"] : hasSwift ? ["swift"] : ["expo"],
-    );
-  }
-
-  {
-    const configStacks: StackFocus[] = [];
-    if (hasNext) configStacks.push("nextjs");
-    if (stacks.includes("typescript") && !hasNext) configStacks.push("typescript");
-    if (hasSwift) configStacks.push("swift");
-    if (hasExpo) configStacks.push("expo");
-    if (configStacks.length === 0) configStacks.push("common");
     push(
       "config",
-      collectKindPaths(
-        relativePaths,
-        (_p, base) =>
-          base === "package.json" ||
-          base === "package.swift" ||
-          base.startsWith("next.config") ||
-          base === "tsconfig.json" ||
-          base.endsWith(".entitlements") ||
-          base === "info.plist" ||
-          base === "dockerfile" ||
-          base === "vercel.json" ||
-          base === "app.json" ||
-          base.startsWith("app.config") ||
-          base === "middleware.ts" ||
-          base === "middleware.js",
-      ),
+      stackPaths((_path, base) => {
+        switch (stack) {
+          case "nextjs":
+            return (
+              base === "package.json" ||
+              base === "tsconfig.json" ||
+              base.startsWith("next.config") ||
+              base === "vercel.json" ||
+              /^middleware\.[cm]?[jt]s$/i.test(base)
+            );
+          case "typescript":
+            return (
+              base === "package.json" ||
+              base === "tsconfig.json" ||
+              base === "dockerfile" ||
+              base === "vercel.json"
+            );
+          case "swift":
+            return base === "package.swift" || base === "info.plist" || base.endsWith(".entitlements");
+          case "expo":
+            return (
+              base === "package.json" ||
+              base === "tsconfig.json" ||
+              base === "app.json" ||
+              base.startsWith("app.config") ||
+              base === "eas.json"
+            );
+          case "common":
+            return base === "dockerfile" || base === "makefile";
+        }
+      }),
       "internal",
       "Review public env, entitlements, and deploy config for over-broad exposure.",
-      configStacks,
+      [stack],
     );
-  }
 
-  {
-    const dataStacks: StackFocus[] = [];
-    if (hasNext || stacks.includes("typescript")) {
-      dataStacks.push(hasNext ? "nextjs" : "typescript");
-    }
-    if (hasSwift) dataStacks.push("swift");
-    if (hasExpo) dataStacks.push("expo");
-    if (dataStacks.length === 0 && stacks.includes("common")) dataStacks.push("common");
     push(
       "data_layer",
-      collectKindPaths(
-        relativePaths,
-        (p, base) =>
-          /prisma|drizzle|supabase|repository|swiftdata|coredata|model\//i.test(p) ||
-          base.includes("schema"),
+      stackPaths((path, base) =>
+        sourceMatchesStack(path) && (dataName.test(path) || base.includes("schema")),
       ),
       "internal",
       "Enforce authorization at the data access boundary; avoid trusting client-supplied ids.",
-      dataStacks,
+      [stack],
     );
   }
 

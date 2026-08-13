@@ -144,7 +144,7 @@ export const FindingSchema = z
       .optional()
       .describe("Stable identity for the same source instance across audit runs"),
     disposition: CandidateDispositionSchema.optional().describe(
-      "Candidate disposition: reportable after confirmation; fixed after revalidation proves remediation; needs_review/suppressed/not_applicable/deferred otherwise",
+      "Candidate disposition: reportable or deferred for confirmed open work; fixed after revalidation proves remediation; needs_review/suppressed/not_applicable otherwise",
     ),
     disposition_reason: z.string().min(1).max(MAX_FINDING_DISPOSITION_REASON).optional(),
     source: z.string().min(1).max(MAX_FINDING_NARRATIVE).optional().describe("Evidence-backed input/source context"),
@@ -303,14 +303,17 @@ export function mergeFindings(left: FindingInput, right: FindingInput): FindingI
     if (metadata.omitWhenEmpty && Array.isArray(value) && value.length === 0) continue;
     if (value !== undefined) merged[field] = value;
   }
-  if (merged.disposition === "reportable") {
-    // Keep the reason coherent with the winning disposition: reportable wins
-    // over fixed/deferred/suppressed, so its reason must not come from a
-    // losing side that describes a different candidate state.
-    const reportableSource = right.disposition === "reportable" ? right : left;
-    if (reportableSource.disposition_reason !== undefined) {
-      merged.disposition_reason = reportableSource.disposition_reason;
-    }
+  if (merged.disposition !== undefined) {
+    // A disposition reason is state-specific. Take it only from a side whose
+    // disposition matches the winning state; never retain prose from a losing
+    // fixed/deferred/needs_review/reportable candidate.
+    const winningReason = [left, right].find(
+      (finding) =>
+        finding.disposition === merged.disposition &&
+        finding.disposition_reason !== undefined,
+    )?.disposition_reason;
+    if (winningReason === undefined) delete merged.disposition_reason;
+    else merged.disposition_reason = winningReason;
   }
   return merged as FindingInput;
 }
@@ -432,7 +435,7 @@ export function buildFinding(
     disposition: partial.disposition ?? "needs_review",
     disposition_reason:
       partial.disposition_reason ??
-      "Heuristic or architecture candidate; confirm source-to-sink reachability before reporting as confirmed.",
+      defaultDispositionReason(partial.disposition ?? "needs_review"),
     source: partial.source ?? "Source or input flow not established by this bounded static review.",
     control: partial.control ?? "Expected security control requires manual confirmation.",
     sink: partial.sink ?? "Sink or trust boundary not fully established by this heuristic.",
@@ -453,6 +456,25 @@ export function buildFinding(
         "Confirm the change in code review; add or update tests that assert the secure behavior; re-run this audit category after the fix.",
     ],
   };
+}
+
+function defaultDispositionReason(
+  disposition: z.infer<typeof CandidateDispositionSchema>,
+): string {
+  switch (disposition) {
+    case "reportable":
+      return "Evidence confirms an open weakness that requires remediation.";
+    case "deferred":
+      return "Confirmed open remediation work is deferred; record the owner, rationale, and target date.";
+    case "fixed":
+      return "Revalidation confirmed the remediation is present; attach the verification evidence.";
+    case "suppressed":
+      return "The candidate is suppressed; record the evidence-based suppression rationale.";
+    case "not_applicable":
+      return "The candidate is not applicable to the reviewed code path; record the supporting evidence.";
+    case "needs_review":
+      return "Heuristic or architecture candidate; confirm source-to-sink reachability before reporting as confirmed.";
+  }
 }
 
 /** Add additive traceability defaults to findings received from older callers. */

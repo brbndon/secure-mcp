@@ -219,4 +219,85 @@ describe("candidate dispositions", () => {
     assert.equal(merged.disposition, "fixed");
     assert.equal(merged.disposition_reason, "Control verified at sink.");
   });
+
+  it("never carries a losing disposition reason across merge orderings", () => {
+    const cases = [
+      {
+        left: { disposition: "fixed" as const, disposition_reason: "Verified fixed." },
+        right: { disposition: "reportable" as const, disposition_reason: undefined },
+        expected: "reportable",
+        reason: undefined,
+      },
+      {
+        left: { disposition: "reportable" as const, disposition_reason: undefined },
+        right: { disposition: "fixed" as const, disposition_reason: "Verified fixed." },
+        expected: "reportable",
+        reason: undefined,
+      },
+      {
+        left: { disposition: "needs_review" as const, disposition_reason: "Proof incomplete." },
+        right: { disposition: "deferred" as const, disposition_reason: "Owned backlog item." },
+        expected: "needs_review",
+        reason: "Proof incomplete.",
+      },
+      {
+        left: { disposition: undefined, disposition_reason: "Unclassified prose." },
+        right: { disposition: "deferred" as const, disposition_reason: "Owned backlog item." },
+        expected: "deferred",
+        reason: "Owned backlog item.",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const left = { ...sampleFinding(12), ...testCase.left };
+      const right = { ...sampleFinding(12), ...testCase.right };
+      const merged = mergeFindings(left, right);
+      assert.equal(merged.disposition, testCase.expected);
+      assert.equal(merged.disposition_reason, testCase.reason);
+    }
+
+    const dispositions = ["reportable", "fixed", "needs_review", undefined] as const;
+    for (const leftDisposition of dispositions) {
+      for (const rightDisposition of dispositions) {
+        const left = {
+          ...sampleFinding(12),
+          disposition: leftDisposition,
+          disposition_reason: leftDisposition ? `left:${leftDisposition}` : undefined,
+        };
+        const right = {
+          ...sampleFinding(12),
+          disposition: rightDisposition,
+          disposition_reason: rightDisposition ? `right:${rightDisposition}` : undefined,
+        };
+        const winner =
+          leftDisposition === "reportable" || rightDisposition === "reportable"
+            ? "reportable"
+            : leftDisposition ?? rightDisposition;
+        const expectedReason = [left, right].find(
+          (finding) => finding.disposition === winner,
+        )?.disposition_reason;
+
+        const merged = mergeFindings(left, right);
+        assert.equal(merged.disposition, winner);
+        assert.equal(merged.disposition_reason, expectedReason);
+      }
+    }
+  });
+
+  it("uses disposition-aware default reasons", () => {
+    const fixed = buildFinding({
+      ...sampleFinding(12),
+      disposition: "fixed",
+      disposition_reason: undefined,
+    });
+    const deferred = buildFinding({
+      ...sampleFinding(12),
+      disposition: "deferred",
+      disposition_reason: undefined,
+    });
+
+    assert.match(fixed.disposition_reason ?? "", /revalidation|remediation/i);
+    assert.doesNotMatch(fixed.disposition_reason ?? "", /heuristic candidate/i);
+    assert.match(deferred.disposition_reason ?? "", /deferred|open/i);
+  });
 });

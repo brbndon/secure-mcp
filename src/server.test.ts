@@ -493,6 +493,18 @@ describe("architecture typed surfaces", () => {
         "export default function Page() { return null; }\n",
         "utf8",
       );
+      await fs.mkdir(path.join(root, "src", "app", "account"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "app", "account", "page.tsx"),
+        "export default function AccountPage() { return null; }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "pages"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "pages", "dashboard.tsx"),
+        "export default function Dashboard() { return null; }\n",
+        "utf8",
+      );
       await fs.mkdir(path.join(root, "app", "api", "keys"), { recursive: true });
       await fs.writeFile(
         path.join(root, "app", "api", "keys", "service-account.json"),
@@ -559,11 +571,20 @@ describe("architecture typed surfaces", () => {
       const pageEntry = data.surfaces.find((s) => s.kind === "page_entry");
       assert.ok(pageEntry);
       assert.ok(!pageEntry.paths.includes("components/page.tsx"));
+      assert.ok(pageEntry.paths.includes("src/app/account/page.tsx"));
+      assert.ok(pageEntry.paths.includes("src/pages/dashboard.tsx"));
       const authSurface = data.surfaces.find((s) => s.kind === "auth_surface");
       assert.equal(authSurface?.exposure, "unknown");
       assert.ok(!JSON.stringify(data).includes("service-account.json"));
       assert.ok(JSON.stringify(data).includes("[redacted-secret-file]"));
       assert.ok(data.coverage_gaps.length > 0);
+      assert.ok(
+        data.coverage_gaps.every((gap) =>
+          /architecture inventory only.*after auth\/injection\/secrets tools/i.test(
+            (gap as { reason?: string }).reason ?? "",
+          ),
+        ),
+      );
       assert.ok(data.priority_paths.length > 0);
       assert.ok(data.security_brief.coverage_gap_count === data.coverage_gaps.length);
       assert.ok(data.security_brief.high_value_surfaces.length > 0);
@@ -618,6 +639,85 @@ describe("architecture typed surfaces", () => {
     }
   });
 
+  it("keeps every typed path honest for forced stacks in a mixed tree", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-mixed-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 80,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ dependencies: { next: "15.0.0", expo: "53.0.0" } }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "next.config.js"), "module.exports = {};\n", "utf8");
+      await fs.writeFile(path.join(root, "app.json"), JSON.stringify({ expo: { name: "x" } }), "utf8");
+      await fs.writeFile(path.join(root, "Package.swift"), "// swift-tools-version: 5.9\n", "utf8");
+      await fs.mkdir(path.join(root, "src", "app", "login"), { recursive: true });
+      await fs.writeFile(path.join(root, "src", "app", "login", "page.tsx"), "export default 1;\n", "utf8");
+      await fs.writeFile(path.join(root, "App.tsx"), "export default function App() {}\n", "utf8");
+      await fs.writeFile(path.join(root, "Linking.ts"), "export const redirect = 'app://callback';\n", "utf8");
+      await fs.writeFile(path.join(root, "App.swift"), "import SwiftUI\n@main struct App {}\n", "utf8");
+      await fs.writeFile(path.join(root, "KeychainStore.swift"), "import Security\n", "utf8");
+
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const expectations = {
+        nextjs: {
+          included: ["src/app/login/page.tsx"],
+          excluded: ["App.tsx", "Linking.ts", "App.swift", "KeychainStore.swift", "Package.swift", "app.json"],
+        },
+        typescript: {
+          included: ["package.json"],
+          excluded: ["App.swift", "KeychainStore.swift", "Package.swift", "app.json", "next.config.js"],
+        },
+        swift: {
+          included: ["App.swift", "KeychainStore.swift", "Package.swift"],
+          excluded: ["App.tsx", "Linking.ts", "package.json", "app.json", "next.config.js"],
+        },
+        expo: {
+          included: ["App.tsx", "Linking.ts", "package.json", "app.json"],
+          excluded: ["App.swift", "KeychainStore.swift", "Package.swift", "next.config.js"],
+        },
+      } as const;
+
+      for (const [stack, expected] of Object.entries(expectations)) {
+        const result = await client.callTool({
+          name: "secure_mcp_analyze_architecture",
+          arguments: { project_root: root, stack, max_files: 80, response_format: "json" },
+        });
+        assert.equal(result.isError, undefined);
+        const data = result.structuredContent as {
+          surface: Record<string, string[]>;
+          surfaces: Array<{ kind: string; paths: string[]; stacks: string[] }>;
+        };
+        const typedPaths = [...new Set(data.surfaces.flatMap((surface) => surface.paths))];
+        for (const included of expected.included) {
+          assert.ok(typedPaths.includes(included), `${stack} should include ${included}`);
+        }
+        for (const excluded of expected.excluded) {
+          assert.ok(!typedPaths.includes(excluded), `${stack} should exclude ${excluded}`);
+        }
+        assert.ok(
+          data.surfaces.every((surface) => surface.stacks.length === 1 && surface.stacks[0] === stack),
+        );
+        // The legacy buckets remain additive and stack-neutral for compatibility.
+        assert.ok(Object.values(data.surface).flat().includes("KeychainStore.swift"));
+      }
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("caps typed surface path lists and priority paths", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-caps-"));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -659,6 +759,9 @@ describe("architecture typed surfaces", () => {
       assert.ok(httpRoutes);
       assert.ok(httpRoutes.paths.length <= 12);
       assert.ok(data.coverage_gaps.every((gap) => gap.paths.length <= 6));
+      assert.ok(data.surfaces.length <= 20);
+      assert.ok(data.surfaces.every((surface) => surface.paths.length <= 12));
+      assert.ok(data.coverage_gaps.length <= 16);
       assert.ok(data.priority_paths.length <= 24);
     } finally {
       await client.close();

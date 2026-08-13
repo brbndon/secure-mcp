@@ -651,15 +651,19 @@ export async function walkProject(
         continue;
       }
 
+      // Reaching the cap is not itself evidence that anything was omitted.
+      // Mark truncation only when a further eligible file is encountered.
+      if (files.length >= maxFiles) {
+        truncated = true;
+        truncationReasons.add("max_files");
+        addEvent(excludedPaths, { path: rel, kind: "file", reason: "max_files" });
+        return;
+      }
+
       files.push({ absolutePath: abs, relativePath: rel, size, ext });
       totalBytes += size;
       if (files.length > maxCoverageEvents) {
         markCoverageEventsTruncated("included_paths_cap");
-      }
-      if (files.length >= maxFiles) {
-        truncated = true;
-        truncationReasons.add("max_files");
-        return;
       }
     }
   }

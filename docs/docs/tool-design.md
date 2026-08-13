@@ -101,7 +101,7 @@ Success payloads include at least:
 
 Category tools include `findings: Finding[]`.
 
-Read-only inventory and category tools also return `coverage`. It records included paths, excluded/ignored paths with reasons, file/depth/size caps, truncation causes, files actually reviewed, and all candidate dispositions (`reportable`, `needs_review`, `suppressed`, `not_applicable`, `deferred`, `fixed`). `not_observed_means` explicitly distinguishes an empty result within reviewed files from an incomplete scan.
+Read-only inventory and category tools also return `coverage`. It records included paths, excluded/ignored paths with reasons, file/depth/size caps, truncation causes, files actually reviewed, and all candidate dispositions (`reportable`, `needs_review`, `suppressed`, `not_applicable`, `deferred`, `fixed`). `not_observed_means` explicitly distinguishes an empty result within reviewed files from an incomplete scan. In final reports, `reportable` and `deferred` are confirmed open work, `needs_review` is an unconfirmed candidate, and `fixed`/`suppressed`/`not_applicable` remain ledger states excluded from open risk and remediation priority.
 
 Inventory and architecture responses expose a bounded top-level entry preview; `topLevelEntriesTruncated` / `top_level_truncated` indicates when the preview was shortened while stack signals were still collected from the full root directory stream.
 

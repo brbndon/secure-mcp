@@ -54,7 +54,7 @@ Phase 3: secure_mcp_check_authentication
          secure_mcp_review_secrets   (parallel ok)
          then sample zero-hit high-value surfaces from architecture priority_paths/coverage_gaps
 Phase 4: Open files for evidence, trace data flows (read-only); disposition = reportable|needs_review|suppressed|not_applicable|deferred|fixed with reason/evidence.
-Phase 5: secure_mcp_produce_findings (prefer reportable open findings; fixed is counted but not prioritised over open work)
+Phase 5: secure_mcp_produce_findings (reportable + deferred are open work; needs_review follows; fixed/suppressed/not_applicable are ledger-only and excluded from open risk/remediation_priority)
 Phase 6: Human narrative from the report.
 
 PROGRESSIVE RULE: Do not load packs before architecture. Use focus_paths for scoped drill-down / PR diffs (host resolves git paths; server never runs git).
@@ -89,8 +89,8 @@ Host agents may map PR diffs into focus_paths; the server does not run git.`,
 
   findings: `secure_mcp_produce_findings
 Every finding passed in must have: evidence, impact_if_unremediated, remediation, residual_risk, verification_suggestion + classification.
-Dispositions: reportable (open confirmed), needs_review, suppressed, not_applicable, deferred, fixed (revalidated remediation with reason/evidence).
-Prefer reportable for the final rollup; fixed is counted in candidate_disposition_counts but does not dominate remediation_priority.
+Dispositions: reportable (open confirmed), deferred (open confirmed but postponed with owner/context), needs_review (unconfirmed), suppressed, not_applicable, fixed (revalidated remediation with reason/evidence).
+Final rollup order is confirmed open work (reportable/deferred), then needs_review, then closed ledger states. Fixed/suppressed/not_applicable are counted in candidate_disposition_counts but excluded from open risk and remediation_priority.
 Use dedupe, filters. Output is prioritised remediation report.
 Never rewrite into exploit content.`,
 

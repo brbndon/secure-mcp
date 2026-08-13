@@ -82,6 +82,18 @@ describe("bounded coverage accounting", () => {
     });
   });
 
+  it("does not report max_files truncation when the eligible inventory exactly fits the cap", async () => {
+    await withTempTree(async (root) => {
+      await fs.writeFile(path.join(root, "a.ts"), "export const a = 1;\n", "utf8");
+
+      const exact = await walkProject(root, { maxFiles: 1 });
+
+      assert.equal(exact.files.length, 1);
+      assert.equal(exact.coverage.truncation.truncated, false);
+      assert.ok(!exact.coverage.truncation.reasons.includes("max_files"));
+    });
+  });
+
   it("accounts for size caps and rejects symlink escapes", async () => {
     await withTempTree(async (root, outside) => {
       await fs.writeFile(path.join(root, "large.ts"), "123456789", "utf8");

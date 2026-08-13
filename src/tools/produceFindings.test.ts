@@ -320,6 +320,24 @@ describe("produceFindings disposition counting and priority", () => {
           file: "src/d.ts",
           line: 4,
         }),
+        makeFinding({
+          id: "SUPPRESSED-1",
+          title: "Suppressed high candidate",
+          severity: "high",
+          disposition: "suppressed",
+          disposition_reason: "Fixture-only false positive.",
+          file: "src/e.ts",
+          line: 5,
+        }),
+        makeFinding({
+          id: "NA-1",
+          title: "Not applicable critical candidate",
+          severity: "critical",
+          disposition: "not_applicable",
+          disposition_reason: "The runtime does not include this surface.",
+          file: "src/f.ts",
+          line: 6,
+        }),
       ],
       "Disposition report",
       "json",
@@ -328,7 +346,10 @@ describe("produceFindings disposition counting and priority", () => {
     assert.equal(counts.reportable, 1);
     assert.equal(counts.fixed, 1);
     assert.equal(counts.needs_review, 1);
-    assert.ok("fixed" in counts);
+    assert.equal(counts.deferred, 1);
+    assert.equal(counts.suppressed, 1);
+    assert.equal(counts.not_applicable, 1);
+    for (const count of Object.values(counts)) assert.ok(Number.isFinite(count));
 
     const priority = result.structured.executive_summary.remediation_priority as Array<{
       title: string;
@@ -337,6 +358,8 @@ describe("produceFindings disposition counting and priority", () => {
     assert.ok(priority.some((item) => item.title === "Open auth gap"));
     assert.ok(!priority.some((item) => item.title === "Already fixed injection"));
     assert.ok(priority.some((item) => item.title === "Deferred high-risk work"));
+    assert.ok(!priority.some((item) => item.title === "Suppressed high candidate"));
+    assert.ok(!priority.some((item) => item.title === "Not applicable critical candidate"));
 
     const findings = result.structured.findings as Array<{ title: string; disposition?: string }>;
     // Open reportable should sort ahead of fixed even if fixed is more severe.
@@ -344,5 +367,66 @@ describe("produceFindings disposition counting and priority", () => {
     const fixedIdx = findings.findIndex((f) => f.title === "Already fixed injection");
     assert.ok(openIdx >= 0 && fixedIdx >= 0);
     assert.ok(openIdx < fixedIdx);
+  });
+
+  it("ranks deferred open work ahead of needs-review candidates before applying the priority cap", async () => {
+    const needsReview = Array.from({ length: 11 }, (_, index) =>
+      makeFinding({
+        id: `REVIEW-${index}`,
+        title: `Needs review ${index}`,
+        severity: "high",
+        disposition: "needs_review",
+        file: `src/review-${index}.ts`,
+        line: index + 1,
+      }),
+    );
+    const deferred = makeFinding({
+      id: "DEFERRED-CRITICAL",
+      title: "Deferred critical remediation",
+      severity: "critical",
+      confidence: "high",
+      disposition: "deferred",
+      disposition_reason: "Confirmed open work with an approved delivery owner and date.",
+      file: "src/deferred.ts",
+      line: 1,
+    });
+
+    const result = await callProduceResult([...needsReview, deferred], "Open-work policy", "json");
+    const priority = result.structured.executive_summary.remediation_priority as Array<{
+      title: string;
+      disposition?: string;
+    }>;
+    const findings = result.structured.findings as Array<{
+      title: string;
+      disposition?: string;
+    }>;
+
+    assert.equal(priority.length, 10);
+    assert.equal(priority[0]?.title, "Deferred critical remediation");
+    assert.ok(priority.some((item) => item.title === "Deferred critical remediation"));
+    assert.equal(findings[0]?.title, "Deferred critical remediation");
+  });
+
+  it("frames a fixed-only ledger as zero open remediation risk in JSON and Markdown", async () => {
+    const fixed = makeFinding({
+      id: "FIXED-ONLY",
+      title: "Revalidated control",
+      severity: "critical",
+      confidence: "high",
+      disposition: "fixed",
+      disposition_reason: "The control is present and its regression test passes.",
+    });
+
+    const json = await callProduceResult(fixed, "Fixed ledger", "json");
+    const markdown = await callProduceResult(fixed, "Fixed ledger", "markdown");
+
+    assert.equal(json.structured.executive_summary.risk_score, 0);
+    assert.equal(json.structured.executive_summary.ledger_risk_score, 10);
+    assert.equal(json.structured.executive_summary.open_total, 0);
+    assert.deepEqual(json.structured.executive_summary.remediation_priority, []);
+    assert.match(json.structured.summary, /open=0/i);
+    assert.doesNotMatch(json.structured.summary, /Prioritise remediation/i);
+    assert.match(markdown.text, /Open remediation work by severity/i);
+    assert.match(markdown.text, /Ledger items by severity/i);
   });
 });

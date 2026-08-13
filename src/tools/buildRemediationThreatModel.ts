@@ -592,7 +592,7 @@ export function registerBuildRemediationThreatModel(
           focus_area: params.focus_area ?? null,
           applied_pack_ids,
           findings,
-          coverage: redactCoverageReport(coverageSession.finish()),
+          coverage: redactCoverageReport(coverageSession.finish(findings)),
           evidence,
           boundary_evidence: evidence.boundaries,
           assumptions: evidence.assumptions,

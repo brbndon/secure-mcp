@@ -29,6 +29,35 @@ export type CandidateDisposition = z.infer<typeof CandidateDispositionSchema>;
 export const CANDIDATE_DISPOSITIONS: readonly CandidateDisposition[] =
   CandidateDispositionSchema.options;
 
+export interface CandidateDispositionPolicy {
+  /** Confirmed work that remains unresolved and contributes to open risk. */
+  openWork: boolean;
+  /** Eligible for the high/critical remediation queue (including candidates awaiting proof). */
+  remediationPriority: boolean;
+  /** Sort rank before severity; confirmed open work outranks unconfirmed candidates. */
+  sortRank: number;
+}
+
+/**
+ * Exhaustive disposition semantics shared by report sorting, risk accounting,
+ * and remediation-priority filtering. `deferred` is confirmed open work;
+ * `needs_review` is a candidate queue; fixed/suppressed/not_applicable are closed.
+ */
+export const CANDIDATE_DISPOSITION_POLICY = {
+  reportable: { openWork: true, remediationPriority: true, sortRank: 2 },
+  deferred: { openWork: true, remediationPriority: true, sortRank: 2 },
+  needs_review: { openWork: false, remediationPriority: true, sortRank: 1 },
+  fixed: { openWork: false, remediationPriority: false, sortRank: 0 },
+  suppressed: { openWork: false, remediationPriority: false, sortRank: 0 },
+  not_applicable: { openWork: false, remediationPriority: false, sortRank: 0 },
+} as const satisfies Record<CandidateDisposition, CandidateDispositionPolicy>;
+
+export function candidateDispositionPolicy(
+  disposition: CandidateDisposition | undefined,
+): CandidateDispositionPolicy {
+  return CANDIDATE_DISPOSITION_POLICY[disposition ?? "needs_review"];
+}
+
 export interface CoveragePathDecision {
   path: string;
   kind: "file" | "directory" | "symlink" | "other";

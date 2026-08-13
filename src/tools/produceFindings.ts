@@ -9,6 +9,7 @@ import { toolError, toolSuccess } from "../lib/envelope.js";
 import { redactFindings, redactedEvidence } from "../lib/redact.js";
 import { renderFindingsReportMarkdown } from "../lib/markdown.js";
 import {
+  candidateDispositionPolicy,
   CANDIDATE_DISPOSITIONS,
   SEVERITY_ORDER,
   type CandidateDisposition,
@@ -103,10 +104,23 @@ export function findingsToMarkdown(
   findings: Finding[],
   counts: Record<string, number>,
 ): string {
-  return renderFindingsReportMarkdown({ title, projectRoot, findings, counts });
+  const openCounts = emptySeverityCounts();
+  for (const finding of findings) {
+    if (candidateDispositionPolicy(finding.disposition).openWork) {
+      openCounts[finding.severity]++;
+    }
+  }
+  return renderFindingsReportMarkdown({
+    title,
+    projectRoot,
+    findings,
+    counts,
+    openCounts,
+    dispositionCounts: countDispositions(findings),
+  });
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts, candidate_disposition_counts (includes fixed).\n\nDisposition: pass confirmed open findings as reportable; pass revalidated remediations as fixed with disposition_reason and evidence. Fixed findings are counted but ranked after open reportable work in remediation_priority.`;
+const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts, candidate_disposition_counts (includes fixed).\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation. Fixed/suppressed/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.`;
 
 export function registerProduceFindings(server: McpServer): void {
   server.registerTool(
@@ -143,24 +157,9 @@ export function registerProduceFindings(server: McpServer): void {
         }
 
         list.sort((a, b) => {
-          // Open work first: fixed/suppressed/not_applicable/deferred rank after open candidates.
-          const openRank = (f: Finding): number => {
-            switch (f.disposition) {
-              case "fixed":
-                return 0;
-              case "suppressed":
-              case "not_applicable":
-              case "deferred":
-                return 1;
-              case "needs_review":
-                return 2;
-              case "reportable":
-              case undefined:
-              default:
-                return 3;
-            }
-          };
-          const open = openRank(b) - openRank(a);
+          const open =
+            candidateDispositionPolicy(b.disposition).sortRank -
+            candidateDispositionPolicy(a.disposition).sortRank;
           if (open !== 0) return open;
           const sev = SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity];
           if (sev !== 0) return sev;
@@ -185,14 +184,15 @@ export function registerProduceFindings(server: McpServer): void {
           }),
         );
 
-        const counts: Record<Severity, number> = {
-          critical: 0,
-          high: 0,
-          medium: 0,
-          low: 0,
-          info: 0,
-        };
+        const counts = emptySeverityCounts();
         for (const f of list) counts[f.severity]++;
+        const openCounts = emptySeverityCounts();
+        for (const finding of list) {
+          if (candidateDispositionPolicy(finding.disposition).openWork) {
+            openCounts[finding.severity]++;
+          }
+        }
+        const dispositionCounts = countDispositions(list);
 
         const title = boundText(
           redactedEvidence(params.report_title ?? "Secure code review — remediation findings"),
@@ -201,21 +201,28 @@ export function registerProduceFindings(server: McpServer): void {
         const projectRoot = params.project_root
           ? boundText(redactedEvidence(params.project_root), MAX_PROJECT_ROOT_LENGTH)
           : undefined;
-        const risk_score =
+        const ledger_risk_score =
           counts.critical * 10 + counts.high * 5 + counts.medium * 2 + counts.low * 1;
+        const risk_score =
+          openCounts.critical * 10 +
+          openCounts.high * 5 +
+          openCounts.medium * 2 +
+          openCounts.low;
+        const openTotal = Object.values(openCounts).reduce((sum, count) => sum + count, 0);
 
         const executive_summary = {
           total: list.length,
           counts,
+          open_total: openTotal,
+          open_counts: openCounts,
           risk_score,
+          ledger_risk_score,
           top_categories: topCategories(list, 5),
           remediation_priority: list
             .filter(
               (f) =>
                 (f.severity === "critical" || f.severity === "high") &&
-                f.disposition !== "fixed" &&
-                f.disposition !== "suppressed" &&
-                f.disposition !== "not_applicable",
+                candidateDispositionPolicy(f.disposition).remediationPriority,
             )
             .slice(0, 10)
             .map((f) => ({
@@ -233,20 +240,27 @@ export function registerProduceFindings(server: McpServer): void {
         const data = {
           ok: true as const,
           project_root: projectRoot ?? null,
-          summary: `${title}: ${list.length} finding(s); critical=${counts.critical}, high=${counts.high}, medium=${counts.medium}, low=${counts.low}, info=${counts.info}. Prioritise remediation.`,
+          summary: `${title}: ${list.length} ledger item(s); open=${openTotal} (critical=${openCounts.critical}, high=${openCounts.high}, medium=${openCounts.medium}, low=${openCounts.low}, info=${openCounts.info}); needs_review=${dispositionCounts.needs_review}; fixed=${dispositionCounts.fixed}.${openTotal > 0 ? " Prioritise open remediation." : " No confirmed open remediation remains in this ledger."}`,
           executive_summary,
           findings: list,
-          candidate_disposition_counts: countDispositions(list),
+          candidate_disposition_counts: dispositionCounts,
           notes: [
             "Each finding follows evidence → classify → impact → remediate → verify.",
-            "Disposition fixed means revalidation confirmed the remediation; fixed items are counted but do not dominate remediation_priority.",
+            "Deferred and reportable are confirmed open work; needs_review is an unconfirmed candidate; fixed/suppressed/not_applicable are excluded from open risk and remediation_priority.",
             "Do not expand this report into exploit or PoC attack material.",
           ],
         };
 
         return toolSuccess(data, {
           responseFormat: params.response_format,
-          markdown: renderFindingsReportMarkdown({ title, projectRoot, findings: list, counts }),
+          markdown: renderFindingsReportMarkdown({
+            title,
+            projectRoot,
+            findings: list,
+            counts,
+            openCounts,
+            dispositionCounts,
+          }),
         });
       } catch (error) {
         return toolError(
@@ -265,6 +279,10 @@ export function countDispositions(findings: Finding[]): Record<CandidateDisposit
   ) as Record<CandidateDisposition, number>;
   for (const finding of findings) counts[finding.disposition ?? "needs_review"]++;
   return counts;
+}
+
+function emptySeverityCounts(): Record<Severity, number> {
+  return { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
 }
 
 function topCategories(findings: Finding[], n: number): { category: string; count: number }[] {

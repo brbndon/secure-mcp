@@ -5,7 +5,7 @@
  * document sections instead of assembling Markdown syntax themselves.
  */
 
-import type { Finding } from "./types.js";
+import type { CandidateDisposition, Finding, Severity } from "./types.js";
 import { redactedEvidence } from "./redact.js";
 
 /** Escape untrusted values before placing them in Markdown text output. */
@@ -163,6 +163,8 @@ export function renderFindingsReportMarkdown(options: {
   projectRoot?: string;
   findings: readonly Finding[];
   counts: Readonly<Record<string, number>>;
+  openCounts?: Readonly<Record<Severity, number>>;
+  dispositionCounts?: Readonly<Record<CandidateDisposition, number>>;
 }): string {
   return renderMarkdownDocument({
     title: options.title,
@@ -174,12 +176,28 @@ export function renderFindingsReportMarkdown(options: {
     ],
     sections: [
       {
-        heading: "Summary by severity (remediation priority)",
+        heading: "Open remediation work by severity",
+        fields: Object.entries(options.openCounts ?? options.counts).map(([label, count]) => ({
+          label,
+          value: String(count),
+        })),
+      },
+      {
+        heading: "Ledger items by severity",
         fields: Object.entries(options.counts).map(([label, count]) => ({
           label,
           value: String(count),
         })),
       },
+      ...(options.dispositionCounts
+        ? [{
+            heading: "Candidate dispositions",
+            fields: Object.entries(options.dispositionCounts).map(([label, count]) => ({
+              label,
+              value: String(count),
+            })),
+          }]
+        : []),
       { heading: "Findings" },
     ],
     findings: options.findings,

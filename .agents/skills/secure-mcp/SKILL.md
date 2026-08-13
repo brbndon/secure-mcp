@@ -150,7 +150,7 @@ Read the cited files with local read-only tools and trace source → control →
   - `fixed` — revalidation proved the remediation (cite the fixed code path and verification evidence)
 - Set `disposition: "reportable"` only after manual confirmation of an open weakness.
 - Set `disposition: "fixed"` only after revalidation: open the cited location, confirm the control is in place, and record reason + evidence. Git “still present” / blame / history checks are **agent-side only** — the server does not run git on the target.
-- Keep non-reportable dispositions (including `fixed`) out of the final findings-tool input unless the handoff explicitly needs a fixed ledger; retain them in the coverage-qualified narrative. If `fixed` findings are passed to `secure_mcp_produce_findings`, they are counted but do not dominate `remediation_priority`.
+- Treat `reportable` and `deferred` as confirmed open work; a deferred item must carry owner/context and stays ahead of unconfirmed `needs_review` candidates in the final rollup. Keep closed dispositions (`fixed`, `suppressed`, `not_applicable`) out of the final findings-tool input unless the handoff explicitly needs a disposition ledger. When included, closed items remain counted but are excluded from open risk and `remediation_priority`.
 - Also sample zero-hit high-value surfaces from architecture (see Phase 3 reconciliation), not only detector candidates.
 - Open every high or critical candidate at its cited line before prioritizing it.
 - For a suspected live secret, redact evidence, recommend immediate rotation and removal from source/history, and never test the credential.
@@ -159,7 +159,7 @@ Use sub-agents only for defensive roles such as mapper, auth specialist, mobile/
 
 ### Phase 5: findings and handoff
 
-Before calling `secure_mcp_produce_findings`, pass only confirmed findings with `disposition: "reportable"`. Retain the complete strict `Finding` shape, including `id`, `title`, and `description`, as well as these required remediation fields:
+Before calling `secure_mcp_produce_findings`, pass confirmed open findings with `disposition: "reportable"` or `disposition: "deferred"` (the latter only with explicit owner/context). Include closed dispositions only when the handoff requires a disposition ledger. Retain the complete strict `Finding` shape, including `id`, `title`, and `description`, as well as these required remediation fields:
 
 1. `evidence`
 2. `severity`, `confidence`, `category`, and optional `cwe`/`owasp`
@@ -168,7 +168,7 @@ Before calling `secure_mcp_produce_findings`, pass only confirmed findings with 
 5. `residual_risk`
 6. `verification_suggestion`
 
-Preserve `rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and `disposition` when available. Call `secure_mcp_produce_findings` with `dedupe: true`, appropriate severity/confidence filters, the project root, and `response_format: "markdown"` or `"json"`. Its input requires at least one finding; when no confirmed/reportable finding exists, provide a coverage-qualified narrative instead of sending an empty array.
+Preserve `rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and `disposition` when available. Call `secure_mcp_produce_findings` with `dedupe: true`, appropriate severity/confidence filters, the project root, and `response_format: "markdown"` or `"json"`. Its input requires at least one finding; when no confirmed open (`reportable` or `deferred`) finding or requested ledger item exists, provide a coverage-qualified narrative instead of sending an empty array.
 
 End with a human-readable report containing:
 

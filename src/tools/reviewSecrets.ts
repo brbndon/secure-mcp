@@ -11,6 +11,7 @@ import {
   detectWithBudget,
   findLineNumber,
   normalizeAuthorizedProjectRoot,
+  profileProject,
   readProjectFile,
   snippetAround,
   walkProject,
@@ -45,19 +46,34 @@ type Input = z.infer<typeof InputSchema>;
  * Whether Next.js client-bundle secret detectors may run for this stack focus.
  * Explicit expo/common/swift must not claim or execute Next-only detectors.
  */
-export function shouldRunNextjsSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
-  return stack === undefined || stack === "auto" || stack === "nextjs";
+export function shouldRunNextjsSecretDetectors(
+  stack: StackFocus | "auto" | undefined,
+  detectedStacks: readonly StackFocus[] = [],
+): boolean {
+  return (
+    stack === "nextjs" ||
+    ((stack === undefined || stack === "auto") && detectedStacks.includes("nextjs"))
+  );
 }
 
-export function shouldRunSwiftSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
-  return stack === undefined || stack === "auto" || stack === "swift";
+export function shouldRunSwiftSecretDetectors(
+  stack: StackFocus | "auto" | undefined,
+  detectedStacks: readonly StackFocus[] = [],
+): boolean {
+  return (
+    stack === "swift" ||
+    ((stack === undefined || stack === "auto") && detectedStacks.includes("swift"))
+  );
 }
 
 /** Pack ids claimed by secrets review for the active stack focus. */
-export function secretsPackIdsForStack(stack: StackFocus | "auto" | undefined): PackId[] {
+export function secretsPackIdsForStack(
+  stack: StackFocus | "auto" | undefined,
+  detectedStacks: readonly StackFocus[] = [],
+): PackId[] {
   const detectorStacks: StackFocus[] = ["typescript"];
-  if (shouldRunNextjsSecretDetectors(stack)) detectorStacks.push("nextjs");
-  if (shouldRunSwiftSecretDetectors(stack)) detectorStacks.push("swift");
+  if (shouldRunNextjsSecretDetectors(stack, detectedStacks)) detectorStacks.push("nextjs");
+  if (shouldRunSwiftSecretDetectors(stack, detectedStacks)) detectorStacks.push("swift");
   return recommendCategoryPackIds(detectorStacks, ["secrets"]);
 }
 
@@ -117,9 +133,19 @@ export function registerReviewSecrets(
         const findings: Finding[] = [];
         const filesScanned: string[] = [];
         const detectorFamiliesRun = new Set<string>();
+        const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
+        const profile = await profileProject(root, {
+          focusPrefixes: params.focus_paths,
+          maxFiles: effectiveMaxFiles,
+          maxDepth: config.maxDepth,
+          maxFileBytes: config.maxFileBytes,
+          maxTotalBytes: config.maxTotalBytes,
+          allowedRoots: config.allowedRoots,
+        });
+        const detectedStacks = profile.likelyStacks;
 
         const { files, coverageSession } = await walkProject(root, {
-          maxFiles: params.max_files ?? config.defaultMaxFiles,
+          maxFiles: effectiveMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
           maxTotalBytes: config.maxTotalBytes,
@@ -230,7 +256,7 @@ export function registerReviewSecrets(
           }
 
           if (
-            shouldRunSwiftSecretDetectors(params.stack) &&
+            shouldRunSwiftSecretDetectors(params.stack, detectedStacks) &&
             /GoogleService-Info\.plist$/i.test(file.relativePath)
           ) {
             findings.push(
@@ -308,7 +334,7 @@ export function registerReviewSecrets(
             }
           }
 
-          if (shouldRunNextjsSecretDetectors(params.stack)) {
+          if (shouldRunNextjsSecretDetectors(params.stack, detectedStacks)) {
             detectorFamiliesRun.add("web-next.client-bundle-secrets");
             for (const p of NEXTJS_PATTERNS.filter(
               (x) => x.id.includes("PUBLIC") || x.id.includes("USE-CLIENT"),
@@ -351,7 +377,7 @@ export function registerReviewSecrets(
           }
 
           if (
-            shouldRunSwiftSecretDetectors(params.stack) &&
+            shouldRunSwiftSecretDetectors(params.stack, detectedStacks) &&
             (file.ext === ".swift" || file.ext === ".plist" || file.ext === ".entitlements")
           ) {
             detectorFamiliesRun.add("swift-ios.secret-handling");
@@ -403,13 +429,15 @@ export function registerReviewSecrets(
         const finalizedCoverage = coverageSession.finish(findings);
         const safeFindings = redactFindings(findings);
 
-        const applied_pack_ids = secretsPackIdsForStack(params.stack);
+        const applied_pack_ids = secretsPackIdsForStack(params.stack, detectedStacks);
         const detectorFamiliesAvailable = [
           "secrets.secret-patterns",
-          ...(shouldRunNextjsSecretDetectors(params.stack)
+          ...(shouldRunNextjsSecretDetectors(params.stack, detectedStacks)
             ? ["web-next.client-bundle-secrets"]
             : []),
-          ...(shouldRunSwiftSecretDetectors(params.stack) ? ["swift-ios.secret-handling"] : []),
+          ...(shouldRunSwiftSecretDetectors(params.stack, detectedStacks)
+            ? ["swift-ios.secret-handling"]
+            : []),
         ];
         const data = {
           ok: true as const,
