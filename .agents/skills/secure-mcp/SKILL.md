@@ -15,6 +15,7 @@ Use this skill as the default orchestration layer for authorized security review
 - Never execute target-project code, install target dependencies, contact target services, or alter the target repository during an audit. If the user requests hardening, make changes only after the audit and only within the requested scope.
 - Preserve secret redaction. Do not copy keys or tokens into notes, prompts, reports, commits, or logs; recommend rotation for credentials that may be live.
 - Record scan limits and coverage. An empty result is not evidence that an entire repository is clean when coverage is partial or truncated.
+- When a finding is labeled `needs_runtime`, recommend owner-authorized retest (manual QA or an existing DAST) and record it as open work; never author or run exploit or bypass steps to "prove" a runtime finding.
 
 ## On invocation: create the audit goal
 
@@ -52,6 +53,7 @@ Use these routing heuristics; require multiple signals and preserve mixed classi
 | macOS Swift | macOS target/deployment setting, AppKit, macOS entitlements, sandbox/XPC/helper boundaries | Use `stack: "swift"` for scans; if preflight confirms target-level macOS evidence, load `apple-desktop` even when architecture omitted it, and record the discrepancy |
 | Expo / React Native | Expo runtime/config evidence, EAS config, or React Native app evidence with native app directories | Inventory with `auto` for discovery; force `stack: "expo"` only after app evidence. If preflight classifies the package as a library or Expo/RN **dev-only tooling**, force `typescript` or `common` for architecture and category tools so auto Expo signals do not pull `expo-rn` or Expo detectors |
 | Mixed / monorepo | More than one app or package with independent manifests and platform signals | Review every deployable package with its own `project_root`; use `focus_paths` only for drill-down within that package and reconcile separate results |
+| Unknown / other (Python, Go, Java, Android/Kotlin, Ruby, PHP, Rust, .NET) | No known app-stack signals; language manifests only (`pyproject.toml`/`requirements.txt`, `go.mod`, `build.gradle`, `Cargo.toml`, etc.) | Inventory with `auto`. Architecture returns `unsupported_signals` and a limited-review note; expect `core`, `secrets`, `threat-model` only. Report a **limited generic review**, never full stack coverage. |
 
 Do not infer macOS or iOS from Swift alone, Expo from a bare `app.json`, or an app from a library or dev-only framework dependency. Treat auto Expo/Swift signals as advisory when they conflict with preflight classification. The server accepts `auto`, `common`, `typescript`, `nextjs`, `swift`, and `expo` stack hints; it does not accept `ios`, `macos`, or `web` as values. If preflight evidence conflicts with auto-detection, use an explicit valid stack or split the package review rather than trusting the root profile.
 
@@ -73,7 +75,7 @@ Use an absolute `project_root` visible to the MCP process. Start with bounded de
 
 ### Phase 0: MCP inventory and readiness
 
-Before any `secure_mcp_*` call, list the live MCP tools and record which `secure_mcp_*` names are present (especially optional ones such as `secure_mcp_get_audit_guidance`). Confirm the server is connected and the target's canonical path falls under `SECURE_MCP_ALLOWED_ROOTS`. If the server is missing, the root is unauthorized, or the tool surface is only partially available, continue with clearly labeled preflight-only work and do not claim a secure-mcp-backed audit was completed. Use live input schemas for every subsequent call.
+Before any `secure_mcp_*` call, list the live MCP tools and record which `secure_mcp_*` names are present (especially optional ones such as `secure_mcp_get_audit_guidance`). Confirm the server is connected and the target's canonical path falls under `SECURE_MCP_ALLOWED_ROOTS`. When the target root is unknown, call `secure_mcp_list_authorized_roots` (optionally with `include_metadata: true`) to see which absolute roots the server may inspect, and `secure_mcp_list_projects` on an allowlisted parent to discover nested package manifests before choosing a `project_root`. Both are read-only and fail closed on the allowlist. If the server is missing, the root is unauthorized, or the tool surface is only partially available, continue with clearly labeled preflight-only work and do not claim a secure-mcp-backed audit was completed. Use live input schemas for every subsequent call.
 
 ### Phase 1: inventory
 
@@ -93,6 +95,7 @@ Call `secure_mcp_analyze_architecture` with the same root and the stack forced b
 - typed `surfaces` (kind, exposure, auth_expectation, paths) and `surfaces_truncated` (true when the surface-kind cap dropped later stacks)
 - `coverage_gaps` (high-value surfaces without category-detector evidence yet)
 - `priority_paths` (follow-up focus order)
+- `unsupported_signals` (recognizable-but-uncovered stacks; when non-empty the review is a limited generic review)
 - `security_brief` (compact derived summary from those fields; no extra walk)
 
 Treat `threat_highlights` as an advisory stack-gated shortlist (pack titles, not findings). Do not invent a public `noise_tier` field.
@@ -106,7 +109,7 @@ Load `secure_mcp_get_knowledge_pack` only after architecture analysis:
 
 If the live MCP tool inventory includes `secure_mcp_get_audit_guidance`, call it after inventory when the full workflow or a category-specific guardrail is needed, using `section: "workflow"`, `section: "architecture"`, or the relevant category. This tool is optional: if it is absent, use the committed repository docs and live schemas; do not issue an invalid call or treat its absence as a failed audit. Optionally call `secure_mcp_build_remediation_threat_model` after architecture to map assets and trust boundaries to hardening controls. Keep the threat model remediation-focused, never an attack plan.
 
-Start pack selection from the architecture response (`recommended_packs` / `pack_batches`). Prefer those packs; apply the preflight routing table above as an override when detection is weak, and record each override. Never load a stack pack the preflight did not classify.
+Start pack selection from the architecture response (`recommended_packs` / `pack_batches`). Prefer those packs; apply the preflight routing table above as an override when detection is weak, and record each override. Never load a stack pack the preflight did not classify. Unknown or minimal stacks: `core`, `secrets`, `threat-model` — no stack pack without evidence.
 
 ### Phase 3: category analysis
 
@@ -123,7 +126,10 @@ After category tools return, reconcile architecture `coverage_gaps` and `priorit
 1. Build the set of high-value surface paths from architecture (`surfaces` / `priority_paths`).
 2. Compare against files that produced candidates in auth, injection, and secrets results.
 3. Sample high-value surface files with **zero detector hits** using local read-only tools (and optional focused re-runs with `focus_paths` on those prefixes). Do not only chase candidates.
-4. Record zero-hit sampling outcomes in the coverage-qualified narrative (still present / needs_review / not_applicable), with reasons.
+4. Before trusting an empty authorization result, sample zero-hit **authorization-sensitive** surfaces (`authz_sensitive` on typed surfaces; dynamic `[id]` routes, admin/account/tenant paths, webhooks, server actions, deep links) — object-level authorization (BOLA/IDOR) matters more than a generic auth check.
+5. Record zero-hit sampling outcomes in the coverage-qualified narrative (still present / needs_review / not_applicable), with reasons.
+
+`secure_mcp_run_local_scanners` composes locally-installed `semgrep`/`gitleaks` (optional, default off — requires `enable: true` AND server env `SECURE_MCP_LOCAL_SCANNERS=1`; offline-first, no ruleset download unless `allow_remote_rules: true`). Results are `needs_review` candidates — still confirm each in source manually.
 
 For a confirmed single-stack package, pass the explicit valid stack to architecture and category tools: `nextjs`, `expo`, `swift`, or `typescript` as applicable. `stack: "auto"` is useful for discovery and mixed detection, but it is not a substitute for package-scoped routing. In particular, `secure_mcp_check_authentication` uses path heuristics for Swift under auto; use `stack: "swift"` to scan all Swift files within the bounded budget. A `swift` result alone does not establish iOS or macOS. When preflight says library/dev-only Expo tooling, keep category tools on `typescript` or `common` even if inventory listed `expo`.
 
@@ -144,6 +150,7 @@ Read the cited files with local read-only tools and trace source → control →
   - `fixed` — revalidation proved the remediation (cite the fixed code path and verification evidence)
 - Set `disposition: "reportable"` only after manual confirmation of an open weakness.
 - Set `disposition: "fixed"` only after revalidation: open the cited location, confirm the control is in place, and record reason + evidence. Git “still present” / blame / history checks are **agent-side only** — the server does not run git on the target.
+- Set `validation_status` on every confirmed finding: `"static_only"` when code review alone confirms the weakness and verifies the fix, or `"needs_runtime"` when owner-authorized runtime/configuration verification (manual QA or an existing DAST) is still required before the weakness can be declared closed.
 - Treat `reportable` and `deferred` as confirmed open work; a deferred item must carry owner/context and stays ahead of unconfirmed `needs_review` candidates in the final rollup. Keep closed dispositions (`fixed`, `suppressed`, `accepted_risk`, `not_applicable`) out of the final findings-tool input unless the handoff explicitly needs a disposition ledger. When included, closed items remain counted but are excluded from open risk and `remediation_priority`. Use `accepted_risk` for a conscious residual and `suppressed` for false positives.
 - Also sample zero-hit high-value surfaces from architecture (see Phase 3 reconciliation), not only detector candidates.
 - Open every high or critical candidate at its cited line before prioritizing it.
@@ -153,7 +160,7 @@ Use sub-agents only for defensive roles such as mapper, auth specialist, mobile/
 
 ### Phase 5: findings and handoff
 
-Before calling `secure_mcp_produce_findings`, pass confirmed open findings with `disposition: "reportable"` or `disposition: "deferred"` (the latter only with explicit owner/context). Include closed dispositions only when the handoff requires a disposition ledger. Keep the live strict `Finding` shape: required remediation fields are `evidence`, `impact_if_unremediated`, `remediation`, `residual_risk`, and `verification_suggestion`, plus classification (`severity`, `confidence`, `category`, optional `cwe`/`owasp`); preserve traceability fields (`rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, `disposition`) when available. Call with `dedupe: true` and severity/confidence filters; when no confirmed open finding or requested ledger item exists, send a coverage-qualified narrative instead of an empty array.
+Before calling `secure_mcp_produce_findings`, pass confirmed open findings with `disposition: "reportable"` or `disposition: "deferred"` (the latter only with explicit owner/context). Include closed dispositions only when the handoff requires a disposition ledger. Keep the live strict `Finding` shape: required remediation fields are `evidence`, `impact_if_unremediated`, `remediation`, `residual_risk`, and `verification_suggestion`, plus classification (`severity`, `confidence`, `category`, optional `cwe`/`owasp`); preserve traceability fields (`rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, `validation_status`, `disposition`) when available. Call `secure_mcp_produce_findings` with `dedupe: true`, appropriate severity/confidence filters, the project root, and `response_format: "markdown"`, `"json"`, or `"sarif"`. Use `"sarif"` when the user asks for CI annotations; the export is a redacted SARIF 2.1.0 subset and carries the same secret redaction as every other output boundary. The review is resumable: if a category scan was truncated or partial, re-run the affected `secure_mcp_*` tool with the same `project_root` plus `focus_paths` before claiming coverage; the report's `review_checkpoint` field lists concrete resume steps. Do not invent a server-side job store. When no confirmed open finding or requested ledger item exists, send a coverage-qualified narrative instead of an empty array.
 
 End with a human-readable report containing:
 
