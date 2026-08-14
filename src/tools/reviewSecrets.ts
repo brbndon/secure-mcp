@@ -11,15 +11,8 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import { toolError, toolSuccess } from "../lib/envelope.js";
-import {
-  detectWithBudget,
-  findLineNumber,
-  normalizeAuthorizedProjectRoot,
-  profileProject,
-  readProjectFile,
-  snippetAround,
-  walkProject,
-} from "../lib/filesystem.js";
+import { detectWithBudget, findLineNumber, snippetAround } from "../lib/filesystem.js";
+import { runProjectScan } from "../lib/project-scan.js";
 import {
   redactCoverageReport,
   redactFinding,
@@ -161,28 +154,15 @@ export function registerReviewSecrets(
     },
     async (params: Input) => {
       try {
-        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const nextId = createFindingIdFactory("SEC");
         const findings: Finding[] = [];
-        const filesScanned: string[] = [];
         const detectorFamiliesRun = new Set<string>();
-        const effectiveMaxFiles = params.max_files ?? config.defaultMaxFiles;
-        const profile = await profileProject(root, {
-          focusPrefixes: params.focus_paths,
-          maxFiles: effectiveMaxFiles,
-          maxDepth: config.maxDepth,
-          maxFileBytes: config.maxFileBytes,
-          maxTotalBytes: config.maxTotalBytes,
-          allowedRoots: config.allowedRoots,
-        });
-        const detectedStacks = profile.likelyStacks;
 
-        const { files, coverageSession } = await walkProject(root, {
-          maxFiles: effectiveMaxFiles,
-          maxDepth: config.maxDepth,
-          maxFileBytes: config.maxFileBytes,
-          maxTotalBytes: config.maxTotalBytes,
-          allowedRoots: config.allowedRoots,
+        const scan = await runProjectScan({
+          projectRoot: params.project_root,
+          config,
+          maxFiles: params.max_files,
+          focusPaths: params.focus_paths,
           extensions: new Set([
             ".ts",
             ".tsx",
@@ -203,57 +183,12 @@ export function registerReviewSecrets(
             ".pem",
             ".key",
           ]),
-          focusPrefixes: params.focus_paths,
-        });
-
-        const envish = files.filter(
-          (f) =>
-            f.relativePath.includes(".env") ||
-            f.ext === ".pem" ||
-            f.ext === ".key" ||
-            f.relativePath.endsWith("credentials.json") ||
-            f.relativePath.endsWith("service-account.json") ||
-            isSwiftSensitivePath(f.relativePath),
-        );
-
-        for (const file of files) {
-          if (file.size > config.maxFileBytes) {
-            coverageSession.recordExclusion({
-              path: file.relativePath,
-              kind: "file",
-              reason: "max_file_bytes",
-            });
-            continue;
-          }
-          if (file.relativePath.includes(".min.")) {
-            coverageSession.recordExclusion({
-              path: file.relativePath,
-              kind: "file",
-              reason: "minified_file",
-            });
-            continue;
-          }
-
-          let content: string;
-          try {
-            content = (
-              await readProjectFile(
-                root,
-                file.relativePath,
-                config.maxFileBytes,
-                config.allowedRoots,
-              )
-            ).content;
-          } catch {
-            coverageSession.recordExclusion({
-              path: file.relativePath,
-              kind: "file",
-              reason: "file_read_error",
-            });
-            continue;
-          }
-          filesScanned.push(file.relativePath);
-          coverageSession.recordReviewedFile(file.relativePath);
+          selectFile: (file) =>
+            file.relativePath.includes(".min.")
+              ? { skip: true, reason: "minified_file" }
+              : { skip: false },
+          onFile: (file, content, ctx) => {
+            const detectedStacks = ctx.profile?.likelyStacks ?? [];
 
           if (
             /(^|\/)\.env($|\.(local|development|production|staging))/i.test(file.relativePath) &&
@@ -458,10 +393,22 @@ export function registerReviewSecrets(
               }
             }
           }
-        }
+          },
+        });
+        const { root, profile, files, filesReviewed: filesScanned, finishCoverage } = scan;
+        const detectedStacks = profile?.likelyStacks ?? [];
+        const envish = files.filter(
+          (f) =>
+            f.relativePath.includes(".env") ||
+            f.ext === ".pem" ||
+            f.ext === ".key" ||
+            f.relativePath.endsWith("credentials.json") ||
+            f.relativePath.endsWith("service-account.json") ||
+            isSwiftSensitivePath(f.relativePath),
+        );
 
         findings.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
-        const finalizedCoverage = coverageSession.finish(findings);
+        const finalizedCoverage = finishCoverage(findings);
         const safeFindings = redactFindings(findings);
 
         const consulted_pack_ids = secretsPackIdsForStack(params.stack, detectedStacks);
