@@ -541,10 +541,16 @@ describe("architecture typed surfaces", () => {
         "export async function GET() { return Response.json({}); }\n",
         "utf8",
       );
+      await fs.mkdir(path.join(root, "src", "mcp"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "mcp", "tools.ts"),
+        "export async function lookup() {}\n",
+        "utf8",
+      );
       await fs.mkdir(path.join(root, "src", "tools"), { recursive: true });
       await fs.writeFile(
-        path.join(root, "src", "tools", "lookup.ts"),
-        "export async function lookup() {}\n",
+        path.join(root, "src", "tools", "build-helper.ts"),
+        "export function helper() {}\n",
         "utf8",
       );
       await fs.mkdir(path.join(root, "src", "trpc"), { recursive: true });
@@ -568,6 +574,7 @@ describe("architecture typed surfaces", () => {
           paths: string[];
           auth_expectation: string;
         }>;
+        surfaces_truncated: boolean;
         coverage_gaps: Array<{ kind: string; paths: string[]; suggested_tools: string[] }>;
         priority_paths: string[];
         security_brief: {
@@ -583,11 +590,18 @@ describe("architecture typed surfaces", () => {
       assert.ok(data.stacks.includes("nextjs"));
       assert.ok(Array.isArray(data.surface.api_routes));
       assert.ok(data.surfaces.length > 0);
+      assert.equal(data.surfaces_truncated, false);
       assert.ok(data.surfaces.some((s) => s.kind === "http_route"));
       assert.ok(data.surfaces.some((s) => s.kind === "middleware" || s.kind === "auth_surface"));
       assert.ok(data.surfaces.some((s) => s.kind === "webhook"));
       assert.ok(data.surfaces.some((s) => s.kind === "cron"));
       assert.ok(data.surfaces.some((s) => s.kind === "agent_tool"));
+      const agentToolSurface = data.surfaces.find((s) => s.kind === "agent_tool");
+      assert.ok(agentToolSurface?.paths.includes("src/mcp/tools.ts"));
+      assert.ok(
+        !agentToolSurface?.paths.some((p) => p.includes("src/tools/")),
+        "generic src/tools trees must not be classified as agent_tool",
+      );
       assert.ok(data.surfaces.some((s) => s.kind === "rpc"));
       assert.ok(data.surfaces.some((s) => s.kind === "queue"));
       for (const surface of data.surfaces) {

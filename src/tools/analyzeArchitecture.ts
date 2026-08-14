@@ -95,7 +95,10 @@ export interface SecurityBrief {
 }
 
 const SURFACE_PATH_CAP = 12;
-const SURFACE_KIND_CAP = 20;
+// Sized to hold a mixed nextjs + expo + swift monorepo without silently dropping
+// a stack's surfaces (each stack pushes up to ~12 kinds). When the cap is still
+// exceeded, surfaces_truncated is reported instead of dropping kinds silently.
+const SURFACE_KIND_CAP = 40;
 const PRIORITY_PATH_CAP = 24;
 const COVERAGE_GAP_CAP = 16;
 
@@ -247,8 +250,9 @@ function isNamedSurfacePath(relativePath: string, pattern: RegExp): boolean {
 function buildTypedSurfaces(
   relativePaths: string[],
   stacks: StackFocus[],
-): TypedSurface[] {
+): { surfaces: TypedSurface[]; truncated: boolean } {
   const surfaces: TypedSurface[] = [];
+  let truncated = false;
 
   const push = (
     kind: SurfaceKind,
@@ -258,7 +262,10 @@ function buildTypedSurfaces(
     kindStacks: StackFocus[],
   ): void => {
     if (paths.length === 0 || kindStacks.length === 0) return;
-    if (surfaces.length >= SURFACE_KIND_CAP) return;
+    if (surfaces.length >= SURFACE_KIND_CAP) {
+      truncated = true;
+      return;
+    }
     surfaces.push({
       id: `surf-${kind}-${surfaces.length + 1}`,
       kind,
@@ -278,7 +285,7 @@ function buildTypedSurfaces(
   const webhookName = /webhook|stripe-hook|svix/i;
   const cronName = /(^|\/)(?:cron|crons|scheduled)(?:\/|\.[cm]?[jt]sx?$)|\/jobs\/scheduled/i;
   const agentToolName =
-    /(^|\/)(?:mcp|agent-?tools?)(?:\/|-)|tool-handler|registertool|(^|\/)tools\/[^/]+\.[cm]?[jt]sx?$/i;
+    /(^|\/)(?:mcp|agent-?tools?)(?:\/|-)|tool-handler|registertool/i;
   const rpcName = /(^|\/)(?:rpc|trpc|grpc)(?:\/|\.)/i;
   const queueName = /(^|\/)(?:queues?|workers?|bullmq|inngest|sqs)(?:\/|\.)/i;
 
@@ -526,7 +533,7 @@ function buildTypedSurfaces(
     );
   }
 
-  return surfaces;
+  return { surfaces, truncated };
 }
 
 function toolsForSurfaceKind(kind: SurfaceKind): string[] {
@@ -646,6 +653,7 @@ async function detectSurface(
 ): Promise<{
   surface: SurfaceBuckets;
   surfaces: TypedSurface[];
+  surfaces_truncated: boolean;
   coverage_gaps: CoverageGap[];
   priority_paths: string[];
   coverage: CoverageReport;
@@ -660,12 +668,13 @@ async function detectSurface(
   });
   const relativePaths = files.map((f) => f.relativePath);
   const surface = classifyBuckets(relativePaths);
-  const surfaces = buildTypedSurfaces(relativePaths, stacks);
+  const { surfaces, truncated: surfacesTruncated } = buildTypedSurfaces(relativePaths, stacks);
   const coverage_gaps = buildCoverageGaps(surfaces);
   const priority_paths = buildPriorityPaths(surfaces, focusPaths);
   return {
     surface,
     surfaces,
+    surfaces_truncated: surfacesTruncated,
     coverage_gaps,
     priority_paths,
     coverage: coverageSession.finish(),
@@ -708,7 +717,7 @@ export function registerAnalyzeArchitecture(
       description: `Defensive secure-code-review tool: high-level architecture map (stacks, typed surfaces, coverage gaps, trust boundaries) and recommended knowledge packs for progressive loading.
 
 Args: project_root, stack?, max_files?, focus_paths?, response_format.
-Returns: stacks, surface (legacy path buckets), surfaces (typed), coverage_gaps, priority_paths, security_brief, threat_highlights (advisory stack-gated shortlist, not findings), trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
+Returns: stacks, surface (legacy path buckets), surfaces (typed), surfaces_truncated, coverage_gaps, priority_paths, security_brief, threat_highlights (advisory stack-gated shortlist, not findings), trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`,
       inputSchema: InputSchema,
@@ -741,7 +750,7 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           stacks,
           config,
         );
-        const { surface, surfaces, coverage_gaps, priority_paths } = detected;
+        const { surface, surfaces, surfaces_truncated, coverage_gaps, priority_paths } = detected;
         const safeSurface = {
           entrypoints: redactedSecretPaths(surface.entrypoints),
           auth_related: redactedSecretPaths(surface.auth_related),
@@ -842,7 +851,7 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}.`,
+          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}.`,
           stacks,
           detection: {
             hasExpo: profile.hasExpo,
@@ -856,6 +865,8 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           surface: safeSurface,
           /** Typed high-value surface inventory (kind, exposure, auth expectation, paths). */
           surfaces: safeSurfaces,
+          /** True when SURFACE_KIND_CAP dropped later surface kinds (mixed monorepos). */
+          surfaces_truncated,
           /**
            * High-value surfaces without category-detector evidence yet.
            * After auth/injection/secrets tools, sample zero-hit surface files and reconcile.
@@ -900,6 +911,11 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
             "Defensive architecture review for control placement and remediation planning.",
             "Retain surfaces, coverage_gaps, priority_paths, security_brief, and threat_highlights as the architecture-as-brief artifact.",
             "threat_highlights is an advisory shortlist gated by detected/forced stacks — not findings and not a noise tier.",
+            ...(surfaces_truncated
+              ? [
+                  "surface kind cap reached; some later stacks' surfaces were dropped — run architecture per deployable package root for a mixed monorepo.",
+                ]
+              : []),
             pack_batches.length > 1
               ? `Load knowledge in ${pack_batches.length} get_knowledge_pack calls using pack_batches (max 6 ids each); start with pack_batches[0], detail=summary.`
               : "Load knowledge via secure_mcp_get_knowledge_pack(pack_ids=pack_batches[0] or recommended_packs) with detail=summary first.",

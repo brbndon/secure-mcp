@@ -68,6 +68,16 @@ describe("threat model provenance", () => {
     assert.deepEqual(swiftApplied, ["threat-model", "swift-ios"]);
   });
 
+  it("keeps applied pack ids within consulted routing for a generic TypeScript root", () => {
+    const consulted = threatModelPackIds(["typescript"]);
+    const applied = appliedThreatModelPackIds(threatModelFamiliesForStacks(["typescript"]));
+    // A generic TS/API root has no Next evidence: no web-next STRIDE fragments
+    // are emitted, so applied must be the generic subset of consulted.
+    assert.ok(!consulted.includes("web-next"));
+    assert.deepEqual(applied, ["threat-model"]);
+    for (const id of applied) assert.ok(consulted.includes(id));
+  });
+
   it("does not report component labels as observed paths without inventory support", () => {
     const threat = {
       title: "Incomplete Next.js boundary checks",
@@ -134,7 +144,7 @@ describe("threat-model inventory coverage", () => {
         assert.deepEqual(coverage.files_reviewed, []);
         assert.notEqual(coverage.not_observed_means, "no_candidate_in_files_reviewed");
         assert.ok(coverage.candidate_disposition_counts.needs_review > 0);
-        assert.equal(coverage.candidate_disposition_counts.needs_review, 3);
+        assert.equal(coverage.candidate_disposition_counts.needs_review, 2);
         assert.ok(
           coverage.candidate_disposition_counts.needs_review >=
             (structured.findings?.length ?? 0),

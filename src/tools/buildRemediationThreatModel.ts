@@ -265,7 +265,10 @@ export function threatModelFamiliesForStacks(
   stacks: readonly string[],
 ): ThreatModelDetectorFamily[] {
   const families: ThreatModelDetectorFamily[] = ["threat-model.stride"];
-  if (stacks.includes("nextjs") || stacks.includes("typescript")) {
+  // Next-specific STRIDE fragments are emitted only when Next is actually
+  // detected/forced. A generic TypeScript root must not claim web-next in
+  // applied_pack_ids (its consulted routing also omits web-next).
+  if (stacks.includes("nextjs")) {
     families.push("web-next.stride");
   }
   if (stacks.includes("swift")) families.push("swift-ios.stride");
@@ -357,7 +360,7 @@ function buildThreats(
       "Re-run secrets review tools; confirm .gitignore and env policy; check client bundles for leaked keys.",
   });
 
-  if (stacks.includes("nextjs") || stacks.includes("typescript")) {
+  if (stacks.includes("nextjs")) {
     push({
       stride: "E",
       title: "Incomplete Next.js boundary checks (middleware-only protection)",
