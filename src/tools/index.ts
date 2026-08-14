@@ -15,6 +15,9 @@ import { registerReviewSecrets } from "./reviewSecrets.js";
 import { registerBuildRemediationThreatModel } from "./buildRemediationThreatModel.js";
 import { registerProduceFindings } from "./produceFindings.js";
 import { registerGetAuditGuidance } from "./getAuditGuidance.js";
+import { registerListAuthorizedRoots } from "./listAuthorizedRoots.js";
+import { registerListProjects } from "./listProjects.js";
+import { registerRunLocalScanners } from "./runLocalScanners.js";
 
 /** Canonical tool names — treat as stable public API (defensive framing). */
 export const TOOL_NAMES = [
@@ -27,6 +30,9 @@ export const TOOL_NAMES = [
   "secure_mcp_review_secrets",
   "secure_mcp_build_remediation_threat_model",
   "secure_mcp_produce_findings",
+  "secure_mcp_list_authorized_roots",
+  "secure_mcp_list_projects",
+  "secure_mcp_run_local_scanners",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -41,4 +47,7 @@ export function registerAllTools(server: McpServer, config: ServerConfig = loadC
   registerReviewSecrets(server, config);
   registerBuildRemediationThreatModel(server, config);
   registerProduceFindings(server);
+  registerListAuthorizedRoots(server, config);
+  registerListProjects(server, config);
+  registerRunLocalScanners(server, config);
 }

@@ -69,6 +69,8 @@ export interface TypedSurface {
   auth_expectation: string;
   stacks: StackFocus[];
   evidence_basis: "path_inventory";
+  /** True when any path is an authorization-sensitive surface (dynamic ids, admin, webhooks, server actions). */
+  authz_sensitive: boolean;
 }
 
 export interface CoverageGap {
@@ -117,6 +119,31 @@ const HIGH_VALUE_KINDS = new Set<SurfaceKind>([
   "rpc",
   "queue",
 ]);
+
+/**
+ * Authorization-sensitive path heuristic. Used only to rank sample/priority
+ * ordering, never to emit findings. Targets object-level authz (BOLA/IDOR)
+ * surfaces: Next dynamic route segments, admin/account/tenant paths, webhooks,
+ * server actions, and mobile deep-link/AuthSession entry points.
+ */
+const AUTHZ_DYNAMIC_SEGMENT_RE = /\/\[[^\]]+\]/;
+const AUTHZ_PATH_SEGMENT_RE =
+  /(^|\/)(admin|account|dashboard|settings|profile|billing|checkout|team|teams|org|organizations|users?|members|roles?|permissions?|tenants?)(\/|\.|$)/i;
+const AUTHZ_WEBHOOK_RE = /webhook|stripe-hook|svix|callback/i;
+const AUTHZ_SERVER_ACTION_RE = /(^|\/)actions?\//i;
+const AUTHZ_DEEP_LINK_RE = /authsession|deep.?link|universal.?link|onopenurl|linking/i;
+
+/** Exported for tests. */
+export function isAuthzSensitivePath(relativePath: string): boolean {
+  if (!relativePath) return false;
+  const lower = relativePath.toLowerCase();
+  if (AUTHZ_DYNAMIC_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_PATH_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_WEBHOOK_RE.test(lower)) return true;
+  if (AUTHZ_SERVER_ACTION_RE.test(lower)) return true;
+  if (AUTHZ_DEEP_LINK_RE.test(lower)) return true;
+  return false;
+}
 
 function baseName(relativePath: string): string {
   const lower = relativePath.toLowerCase();
@@ -218,6 +245,84 @@ function classifyBuckets(relativePaths: string[]): SurfaceBuckets {
   };
 }
 
+/**
+ * Unsupported-stack honesty: detect recognizable-but-uncovered stacks so agents
+ * report a limited generic review instead of pretending full AppSec coverage.
+ * Detection is marker-file based (bounded, no extra tree walk); no pack is
+ * routed for these stacks and no surfaces are invented for them.
+ */
+export interface UnsupportedStackSignal {
+  stack: string;
+  evidence: string[];
+  frameworks: string[];
+}
+
+const UNSUPPORTED_MARKER_MAP: ReadonlyArray<{
+  stack: string;
+  markers: readonly string[];
+}> = [
+  {
+    stack: "python",
+    markers: [
+      "pyproject.toml",
+      "requirements.txt",
+      "setup.py",
+      "setup.cfg",
+      "Pipfile",
+      "Pipfile.lock",
+      "poetry.lock",
+    ],
+  },
+  { stack: "go", markers: ["go.mod", "go.sum"] },
+  {
+    stack: "android-kotlin",
+    markers: ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+  },
+  { stack: "java", markers: ["pom.xml", "build.xml", "gradlew"] },
+  { stack: "dotnet", markers: ["global.json", "packages.config", "Directory.Build.props"] },
+  { stack: "ruby", markers: ["Gemfile", "Gemfile.lock", "Rakefile"] },
+  { stack: "php", markers: ["composer.json", "composer.lock"] },
+  { stack: "rust", markers: ["Cargo.toml", "Cargo.lock"] },
+];
+
+const PYTHON_FRAMEWORK_RE =
+  /\b(fastapi|django|flask|starlette|tornado|sanic|pyramid|aiohttp)\b/gi;
+
+/** Exported for tests: map top-level entry names to unsupported-stack signals. */
+export function unsupportedSignalsForEntries(
+  topLevelEntries: readonly string[],
+): UnsupportedStackSignal[] {
+  const names = topLevelEntries.map((entry) => entry.replace(/\/$/, ""));
+  const signals: UnsupportedStackSignal[] = [];
+  for (const { stack, markers } of UNSUPPORTED_MARKER_MAP) {
+    const evidence = markers.filter((marker) => names.includes(marker));
+    if (evidence.length === 0) continue;
+    signals.push({ stack, evidence, frameworks: [] });
+  }
+  return signals;
+}
+
+/** Enrich python signals with a framework name read from requirements/pyproject. */
+async function enrichPythonFrameworks(
+  root: string,
+  signals: UnsupportedStackSignal[],
+  maxFileBytes: number | undefined,
+  allowedRoots: readonly string[] | undefined,
+): Promise<void> {
+  const python = signals.find((signal) => signal.stack === "python");
+  if (!python) return;
+  for (const file of ["requirements.txt", "pyproject.toml"]) {
+    const content = await readProjectFileIfExists(root, file, maxFileBytes, allowedRoots);
+    if (!content) continue;
+    const matches = content.content.match(PYTHON_FRAMEWORK_RE) ?? [];
+    for (const match of matches) {
+      const framework = match.toLowerCase();
+      if (!python.frameworks.includes(framework)) python.frameworks.push(framework);
+      if (python.frameworks.length >= 4) return;
+    }
+  }
+}
+
 function collectKindPaths(
   relativePaths: string[],
   matcher: (relativePath: string, base: string) => boolean,
@@ -274,6 +379,7 @@ function buildTypedSurfaces(
       auth_expectation,
       stacks: kindStacks,
       evidence_basis: "path_inventory",
+      authz_sensitive: paths.some(isAuthzSensitivePath),
     });
   };
 
@@ -590,6 +696,9 @@ function buildPriorityPaths(
   focusPaths: string[] | undefined,
 ): string[] {
   const ranked = [...surfaces].sort((a, b) => {
+    const aAuthz = a.authz_sensitive ? 1 : 0;
+    const bAuthz = b.authz_sensitive ? 1 : 0;
+    if (aAuthz !== bAuthz) return bAuthz - aAuthz;
     const aHigh = HIGH_VALUE_KINDS.has(a.kind) ? 1 : 0;
     const bHigh = HIGH_VALUE_KINDS.has(b.kind) ? 1 : 0;
     if (aHigh !== bHigh) return bHigh - aHigh;
@@ -597,7 +706,11 @@ function buildPriorityPaths(
   });
   const paths: string[] = [];
   for (const surface of ranked) {
-    for (const p of surface.paths) {
+    const ordered = [...surface.paths].sort(
+      (a, b) =>
+        (isAuthzSensitivePath(b) ? 1 : 0) - (isAuthzSensitivePath(a) ? 1 : 0),
+    );
+    for (const p of ordered) {
       if (!paths.includes(p)) paths.push(p);
       if (paths.length >= PRIORITY_PATH_CAP) {
         return paths;
@@ -640,6 +753,11 @@ function buildSecurityBrief(input: {
       "Derived from architecture path inventory and pack routing — not a separate project walk.",
       "Treat as the security brief for this root; retain through category tools and revalidation.",
       "Reconcile coverage_gaps after category detectors: sample zero-hit high-value surfaces manually.",
+      ...(input.surfaces.some((s) => s.authz_sensitive)
+        ? [
+            "Authorization-sensitive surfaces detected (dynamic ids, admin/tenant, webhooks, server actions). Verify object-level authorization on every sensitive action before trusting empty auth findings.",
+          ]
+        : []),
     ],
   };
 }
@@ -762,6 +880,16 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
         const safeGaps = redactCoverageGaps(coverage_gaps);
         const safePriorityPaths = redactedSecretPaths(priority_paths);
 
+        // Unsupported-stack honesty: flag recognizable-but-uncovered stacks so
+        // agents degrade to a limited generic review instead of claiming coverage.
+        const unsupported = unsupportedSignalsForEntries(profile.topLevelEntries);
+        await enrichPythonFrameworks(
+          root,
+          unsupported,
+          config.maxFileBytes,
+          config.allowedRoots,
+        );
+
         const packageJson = await readProjectFileIfExists(
           root,
           "package.json",
@@ -847,12 +975,19 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
             priority_paths: safePriorityPaths,
           }),
         );
+        if (unsupported.length > 0) {
+          security_brief.notes.push(
+            `Unsupported stack(s) detected (${unsupported.map((s) => s.stack).join(", ")}): limited generic review only — no stack-specific packs or surfaces for these stacks.`,
+          );
+        }
 
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}.`,
+          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}${unsupported.length > 0 ? `; unsupported=${unsupported.map((s) => s.stack).join(",")}` : ""}.`,
           stacks,
+          /** Recognizable-but-uncovered stacks (marker-file detected). Limited generic review only. */
+          unsupported_signals: unsupported,
           detection: {
             hasExpo: profile.hasExpo,
             hasMacOS: profile.hasMacOS,
@@ -911,6 +1046,15 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
             "Defensive architecture review for control placement and remediation planning.",
             "Retain surfaces, coverage_gaps, priority_paths, security_brief, and threat_highlights as the architecture-as-brief artifact.",
             "threat_highlights is an advisory shortlist gated by detected/forced stacks — not findings and not a noise tier.",
+            ...(unsupported.length > 0
+              ? [
+                  `Unsupported stack(s) detected: ${unsupported
+                    .map((s) =>
+                      s.frameworks.length > 0 ? `${s.stack} (${s.frameworks.join(", ")})` : s.stack,
+                    )
+                    .join(", ")}. This review degrades to core/secrets/threat-model; report a limited generic review, not full stack coverage.`,
+                ]
+              : []),
             ...(surfaces_truncated
               ? [
                   "surface kind cap reached; some later stacks' surfaces were dropped — run architecture per deployable package root for a mixed monorepo.",

@@ -145,7 +145,11 @@ export function recommendPackPlan(
 
   const knownAppStack = hasNext || hasExpo || hasSwift || hasTs;
   if (!knownAppStack) {
-    const recommended_packs: PackId[] = ["core", "threat-model"];
+    // Honest degrade for unknown/minimal stacks: core + secrets + threat-model.
+    // Unknown repos can still leak credentials, so secrets is always in scope;
+    // no stack pack is ever claimed without evidence. Architecture adds explicit
+    // unsupported/gap notes so agents report a limited generic review, not a full audit.
+    const recommended_packs: PackId[] = ["core", "secrets", "threat-model"];
     return {
       recommended_packs,
       pack_batches: chunkPackIds(recommended_packs),

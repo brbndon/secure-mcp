@@ -21,6 +21,9 @@ Every tool is read-only, idempotent, and scoped to defensive review. Category to
 | `secure_mcp_review_secrets` | Identify secret hygiene issues and rotation needs |
 | `secure_mcp_build_remediation_threat_model` | Map trust boundaries to hardening controls |
 | `secure_mcp_produce_findings` | Dedupe, prioritize, and render the final report |
+| `secure_mcp_list_authorized_roots` | List allowlisted roots and whether each exists |
+| `secure_mcp_list_projects` | Depth-capped discovery of project roots under a parent |
+| `secure_mcp_run_local_scanners` | Optional, default-off compose of local `semgrep`/`gitleaks` |
 
 ## Shared inputs
 

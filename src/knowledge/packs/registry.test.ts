@@ -44,9 +44,9 @@ function itemIdsFromPack(packId: string, items: PackItem[]): number {
 }
 
 describe("recommendPackPlan", () => {
-  it("recommends core+threat-model for unknown stacks", () => {
+  it("recommends core+secrets+threat-model for unknown stacks", () => {
     const plan = recommendPackPlan([], emptyProfile);
-    assert.deepEqual(plan.recommended_packs, ["core", "threat-model"]);
+    assert.deepEqual(plan.recommended_packs, ["core", "secrets", "threat-model"]);
     assert.equal(plan.pack_batches.length, 1);
     assert.deepEqual(plan.pack_batches[0], plan.recommended_packs);
   });
