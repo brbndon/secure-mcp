@@ -427,6 +427,15 @@ export function registerProduceFindings(server: McpServer): void {
           executive_summary,
           findings: exported,
           candidate_disposition_counts: dispositionCounts,
+          review_checkpoint: {
+            resumable: true as const,
+            next_steps: [
+              "The review is resumable: re-run any category tool (secure_mcp_check_authentication, secure_mcp_analyze_injection_risks, secure_mcp_review_secrets) with the same project_root plus focus_paths to resume a partially covered area.",
+              "If coverage was truncated or partial, narrow project_root or raise max_files deliberately, then re-run the affected tool before claiming coverage.",
+              "For findings with validation_status needs_runtime, schedule owner-authorized runtime/configuration verification (manual QA or existing DAST) before declaring the weakness closed.",
+              "After remediation, re-run secure_mcp_produce_findings with disposition fixed and the verification evidence to update the ledger.",
+            ],
+          },
           notes: [
             "Each finding follows evidence → classify → impact → remediate → verify.",
             "Deferred and reportable are confirmed open work; needs_review is an unconfirmed candidate; fixed/suppressed/accepted_risk/not_applicable are excluded from open risk and remediation_priority.",

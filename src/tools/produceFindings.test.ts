@@ -524,6 +524,21 @@ describe("produceFindings validation_status labels", () => {
     assert.equal(counts.needs_runtime, 1);
     assert.equal(counts.static_only, 1);
   });
+
+  it("exposes a resumable review_checkpoint for interrupted audits", async () => {
+    const result = await callProduceResult(
+      makeFinding({ id: "V-7", title: "Resumable candidate", file: "src/c.ts", line: 1 }),
+      "Checkpoint report",
+      "json",
+    );
+    const checkpoint = result.structured.review_checkpoint as {
+      resumable: boolean;
+      next_steps: string[];
+    };
+    assert.equal(checkpoint.resumable, true);
+    assert.ok(checkpoint.next_steps.length >= 1);
+    assert.match(checkpoint.next_steps.join("\n"), /focus_paths/);
+  });
 });
 
 describe("produceFindings SARIF export", () => {
