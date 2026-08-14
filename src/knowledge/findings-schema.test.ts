@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  CANDIDATE_DISPOSITIONS,
+  candidateDispositionPolicy,
+} from "../lib/types.js";
+import {
   boundFinding,
   buildFinding,
+  CandidateDispositionSchema,
   createFindingInstanceId,
   ensureFindingTraceability,
   FindingSchema,
@@ -178,6 +183,33 @@ describe("bounded finding payloads", () => {
 });
 
 describe("candidate dispositions", () => {
+  it("keeps the schema enum, canonical list, and policy in lockstep", () => {
+    const canonical = [
+      "reportable",
+      "needs_review",
+      "suppressed",
+      "accepted_risk",
+      "not_applicable",
+      "deferred",
+      "fixed",
+    ].sort();
+    assert.deepEqual([...CandidateDispositionSchema.options].sort(), canonical);
+    assert.deepEqual([...CANDIDATE_DISPOSITIONS].sort(), canonical);
+  });
+
+  it("treats reportable/deferred as open work and the rest as closed ledger", () => {
+    for (const open of ["reportable", "deferred"]) {
+      assert.equal(candidateDispositionPolicy(open).openWork, true, open);
+      assert.equal(candidateDispositionPolicy(open).remediationPriority, true, open);
+    }
+    for (const closed of ["fixed", "suppressed", "accepted_risk", "not_applicable"]) {
+      assert.equal(candidateDispositionPolicy(closed).openWork, false, closed);
+      assert.equal(candidateDispositionPolicy(closed).remediationPriority, false, closed);
+    }
+    assert.equal(candidateDispositionPolicy("needs_review").openWork, false);
+    assert.equal(candidateDispositionPolicy("needs_review").remediationPriority, true);
+  });
+
   it("accepts accepted_risk as a closed ledger disposition", () => {
     const finding = buildFinding({
       ...sampleFinding(12),

@@ -185,6 +185,8 @@ After install, ask your agent to run a defensive review of an allowlisted repo (
 
 Long reviews intentionally carry small intermediate artifacts between phases. See the [agent workflow](docs/docs/agent-workflow.md) and [security auditor skill](skills/security-auditor.md).
 
+For a zero-setup, deterministic demo, run `pnpm smoke` after a checkout build. It drives the full golden sequence against the bundled fixtures with a temporary allowlist: `fixtures/tiny-app` (Next.js) and `fixtures/tiny-expo` (Expo/React Native). It asserts stack-isolated packs (Next never loads `expo-rn`, Expo never loads `web-next`) and that raw secrets are redacted from tool output. To exercise the same path interactively, allowlist `fixtures` and ask your agent to "audit `fixtures/tiny-expo` defensively using secure-mcp only" (expect `expo-rn` packs, RN surfaces, redacted secrets, dispositions), then run the same against `fixtures/tiny-app` (expect the `web-next` path, no `expo-rn`, authz-priority paths).
+
 ## Filesystem authorization
 
 `SECURE_MCP_ALLOWED_ROOTS` is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected.

@@ -106,14 +106,7 @@ Load `secure_mcp_get_knowledge_pack` only after architecture analysis:
 
 If the live MCP tool inventory includes `secure_mcp_get_audit_guidance`, call it after inventory when the full workflow or a category-specific guardrail is needed, using `section: "workflow"`, `section: "architecture"`, or the relevant category. This tool is optional: if it is absent, use the committed repository docs and live schemas; do not issue an invalid call or treat its absence as a failed audit. Optionally call `secure_mcp_build_remediation_threat_model` after architecture to map assets and trust boundaries to hardening controls. Keep the threat model remediation-focused, never an attack plan.
 
-Start pack selection from the architecture response (`recommended_packs` / `pack_batches`). Prefer those packs, then apply these preflight overrides and record each override:
-
-- Web/Next.js: `core`, `secrets`, `web-next`, `auth-web`, `web-api` as applicable.
-- Generic TypeScript / API: packs from architecture (often `core`, `secrets`, `web-api`, `auth-web`); do not invent Next-only packs without Next evidence.
-- iOS Swift: `core`, `secrets`, `swift-ios`.
-- macOS Swift: `core`, `secrets`, `swift-ios`, plus `apple-desktop` when preflight confirms target-level macOS evidence—even if architecture omitted `apple-desktop` due to weak AppKit sampling.
-- Expo/React Native app: `core`, `secrets`, `expo-rn`. Library or dev-only Expo tooling: omit `expo-rn` and do not force `expo`.
-- Unknown or minimal: `core` and, when useful, `threat-model`.
+Start pack selection from the architecture response (`recommended_packs` / `pack_batches`). Prefer those packs; apply the preflight routing table above as an override when detection is weak, and record each override. Never load a stack pack the preflight did not classify.
 
 ### Phase 3: category analysis
 
@@ -160,16 +153,7 @@ Use sub-agents only for defensive roles such as mapper, auth specialist, mobile/
 
 ### Phase 5: findings and handoff
 
-Before calling `secure_mcp_produce_findings`, pass confirmed open findings with `disposition: "reportable"` or `disposition: "deferred"` (the latter only with explicit owner/context). Include closed dispositions only when the handoff requires a disposition ledger. Retain the complete strict `Finding` shape, including `id`, `title`, and `description`, as well as these required remediation fields:
-
-1. `evidence`
-2. `severity`, `confidence`, `category`, and optional `cwe`/`owasp`
-3. `impact_if_unremediated`
-4. `remediation`
-5. `residual_risk`
-6. `verification_suggestion`
-
-Preserve `rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and `disposition` when available. Call `secure_mcp_produce_findings` with `dedupe: true`, appropriate severity/confidence filters, the project root, and `response_format: "markdown"` or `"json"`. Its input requires at least one finding; when no confirmed open (`reportable` or `deferred`) finding or requested ledger item exists, provide a coverage-qualified narrative instead of sending an empty array.
+Before calling `secure_mcp_produce_findings`, pass confirmed open findings with `disposition: "reportable"` or `disposition: "deferred"` (the latter only with explicit owner/context). Include closed dispositions only when the handoff requires a disposition ledger. Keep the live strict `Finding` shape: required remediation fields are `evidence`, `impact_if_unremediated`, `remediation`, `residual_risk`, and `verification_suggestion`, plus classification (`severity`, `confidence`, `category`, optional `cwe`/`owasp`); preserve traceability fields (`rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, `disposition`) when available. Call with `dedupe: true` and severity/confidence filters; when no confirmed open finding or requested ledger item exists, send a coverage-qualified narrative instead of an empty array.
 
 End with a human-readable report containing:
 

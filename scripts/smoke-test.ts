@@ -370,7 +370,11 @@ async function main(): Promise<void> {
       secretsText.includes("findings") || secretsText.includes("SEC-"),
       "Expected secrets findings in response",
     );
-    console.log("[smoke] review_secrets OK");
+    assert(
+      !secretsText.includes("sk_live_fixtureexamplekeynotreal000"),
+      "review_secrets must redact the raw Stripe key from output",
+    );
+    console.log("[smoke] review_secrets OK (raw secret redacted)");
 
     const injections = await client.callTool({
       name: "secure_mcp_analyze_injection_risks",

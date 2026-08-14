@@ -95,7 +95,7 @@ Use dedupe, filters. Output is prioritised remediation report.
 Never rewrite into exploit content.`,
 
   all: `See sections: overview, workflow, authentication, injection-risks, secrets, threat-model, architecture, findings.
-Full details also in docs/agent-workflow.md and skills/security-auditor.md.
+The authoritative full orchestration workflow lives in the secure-mcp master skill (checkout path .agents/skills/secure-mcp/SKILL.md); these sections are on-demand slices of it.
 Always stay defensive and owner-focused.`,
 };
 
