@@ -211,6 +211,143 @@ describe("bounded coverage accounting", () => {
     assert.ok(JSON.stringify(data).length < CHARACTER_LIMIT);
   });
 
+  it("gracefully shrinks architecture-scale arrays instead of hard-stubbing", () => {
+    const limit = 8_000;
+    const longPath = (i: number) =>
+      `app/api/module-${i}/very/deep/nested/route-handler-with-a-long-name-${i}/route.ts`;
+    const surfaces = Array.from({ length: 40 }, (_, i) => ({
+      id: `surf-http_route-${i}`,
+      kind: "http_route",
+      exposure: "public",
+      paths: Array.from({ length: 24 }, (_, j) => longPath(i * 24 + j)),
+      auth_expectation: "Assume public until a server-side session or token check is proven.",
+      stacks: ["nextjs"],
+      evidence_basis: "path_inventory",
+    }));
+    const coverage_gaps = surfaces.map((surface) => ({
+      surface_id: surface.id,
+      kind: surface.kind,
+      paths: surface.paths,
+      reason:
+        "Architecture inventory only — no category detector evidence yet. Sample these paths after auth/injection/secrets tools.",
+      suggested_tools: [
+        "secure_mcp_check_authentication",
+        "secure_mcp_analyze_injection_risks",
+      ],
+    }));
+    const priority_paths = Array.from({ length: 80 }, (_, i) => longPath(i));
+    const recommended_packs = Array.from({ length: 20 }, (_, i) => `pack-${i}`);
+    const payload = {
+      ok: true as const,
+      project_root: "/repo",
+      summary: "architecture-heavy",
+      surfaces,
+      coverage_gaps,
+      priority_paths,
+      recommended_packs,
+      pack_batches: [recommended_packs.slice(0, 6), recommended_packs.slice(6, 12)],
+      checklist_seed: recommended_packs.map((id) => ({
+        id,
+        title: `Checklist seed ${id} with extra orientation text`.repeat(4),
+        category: "architecture",
+        severityHint: "medium",
+      })),
+      trust_boundaries: Array.from({ length: 16 }, (_, i) => `Trust boundary ${i}: ${"x".repeat(80)}`),
+      notable_dependencies: Array.from({ length: 40 }, (_, i) => `dep-with-a-long-name-${i}`),
+      top_level: Array.from({ length: 40 }, (_, i) => `top-level-entry-${i}`),
+      surface: {
+        entrypoints: priority_paths.slice(0, 40),
+        auth_related: priority_paths.slice(0, 40),
+        config_files: priority_paths.slice(0, 20),
+        api_routes: priority_paths,
+        data_layer_hints: priority_paths.slice(0, 30),
+      },
+      security_brief: {
+        stacks: ["nextjs"],
+        trust_boundaries: Array.from({ length: 12 }, (_, i) => `Brief boundary ${i}`),
+        high_value_surfaces: surfaces.slice(0, 20).map((surface) => ({
+          kind: surface.kind,
+          exposure: surface.exposure,
+          path_count: surface.paths.length,
+          sample_paths: surface.paths,
+        })),
+        coverage_gap_count: coverage_gaps.length,
+        recommended_packs,
+        priority_paths,
+        notes: Array.from({ length: 8 }, (_, i) => `Brief note ${i}: ${"n".repeat(60)}`),
+      },
+    };
+    const original = JSON.stringify(payload);
+    assert.ok(original.length > limit, `fixture ${original.length} should exceed ${limit}`);
+
+    const { data, truncated } = boundStructuredPayload(payload, limit);
+    assert.equal(truncated, true);
+    const encoded = JSON.stringify(data);
+    assert.ok(encoded.length <= limit, `encoded length ${encoded.length} exceeds limit ${limit}`);
+
+    const shrunk = data as {
+      surfaces?: unknown[];
+      coverage_gaps?: Array<{ paths?: unknown[] }>;
+      priority_paths?: unknown[];
+      recommended_packs?: unknown[];
+      surface?: { api_routes?: unknown[]; entrypoints?: unknown[] };
+      security_brief?: { high_value_surfaces?: Array<{ sample_paths?: unknown[] }> };
+      notes?: string[];
+    };
+    assert.ok(Array.isArray(shrunk.surfaces), "surfaces should survive as a shrunk array, not a hard stub");
+    assert.ok((shrunk.surfaces?.length ?? 0) < surfaces.length);
+    assert.ok((shrunk.surfaces?.length ?? 0) >= 1);
+    assert.ok((shrunk.coverage_gaps?.length ?? 0) < coverage_gaps.length);
+    assert.ok((shrunk.priority_paths?.length ?? 0) < priority_paths.length);
+    assert.ok((shrunk.recommended_packs?.length ?? 0) < recommended_packs.length);
+    assert.ok((shrunk.surface?.api_routes?.length ?? 0) < priority_paths.length);
+    assert.ok((shrunk.surface?.entrypoints?.length ?? 0) < 40);
+    const samplePaths = shrunk.security_brief?.high_value_surfaces?.[0]?.sample_paths?.length ?? 0;
+    assert.ok(samplePaths < 24, "nested security_brief sample_paths should half-shrink");
+    const firstGapPaths = shrunk.coverage_gaps?.[0]?.paths?.length ?? 0;
+    assert.ok(firstGapPaths < 24, "nested coverage_gap paths should half-shrink");
+    assert.ok(
+      !shrunk.notes?.some((note) => note.includes("structuredContent was reduced")),
+      "architecture-scale shrink should not fall through to the last-resort stub",
+    );
+  });
+
+  it("half-shrinks nested surface paths when parent arrays cannot be halved", () => {
+    const limit = 1_200;
+    const paths = Array.from(
+      { length: 80 },
+      (_, i) => `app/api/only-surface/deep/path-${i}/handler-with-a-verbose-name/route.ts`,
+    );
+    const payload = {
+      ok: true as const,
+      project_root: "/repo",
+      summary: "single-surface path bloat",
+      surfaces: [
+        {
+          id: "surf-http_route-1",
+          kind: "http_route",
+          paths,
+          auth_expectation: "public until proven otherwise",
+        },
+      ],
+      coverage_gaps: [{ surface_id: "surf-http_route-1", kind: "http_route", paths }],
+    };
+    assert.ok(JSON.stringify(payload).length > limit);
+    const { data, truncated } = boundStructuredPayload(payload, limit);
+    assert.equal(truncated, true);
+    const encoded = JSON.stringify(data);
+    assert.ok(encoded.length <= limit, `encoded length ${encoded.length} exceeds limit ${limit}`);
+    const shrunk = data as {
+      surfaces?: Array<{ paths?: unknown[] }>;
+      coverage_gaps?: Array<{ paths?: unknown[] }>;
+      notes?: string[];
+    };
+    assert.equal(shrunk.surfaces?.length, 1);
+    assert.ok((shrunk.surfaces?.[0]?.paths?.length ?? 0) < paths.length);
+    assert.ok((shrunk.coverage_gaps?.[0]?.paths?.length ?? 0) < paths.length);
+    assert.ok(!shrunk.notes?.some((note) => note.includes("structuredContent was reduced")));
+  });
+
   it("bounds payloads dominated by nested coverage arrays", () => {
     const limit = 2_000;
     const paths = Array.from({ length: 500 }, (_, i) => `src/module-${i}/file-${i}.ts`);

@@ -81,6 +81,15 @@ const SHRINKABLE_ARRAY_KEYS = [
   "sample_files",
   "threats",
   "finding_seeds",
+  "surfaces",
+  "coverage_gaps",
+  "priority_paths",
+  "recommended_packs",
+  "pack_batches",
+  "checklist_seed",
+  "trust_boundaries",
+  "notable_dependencies",
+  "top_level",
 ] as const;
 
 /** Nested coverage arrays that can dominate structuredContent size. */
@@ -92,6 +101,27 @@ const COVERAGE_SHRINKABLE_ARRAY_KEYS = [
   "files_reviewed",
 ] as const;
 
+/** Legacy architecture path buckets on `surface`. */
+const LEGACY_SURFACE_BUCKET_KEYS = [
+  "entrypoints",
+  "auth_related",
+  "config_files",
+  "api_routes",
+  "data_layer_hints",
+] as const;
+
+/** Compact security_brief arrays that can grow with the parent inventory. */
+const SECURITY_BRIEF_SHRINKABLE_ARRAY_KEYS = [
+  "high_value_surfaces",
+  "priority_paths",
+  "recommended_packs",
+  "trust_boundaries",
+  "notes",
+] as const;
+
+/** Top-level object arrays whose nested `paths` / `sample_paths` can dominate size. */
+const NESTED_PATH_ARRAY_KEYS = ["surfaces", "coverage_gaps"] as const;
+
 function halfArrayIfLarge(value: unknown): { value: unknown; shrunk: boolean } {
   if (Array.isArray(value) && value.length > 1) {
     return { value: value.slice(0, Math.max(1, Math.floor(value.length / 2))), shrunk: true };
@@ -99,20 +129,71 @@ function halfArrayIfLarge(value: unknown): { value: unknown; shrunk: boolean } {
   return { value, shrunk: false };
 }
 
-function shrinkCoverageArrays(coverage: unknown): { coverage: unknown; shrunk: boolean } {
-  if (!coverage || typeof coverage !== "object") {
-    return { coverage, shrunk: false };
+function shrinkObjectArrayFields(
+  value: unknown,
+  keys: readonly string[],
+): { value: unknown; shrunk: boolean } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { value, shrunk: false };
   }
-  const next: Record<string, unknown> = { ...(coverage as Record<string, unknown>) };
+  const next: Record<string, unknown> = { ...(value as Record<string, unknown>) };
   let shrunk = false;
-  for (const key of COVERAGE_SHRINKABLE_ARRAY_KEYS) {
+  for (const key of keys) {
     const result = halfArrayIfLarge(next[key]);
     if (result.shrunk) {
       next[key] = result.value;
       shrunk = true;
     }
   }
-  return { coverage: next, shrunk };
+  return { value: next, shrunk };
+}
+
+function shrinkCoverageArrays(coverage: unknown): { coverage: unknown; shrunk: boolean } {
+  const result = shrinkObjectArrayFields(coverage, COVERAGE_SHRINKABLE_ARRAY_KEYS);
+  return { coverage: result.value, shrunk: result.shrunk };
+}
+
+function shrinkNestedPathFields(item: unknown): { item: unknown; shrunk: boolean } {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return { item, shrunk: false };
+  }
+  const rec = item as Record<string, unknown>;
+  let shrunk = false;
+  const next: Record<string, unknown> = { ...rec };
+  for (const key of ["paths", "sample_paths"] as const) {
+    const result = halfArrayIfLarge(next[key]);
+    if (result.shrunk) {
+      next[key] = result.value;
+      shrunk = true;
+    }
+  }
+  return { item: shrunk ? next : item, shrunk };
+}
+
+function shrinkNestedPathArrays(items: unknown): { items: unknown; shrunk: boolean } {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { items, shrunk: false };
+  }
+  let shrunk = false;
+  const next = items.map((item) => {
+    const result = shrinkNestedPathFields(item);
+    if (result.shrunk) shrunk = true;
+    return result.item;
+  });
+  return { items: shrunk ? next : items, shrunk };
+}
+
+function shrinkSecurityBrief(brief: unknown): { brief: unknown; shrunk: boolean } {
+  const top = shrinkObjectArrayFields(brief, SECURITY_BRIEF_SHRINKABLE_ARRAY_KEYS);
+  if (!top.value || typeof top.value !== "object" || Array.isArray(top.value)) {
+    return { brief: top.value, shrunk: top.shrunk };
+  }
+  const next = top.value as Record<string, unknown>;
+  const nested = shrinkNestedPathArrays(next.high_value_surfaces);
+  if (!nested.shrunk) {
+    return { brief: top.value, shrunk: top.shrunk };
+  }
+  return { brief: { ...next, high_value_surfaces: nested.items }, shrunk: true };
 }
 
 /** Minimal coverage stub for last-resort envelopes — never re-attaches bulk path lists. */
@@ -205,6 +286,23 @@ export function boundStructuredPayload<T extends object>(
     const coverageResult = shrinkCoverageArrays(next.coverage);
     if (coverageResult.shrunk) {
       next.coverage = coverageResult.coverage;
+      shrunk = true;
+    }
+    for (const key of NESTED_PATH_ARRAY_KEYS) {
+      const nested = shrinkNestedPathArrays(next[key]);
+      if (nested.shrunk) {
+        next[key] = nested.items;
+        shrunk = true;
+      }
+    }
+    const surfaceResult = shrinkObjectArrayFields(next.surface, LEGACY_SURFACE_BUCKET_KEYS);
+    if (surfaceResult.shrunk) {
+      next.surface = surfaceResult.value;
+      shrunk = true;
+    }
+    const briefResult = shrinkSecurityBrief(next.security_brief);
+    if (briefResult.shrunk) {
+      next.security_brief = briefResult.brief;
       shrunk = true;
     }
     if (!shrunk) break;
