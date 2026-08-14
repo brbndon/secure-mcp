@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MODERN_PROTOCOL_VERSION, REQUIRED_TOOLS } from "./test-constants.js";
+import { MODERN_PROTOCOL_VERSION, PROJECT_VERSION, REQUIRED_TOOLS } from "./test-constants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   });
 
   const client = new Client(
-    { name: "secure-mcp-smoke", version: "1.0.0" },
+    { name: "secure-mcp-smoke", version: PROJECT_VERSION },
     {
       versionNegotiation: {
         mode: { pin: MODERN_PROTOCOL_VERSION },

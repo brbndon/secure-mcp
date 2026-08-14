@@ -1,4 +1,6 @@
 export const MODERN_PROTOCOL_VERSION = "2026-07-28";
+export const PROJECT_VERSION = "2.0.0";
+export const LEGACY_PROTOCOL_VERSION = "2025-06-18";
 
 export const REQUIRED_TOOLS = [
   "secure_mcp_list_project_structure",

@@ -35,7 +35,10 @@ async function main(): Promise<void> {
   }
 
   serveStdio(() => createServer(config), {
-    legacy: "serve",
+    // The 2.x server is strictly MCP revision 2026-07-28. Legacy (2025-era)
+    // `initialize` openings are answered with the unsupported-protocol-version
+    // error instead of being served.
+    legacy: "reject",
     onerror: (error) => {
       console.error(`[secure-mcp] Protocol error: ${safeDiagnostic(error)}`);
     },

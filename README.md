@@ -6,7 +6,10 @@
 
 Local **Model Context Protocol (MCP)** server that helps coding agents run defensive, remediation-focused secure code review of source repositories.
 
-- Focus (v1): TypeScript / Next.js, Swift / SwiftUI, and Expo / React Native
+<img src="public/screenshots/ui-camera/source-terminal-secure-mcp.png" alt="Terminal session running the secure-mcp skill: repository inventory, architecture analysis, and a high-severity secrets finding with redacted evidence." width="720" />
+
+- Protocol: MCP revision `2026-07-28` only (strict v2, stdio). Clients that cannot negotiate this protocol revision will not connect.
+- Focus: TypeScript / Next.js, Swift / SwiftUI, and Expo / React Native
 - Transport: stdio only, running as a local subprocess of the agent client
 - License: [Apache-2.0](LICENSE)
 - Framing: identify potential weaknesses, classify them by CWE, severity, and confidence, then recommend concrete remediation. This is not an offensive toolkit.
@@ -54,37 +57,88 @@ Findings can also include stable traceability fields such as `rule_family`, `roo
 
 ## Requirements
 
+- Git
 - Node.js 20 or newer
-- npm 10+ (or pnpm 10 for development from a checkout)
-- One or more local paths that the server is authorized to inspect
+- pnpm 10 for the clone + build + installer path
+- Bash and Python 3 for `scripts/install-agents.sh`; PowerShell 7 for `scripts/install-agents.ps1`
+- One or more existing absolute directories the server is allowed to inspect (`SECURE_MCP_ALLOWED_ROOTS`)
+- An MCP client that supports protocol revision `2026-07-28`
 
-## Quick start (npm)
+## Quick start (recommended): clone + install script
 
-Install and run the published package. `SECURE_MCP_ALLOWED_ROOTS` is required for filesystem tools (`:` on macOS/Linux, `;` on Windows):
+The primary path is a git checkout. That is what ships the **agent skill**, the **installer**, fixtures, source, and documentation. npm only provides the server binary (see [Server-only via npm](#server-only-via-npm) below).
+
+`SECURE_MCP_ALLOWED_ROOTS` is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Keep the allowlist narrow—one checkout is better than your entire home directory.
 
 ```bash
+git clone https://github.com/brbndon/secure-mcp.git
+cd secure-mcp
+pnpm install --frozen-lockfile
+pnpm build
+
+# Absolute paths only; must exist on disk
 export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
 
-# One-shot (downloads if needed)
-npx -y @brdndon/secure-mcp
-
-# Or install the bin globally / in a project
-npm install -g @brdndon/secure-mcp
-secure-mcp
+# Wire skill + MCP config for pi, Cursor, and OpenAI Codex
+./scripts/install-agents.sh install
+./scripts/install-agents.sh check
 ```
 
-### Connect from common MCP clients
+The installer:
 
-Point your client at the `secure-mcp` bin (or `npx`). Keep allowlisted roots narrow—one checkout is better than your entire home directory.
+- Points clients at this checkout's built `dist/index.js`, not npm.
+- Requires and records the explicit allowlist in each client configuration.
+- Installs the committed master agent skill.
+- Modifies only the secure-mcp entries it owns; conflicting non-owned entries and skills are never overwritten.
+- Is idempotent: `install` may be re-run any time.
 
-#### Claude Desktop / Claude Code
+`check` verifies skill links, client configuration, allowlist scope, the Codex agent manifest, and server startup. **Restart agent sessions after installation** so clients reload skills and MCP configuration.
+
+```bash
+./scripts/install-agents.sh uninstall   # remove only what install added
+```
+
+On Windows, use the equivalent PowerShell installer:
+
+```powershell
+$env:SECURE_MCP_ALLOWED_ROOTS = "C:\absolute\path\to\repositories"
+.\scripts\install-agents.ps1 install
+.\scripts\install-agents.ps1 check
+.\scripts\install-agents.ps1 uninstall
+```
+
+The Bash script is Unix-only; the PowerShell script is the Windows equivalent with the same ownership and safety rules.
+
+| Harness | Skill location | MCP server config |
+| --- | --- | --- |
+| pi | `~/.agents/skills/secure-mcp` → checkout | `~/.pi/agent/mcp.json` |
+| Cursor | `~/.cursor/skills/secure-mcp` → checkout | `~/.cursor/mcp.json` |
+| OpenAI Codex | `~/.codex/agents/secure-mcp.toml` | `~/.codex/config.toml` |
+
+## Client compatibility and configuration
+
+The server strictly requires MCP protocol revision `2026-07-28` and rejects legacy 2025-era `initialize` openings. Client support for that protocol revision is decided by the client's own MCP implementation; this project does not weaken the server with a legacy fallback. The configuration shapes below follow each client's current official documentation. Verify your installed client version negotiates `2026-07-28` (the repo's smoke test verifies the server against the official MCP SDK v2 client).
+
+| Client | Installer support | Config location | Protocol status |
+| --- | --- | --- | --- |
+| OpenAI Codex | Automated | `~/.codex/config.toml` (`[mcp_servers.secure-mcp]`) | Config shape verified; client must support `2026-07-28` |
+| Cursor | Automated | `~/.cursor/mcp.json` (`mcpServers`) | Config shape verified; client must support `2026-07-28` |
+| Claude Desktop | Manual | `claude_desktop_config.json` (`mcpServers`) | Config shape verified; client must support `2026-07-28` |
+| Claude Code | Manual | `.mcp.json` or `claude mcp add --transport stdio` | Config shape verified; client must support `2026-07-28` |
+| VS Code / GitHub Copilot | Manual | `.vscode/mcp.json` or VS Code `settings.json` (top-level `servers`) | Config shape verified; client must support `2026-07-28` |
+| pi | Automated | `~/.pi/agent/mcp.json` (`mcpServers`) | Installer convention; client must support `2026-07-28` |
+| Generic stdio MCP client | Manual | Client-specific | Must send `server/discover` and support `2026-07-28` |
+
+### Manual client configuration (checkout)
+
+Point the client at the built entrypoint and pass the allowlist. The `project_root` passed to a tool must resolve under an allowlisted root and should be absolute.
 
 ```json
 {
   "mcpServers": {
     "secure-mcp": {
-      "command": "npx",
-      "args": ["-y", "@brdndon/secure-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
       "env": {
         "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
       }
@@ -93,78 +147,103 @@ Point your client at the `secure-mcp` bin (or `npx`). Keep allowlisted roots nar
 }
 ```
 
-#### pi
+For **pi**, the same shape plus `lifecycle: "lazy"`, `directTools: true`, and `toolPrefix: "none"` exposes the canonical `secure_mcp_*` tool names used by the master skill. For **Claude Code**, either write that JSON to `.mcp.json` or run:
+
+```bash
+claude mcp add --transport stdio secure-mcp -- node /absolute/path/to/secure-mcp/dist/index.js
+```
+
+For **VS Code / GitHub Copilot**, use the top-level `servers` key in `.vscode/mcp.json` or your user `settings.json`, not `mcpServers`:
+
+```json
+{
+  "servers": {
+    "secure-mcp": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+      "env": {
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+      }
+    }
+  }
+}
+```
+
+See the hosted [client compatibility page](https://mcp.branalytic.com/docs/clients) and `docs/docs/clients.mdx` for per-client notes and source links.
+
+### First scan
+
+After install, ask your agent to run a defensive review of an allowlisted repo (or follow the skill at `.agents/skills/secure-mcp/SKILL.md`). A typical tool sequence:
+
+1. `secure_mcp_list_project_structure` — inventory and coverage
+2. `secure_mcp_analyze_architecture` — stacks, trust boundaries, `pack_batches`
+3. `secure_mcp_get_knowledge_pack` — first batch at summary detail
+4. Auth, injection, secrets, and threat-model tools as applicable
+5. Confirm candidate flows in source; do not generate exploit content
+6. `secure_mcp_produce_findings` — remediation-focused report
+
+Long reviews intentionally carry small intermediate artifacts between phases. See the [agent workflow](docs/docs/agent-workflow.md) and [security auditor skill](skills/security-auditor.md).
+
+## Filesystem authorization
+
+`SECURE_MCP_ALLOWED_ROOTS` is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected.
+
+```bash
+export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code/example-app
+```
+
+## Server-only via npm
+
+Use the published package only when you need the **stdio server process** and will supply your own agent skill/workflow. It does **not** install the skill or run `install-agents.sh`.
+
+The npm tarball intentionally contains only the compiled server and public project documents. It does not include the agent skill, installer, fixtures, source, or `server.json` registry metadata.
+
+After publication, install the v2 artifact explicitly:
+
+```bash
+export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
+
+# One-shot
+npx -y @brdndon/secure-mcp@2
+
+# Or install the bin
+npm install -g @brdndon/secure-mcp@2
+secure-mcp
+```
+
+Example client config (server only):
 
 ```json
 {
   "mcpServers": {
     "secure-mcp": {
       "command": "npx",
-      "args": ["-y", "@brdndon/secure-mcp"],
+      "args": ["-y", "@brdndon/secure-mcp@2"],
       "env": {
         "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
-      },
-      "lifecycle": "lazy",
-      "directTools": true,
-      "toolPrefix": "none"
+      }
     }
   }
 }
 ```
 
-`directTools: true` and `toolPrefix: "none"` expose the canonical `secure_mcp_*` tool names used by the master skill.
+Alternatives: `"command": "secure-mcp"` after a global install, or `"command": "node"` with `"args": ["/absolute/path/to/node_modules/@brdndon/secure-mcp/dist/index.js"]`.
 
-Cursor and other stdio clients use the same `command`, `args`, and `env` shape. If `npx` is inconvenient, use `"command": "secure-mcp"` after a global install, or `"command": "node"` with `"args": ["/absolute/path/to/node_modules/@brdndon/secure-mcp/dist/index.js"]`. The `project_root` passed to a tool must be visible to the machine running the MCP server; absolute paths are safest.
+## MCP protocol
 
-## Filesystem authorization
-
-`SECURE_MCP_ALLOWED_ROOTS` is required for tools that read a repository. It is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected.
-
-```bash
-export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code/example-app
-```
+secure-mcp 2.x uses `@modelcontextprotocol/server` v2 and serves only MCP protocol revision `2026-07-28` over stdio through `serveStdio` with `legacy: "reject"`. Modern clients negotiate via `server/discover`; no `initialize` handshake or session state is used, and legacy 2025-era `initialize` openings are rejected with the SDK's unsupported-protocol-version error. There is no fallback to MCP SDK v1.
 
 ## Develop from a checkout
 
-```bash
-git clone https://github.com/brbndon/secure-mcp.git
-cd secure-mcp
-pnpm install --frozen-lockfile
-pnpm build
-export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
-pnpm start
-```
-
-Development uses `tsx` and does not require a build first:
+After clone and `pnpm install --frozen-lockfile`:
 
 ```bash
 export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
-pnpm dev
+pnpm start          # node dist/index.js (run pnpm build first)
+pnpm dev            # tsx; no build required
+pnpm smoke          # scopes to bundled fixtures
 ```
-
-The smoke test scopes itself to the bundled fixtures:
-
-```bash
-pnpm smoke
-```
-
-Checkout-based MCP configs can point at `dist/index.js` instead of `npx`:
-
-```json
-{
-  "command": "node",
-  "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
-  "env": {
-    "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
-  }
-}
-```
-
-## MCP v2 protocol support
-
-Published npm `@brdndon/secure-mcp@1.0.0` still ships **MCP SDK v1** (`@modelcontextprotocol/sdk`). MCP SDK v2 is on the default branch (and other development checkouts) under **Unreleased** until the next versioned publish.
-
-On a checkout with SDK v2, the server serves stateless stdio connections. Modern clients negotiate protocol version `2026-07-28` through `server/discover` without the legacy `initialize` exchange. Existing client configuration does not need to change: the server still accepts the v1 handshake used by older clients, with compatibility tested against MCP SDK v1.30.0.
 
 After updating a git checkout, reinstall from the lockfile and rebuild before restarting the MCP client:
 
@@ -173,43 +252,11 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-## Install the skill for coding agents
-
-The repository ships a master skill at `.agents/skills/secure-mcp/SKILL.md`. It preflights a repository, routes a bounded multi-phase review through the `secure_mcp_*` tools, and completes only after a remediation report is delivered.
-
-```bash
-export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
-./scripts/install-agents.sh install
-./scripts/install-agents.sh check
-./scripts/install-agents.sh uninstall
-```
-
-The installer requires that explicit allowlist and writes it into each client configuration.
-
-| Harness | Skill location | MCP server config |
-| --- | --- | --- |
-| pi | `~/.agents/skills/secure-mcp` → checkout | `~/.pi/agent/mcp.json` |
-| Cursor | `~/.cursor/skills/secure-mcp` → checkout | `~/.cursor/mcp.json` |
-| OpenAI Codex | `~/.codex/agents/secure-mcp.toml` | `~/.codex/config.toml` |
-
-Restart agent sessions after installation so clients reload their skills and MCP configuration.
-
-## Suggested agent workflow
-
-1. `secure_mcp_list_project_structure`: inventory the repository and coverage.
-2. `secure_mcp_analyze_architecture`: identify stacks, trust boundaries, and `pack_batches`.
-3. `secure_mcp_get_knowledge_pack`: load the first batch at summary detail.
-4. Run authentication, injection-risk, secrets, and threat-model tools as applicable.
-5. Confirm candidate data flows in source; do not generate exploit content.
-6. `secure_mcp_produce_findings`: deliver the remediation-focused report.
-
-Long reviews intentionally carry small intermediate artifacts between phases. See the [agent workflow](docs/docs/agent-workflow.md) and [security auditor skill](skills/security-auditor.md).
-
 ## Project layout
 
 ```text
 src/
-  index.ts          # stdio entrypoint
+  index.ts          # stdio entrypoint (strict v2)
   server.ts         # McpServer factory
   config.ts         # environment-driven limits and root allowlist
   tools/            # one file per MCP tool
@@ -220,8 +267,9 @@ src/
 .agents/skills/     # installable secure-mcp agent skill
 docs/docs/          # architecture, workflow, and usage documentation
 examples/           # sample remediation-focused session
-scripts/            # installer, smoke test, and site capture utilities
+scripts/            # installers, smoke test, and package/CI utilities
 fixtures/           # intentionally vulnerable and stack-detection test apps
+server.json         # MCP Registry metadata (repo-only, not published to npm)
 ```
 
 ## Configuration
@@ -238,6 +286,7 @@ The server clamps configurable values to fixed hard limits.
 
 ## Documentation
 
+- [Client compatibility](docs/docs/clients.mdx)
 - [Architecture](docs/docs/architecture.md)
 - [Tool design](docs/docs/tool-design.md)
 - [Agent workflow](docs/docs/agent-workflow.md)

@@ -5,7 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { MODERN_PROTOCOL_VERSION, REQUIRED_TOOLS } from "./test-constants.js";
+import { LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, PROJECT_VERSION, REQUIRED_TOOLS } from "./test-constants.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverEntry = path.join(root, "src", "index.ts");
@@ -25,7 +25,7 @@ function modernMeta(): Record<string, unknown> {
     "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
     "io.modelcontextprotocol/clientInfo": {
       name: "secure-mcp-wire-test",
-      version: "1.0.0",
+      version: PROJECT_VERSION,
     },
     "io.modelcontextprotocol/clientCapabilities": {},
   };
@@ -90,6 +90,14 @@ test("modern stdio serves discovery and tools without the legacy handshake", { t
     const supportedVersions = discover.result?.supportedVersions;
     assert.ok(Array.isArray(supportedVersions));
     assert.ok(supportedVersions.includes(MODERN_PROTOCOL_VERSION));
+    assert.ok(
+      !supportedVersions.some((version) => String(version).startsWith("2025-")),
+      `Strict v2 server offered a 2025-era protocol: ${supportedVersions.join(", ")}`,
+    );
+    assert.ok(
+      !supportedVersions.includes(LEGACY_PROTOCOL_VERSION),
+      `Strict v2 server must not offer legacy protocol ${LEGACY_PROTOCOL_VERSION}`,
+    );
 
     const listed = await request({
       jsonrpc: "2.0",

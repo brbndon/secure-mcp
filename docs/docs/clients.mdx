@@ -1,0 +1,134 @@
+---
+title: Client compatibility
+description: Verified MCP client configuration shapes for secure-mcp 2.x, which requires protocol revision 2026-07-28 and rejects legacy handshakes.
+sidebar:
+  label: Client compatibility
+  order: 4
+---
+
+## Protocol requirement
+
+secure-mcp 2.x is a strict MCP v2 server: it serves protocol revision `2026-07-28` over stdio and rejects legacy 2025-era `initialize` openings. Do not use this server with a client that cannot negotiate `2026-07-28`. The repository's protocol tests verify the server against the official MCP SDK v2 client; client-side support is controlled by each client's release.
+
+The config shapes below follow each client's current official documentation and use absolute paths. `SECURE_MCP_ALLOWED_ROOTS` is always required.
+
+| Client | Installer support | Config location | Notes |
+| --- | --- | --- | --- |
+| OpenAI Codex | Automated | `~/.codex/config.toml` | `[mcp_servers.secure-mcp]` table with `command`, `args`, `env` |
+| Cursor | Automated | `~/.cursor/mcp.json` | `mcpServers` object; stdio entries accept `command`, `args`, `env` |
+| Claude Desktop | Manual | `claude_desktop_config.json` | `mcpServers` object |
+| Claude Code | Manual | `.mcp.json` or `claude mcp add --transport stdio` | `mcpServers` object; project trust approval applies |
+| VS Code / GitHub Copilot | Manual | `.vscode/mcp.json` or VS Code user `settings.json` | Top-level `servers` shape, not `mcpServers` |
+| pi | Automated | `~/.pi/agent/mcp.json` | `mcpServers` object with pi lifecycle fields |
+| Generic stdio MCP client | Manual | Client-specific | Must send `server/discover` and support `2026-07-28` |
+
+## OpenAI Codex
+
+Codex stores MCP configuration in `~/.codex/config.toml` (or a trusted project `.codex/config.toml`). The installer writes this table:
+
+```toml
+[mcp_servers.secure-mcp]
+command = "node"
+args = ["/absolute/path/to/secure-mcp/dist/index.js"]
+
+[mcp_servers.secure-mcp.env]
+SECURE_MCP_ALLOWED_ROOTS = "/absolute/path/to/repositories"
+```
+
+Reference: [OpenAI Codex MCP documentation](https://developers.openai.com/codex/mcp).
+
+## Cursor
+
+Cursor reads global `~/.cursor/mcp.json` or project `.cursor/mcp.json`. Stdio entries use `command`, `args`, and `env`:
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+      "env": {
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+      }
+    }
+  }
+}
+```
+
+Reference: [Cursor MCP documentation](https://cursor.com/docs/context/mcp).
+
+## Claude Desktop
+
+Claude Desktop reads `claude_desktop_config.json` (`~/Library/Application Support/Claude/` on macOS, `%APPDATA%\Claude\` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+      "env": {
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+      }
+    }
+  }
+}
+```
+
+Reference: [MCP connect to local servers](https://modelcontextprotocol.io/quickstart/user).
+
+## Claude Code
+
+Add a local stdio server with:
+
+```bash
+claude mcp add --transport stdio secure-mcp -- node /absolute/path/to/secure-mcp/dist/index.js
+```
+
+Or use a `.mcp.json` with the `mcpServers` shape above. Project `.mcp.json` servers require workspace trust before they connect. Reference: [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+## VS Code / GitHub Copilot
+
+VS Code reads `.vscode/mcp.json` for repository-scoped servers or the user `settings.json` for personal configuration. It uses a **top-level `servers` key**, not `mcpServers`:
+
+```json
+{
+  "servers": {
+    "secure-mcp": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+      "env": {
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+      }
+    }
+  }
+}
+```
+
+Reference: [GitHub Docs: use MCP in your IDE](https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/extend-copilot-chat-with-mcp).
+
+## pi
+
+pi reads `~/.pi/agent/mcp.json`. The installer writes the `mcpServers` entry plus the pi fields that expose canonical tool names:
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/secure-mcp/dist/index.js"],
+      "env": {
+        "SECURE_MCP_ALLOWED_ROOTS": "/absolute/path/to/repositories"
+      },
+      "lifecycle": "lazy",
+      "directTools": true,
+      "toolPrefix": "none"
+    }
+  }
+}
+```
+
+## Generic stdio clients
+
+Any stdio MCP client that negotiates protocol revision `2026-07-28` can connect to `node /absolute/path/to/secure-mcp/dist/index.js` with `SECURE_MCP_ALLOWED_ROOTS` set. The client must open with `server/discover`; the server rejects claim-less `initialize` openings with the unsupported-protocol-version error.
