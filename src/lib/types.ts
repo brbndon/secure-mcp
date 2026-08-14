@@ -41,7 +41,7 @@ export interface CandidateDispositionPolicy {
 /**
  * Exhaustive disposition semantics shared by report sorting, risk accounting,
  * and remediation-priority filtering. `deferred` is confirmed open work;
- * `needs_review` is a candidate queue; fixed/suppressed/not_applicable are closed.
+ * `needs_review` is a candidate queue; fixed/suppressed/accepted_risk/not_applicable are closed.
  */
 export const CANDIDATE_DISPOSITION_POLICY = {
   reportable: { openWork: true, remediationPriority: true, sortRank: 2 },
@@ -49,6 +49,7 @@ export const CANDIDATE_DISPOSITION_POLICY = {
   needs_review: { openWork: false, remediationPriority: true, sortRank: 1 },
   fixed: { openWork: false, remediationPriority: false, sortRank: 0 },
   suppressed: { openWork: false, remediationPriority: false, sortRank: 0 },
+  accepted_risk: { openWork: false, remediationPriority: false, sortRank: 0 },
   not_applicable: { openWork: false, remediationPriority: false, sortRank: 0 },
 } as const satisfies Record<CandidateDisposition, CandidateDispositionPolicy>;
 

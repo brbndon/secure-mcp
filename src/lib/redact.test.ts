@@ -261,6 +261,7 @@ describe("secret evidence redaction", () => {
         needs_review: 1,
         suppressed: 0,
         not_applicable: 0,
+        accepted_risk: 0,
         deferred: 0,
         fixed: 0,
       },

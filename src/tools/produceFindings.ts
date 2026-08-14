@@ -120,7 +120,7 @@ export function findingsToMarkdown(
   });
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts, candidate_disposition_counts (includes fixed).\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation. Fixed/suppressed/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.`;
+const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk).\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.`;
 
 export function registerProduceFindings(server: McpServer): void {
   server.registerTool(
@@ -246,7 +246,7 @@ export function registerProduceFindings(server: McpServer): void {
           candidate_disposition_counts: dispositionCounts,
           notes: [
             "Each finding follows evidence → classify → impact → remediate → verify.",
-            "Deferred and reportable are confirmed open work; needs_review is an unconfirmed candidate; fixed/suppressed/not_applicable are excluded from open risk and remediation_priority.",
+            "Deferred and reportable are confirmed open work; needs_review is an unconfirmed candidate; fixed/suppressed/accepted_risk/not_applicable are excluded from open risk and remediation_priority.",
             "Do not expand this report into exploit or PoC attack material.",
           ],
         };

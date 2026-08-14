@@ -338,6 +338,15 @@ describe("produceFindings disposition counting and priority", () => {
           file: "src/f.ts",
           line: 6,
         }),
+        makeFinding({
+          id: "ACCEPT-1",
+          title: "Accepted residual risk",
+          severity: "medium",
+          disposition: "accepted_risk",
+          disposition_reason: "Owner accepted residual XSS in archived admin UI.",
+          file: "src/g.ts",
+          line: 7,
+        }),
       ],
       "Disposition report",
       "json",
@@ -349,6 +358,7 @@ describe("produceFindings disposition counting and priority", () => {
     assert.equal(counts.deferred, 1);
     assert.equal(counts.suppressed, 1);
     assert.equal(counts.not_applicable, 1);
+    assert.equal(counts.accepted_risk, 1);
     for (const count of Object.values(counts)) assert.ok(Number.isFinite(count));
 
     const priority = result.structured.executive_summary.remediation_priority as Array<{
@@ -360,6 +370,7 @@ describe("produceFindings disposition counting and priority", () => {
     assert.ok(priority.some((item) => item.title === "Deferred high-risk work"));
     assert.ok(!priority.some((item) => item.title === "Suppressed high candidate"));
     assert.ok(!priority.some((item) => item.title === "Not applicable critical candidate"));
+    assert.ok(!priority.some((item) => item.title === "Accepted residual risk"));
 
     const findings = result.structured.findings as Array<{ title: string; disposition?: string }>;
     // Open reportable should sort ahead of fixed even if fixed is more severe.

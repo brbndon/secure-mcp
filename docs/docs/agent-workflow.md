@@ -113,12 +113,13 @@ Dispositions for candidates and revalidated work:
 |-------------|---------|
 | `reportable` | Confirmed open weakness |
 | `needs_review` | Insufficient proof |
-| `suppressed` | Documented false positive / intentional |
+| `suppressed` | Documented false positive |
+| `accepted_risk` | Conscious residual with owner/rationale |
 | `not_applicable` | Out of scope or not present |
 | `deferred` | Real but postponed |
 | `fixed` | Remediation revalidated with evidence |
 
-Pass confirmed open work (`reportable` and, when intentionally postponed, `deferred`) into `secure_mcp_produce_findings`. Open work sorts before unconfirmed `needs_review` candidates. `fixed`, `suppressed`, and `not_applicable` remain counted in `candidate_disposition_counts`, but are excluded from open risk and `remediation_priority`. Git “still present” checks stay on the host agent; the server does not run git.
+Pass confirmed open work (`reportable` and, when intentionally postponed, `deferred`) into `secure_mcp_produce_findings`. Open work sorts before unconfirmed `needs_review` candidates. `fixed`, `suppressed`, `accepted_risk`, and `not_applicable` remain counted in `candidate_disposition_counts`, but are excluded from open risk and `remediation_priority`. Git “still present” checks stay on the host agent; the server does not run git.
 
 After category tools, sample high-value architecture surfaces (`surfaces` / `priority_paths` / `coverage_gaps`) that had **zero detector hits** — do not only chase candidates.
 

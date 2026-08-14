@@ -39,6 +39,7 @@ export const CandidateDispositionSchema = z.enum([
   "reportable",
   "needs_review",
   "suppressed",
+  "accepted_risk",
   "not_applicable",
   "deferred",
   "fixed",
@@ -144,7 +145,7 @@ export const FindingSchema = z
       .optional()
       .describe("Stable identity for the same source instance across audit runs"),
     disposition: CandidateDispositionSchema.optional().describe(
-      "Candidate disposition: reportable or deferred for confirmed open work; fixed after revalidation proves remediation; needs_review/suppressed/not_applicable otherwise",
+      "Candidate disposition: reportable or deferred for confirmed open work; fixed after revalidation proves remediation; accepted_risk for a conscious residual; needs_review/suppressed/not_applicable otherwise",
     ),
     disposition_reason: z.string().min(1).max(MAX_FINDING_DISPOSITION_REASON).optional(),
     source: z.string().min(1).max(MAX_FINDING_NARRATIVE).optional().describe("Evidence-backed input/source context"),
@@ -470,6 +471,8 @@ function defaultDispositionReason(
       return "Revalidation confirmed the remediation is present; attach the verification evidence.";
     case "suppressed":
       return "The candidate is suppressed; record the evidence-based suppression rationale.";
+    case "accepted_risk":
+      return "The team consciously accepts this residual risk; record owner, rationale, and review date.";
     case "not_applicable":
       return "The candidate is not applicable to the reviewed code path; record the supporting evidence.";
     case "needs_review":

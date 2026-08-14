@@ -178,6 +178,16 @@ describe("bounded finding payloads", () => {
 });
 
 describe("candidate dispositions", () => {
+  it("accepts accepted_risk as a closed ledger disposition", () => {
+    const finding = buildFinding({
+      ...sampleFinding(12),
+      disposition: "accepted_risk",
+      disposition_reason: undefined,
+    });
+    assert.equal(finding.disposition, "accepted_risk");
+    assert.match(finding.disposition_reason ?? "", /accept|residual|owner/i);
+  });
+
   it("accepts fixed disposition for revalidated remediations", () => {
     const finding = buildFinding({
       ...sampleFinding(12),

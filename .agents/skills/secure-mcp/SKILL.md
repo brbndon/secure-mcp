@@ -144,13 +144,14 @@ Read the cited files with local read-only tools and trace source → control →
 - Mark candidates with a disposition and a `disposition_reason` plus evidence:
   - `reportable` — confirmed weakness still open
   - `needs_review` — insufficient proof; keep investigating
-  - `suppressed` — known false positive / intentional with documented rationale
+  - `suppressed` — known false positive with documented rationale
+  - `accepted_risk` — conscious residual the team accepts (owner, rationale, review date)
   - `not_applicable` — out of scope or not present for this product surface
   - `deferred` — real but postponed with owner/context
   - `fixed` — revalidation proved the remediation (cite the fixed code path and verification evidence)
 - Set `disposition: "reportable"` only after manual confirmation of an open weakness.
 - Set `disposition: "fixed"` only after revalidation: open the cited location, confirm the control is in place, and record reason + evidence. Git “still present” / blame / history checks are **agent-side only** — the server does not run git on the target.
-- Treat `reportable` and `deferred` as confirmed open work; a deferred item must carry owner/context and stays ahead of unconfirmed `needs_review` candidates in the final rollup. Keep closed dispositions (`fixed`, `suppressed`, `not_applicable`) out of the final findings-tool input unless the handoff explicitly needs a disposition ledger. When included, closed items remain counted but are excluded from open risk and `remediation_priority`.
+- Treat `reportable` and `deferred` as confirmed open work; a deferred item must carry owner/context and stays ahead of unconfirmed `needs_review` candidates in the final rollup. Keep closed dispositions (`fixed`, `suppressed`, `accepted_risk`, `not_applicable`) out of the final findings-tool input unless the handoff explicitly needs a disposition ledger. When included, closed items remain counted but are excluded from open risk and `remediation_priority`. Use `accepted_risk` for a conscious residual and `suppressed` for false positives.
 - Also sample zero-hit high-value surfaces from architecture (see Phase 3 reconciliation), not only detector candidates.
 - Open every high or critical candidate at its cited line before prioritizing it.
 - For a suspected live secret, redact evidence, recommend immediate rotation and removal from source/history, and never test the credential.
