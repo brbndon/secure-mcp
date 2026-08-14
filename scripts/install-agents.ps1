@@ -87,6 +87,13 @@ function ConvertTo-Hashtable {
     }
     return $table
   }
+  if ($InputObject -is [System.Management.Automation.PSCustomObject]) {
+    $table = @{}
+    foreach ($property in $InputObject.PSObject.Properties) {
+      $table[$property.Name] = ConvertTo-Hashtable $property.Value
+    }
+    return $table
+  }
   if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
     $items = @()
     foreach ($item in $InputObject) { $items += ConvertTo-Hashtable $item }
@@ -396,7 +403,12 @@ function Set-SkillLink {
     }
     throw "refusing to replace non-symlink at $Target; move it aside and re-run"
   }
-  New-Item -ItemType Junction -Path $Target -Target $SkillSrc | Out-Null
+  $linkType = if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    "Junction"
+  } else {
+    "SymbolicLink"
+  }
+  New-Item -ItemType $linkType -Path $Target -Target $SkillSrc | Out-Null
   Write-Log "skill: linked $Target -> $SkillSrc"
 }
 
