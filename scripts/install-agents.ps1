@@ -59,9 +59,11 @@ function Assert-ConfiguredRoots {
   if ([string]::IsNullOrWhiteSpace($Roots)) {
     throw "set SECURE_MCP_ALLOWED_ROOTS to the repositories this server may inspect"
   }
-  $parts = $Roots -split [IO.Path]::PathSeparator |
-    ForEach-Object { $_.Trim() } |
-    Where-Object { $_ }
+  $parts = @(
+    $Roots -split [IO.Path]::PathSeparator |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ }
+  )
   if ($parts.Count -eq 0) {
     throw "SECURE_MCP_ALLOWED_ROOTS must contain at least one path"
   }
@@ -228,7 +230,11 @@ function Test-JsonRootsOk {
   $envMap = if ($entry -is [hashtable] -and $entry.ContainsKey("env")) { $entry["env"] } else { $null }
   $raw = if ($envMap -is [hashtable] -and $envMap.ContainsKey("SECURE_MCP_ALLOWED_ROOTS")) { [string]$envMap["SECURE_MCP_ALLOWED_ROOTS"] } else { "" }
   if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
-  $parts = $raw -split [IO.Path]::PathSeparator | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+  $parts = @(
+    $raw -split [IO.Path]::PathSeparator |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ }
+  )
   if ($parts.Count -eq 0) { return $false }
   foreach ($part in $parts) {
     if (-not [IO.Path]::IsPathRooted($part)) { return $false }

@@ -38,6 +38,9 @@ const REQUIRED_TOOLS = [
   "secure_mcp_review_secrets",
   "secure_mcp_build_remediation_threat_model",
   "secure_mcp_produce_findings",
+  "secure_mcp_list_authorized_roots",
+  "secure_mcp_list_projects",
+  "secure_mcp_run_local_scanners",
 ];
 const tempBase = mkdtempSync(path.join(os.tmpdir(), "secure-mcp-package-"));
 const consumer = path.join(tempBase, "consumer");
