@@ -52,7 +52,12 @@ export type SurfaceKind =
   | "webview"
   | "secure_storage"
   | "config"
-  | "data_layer";
+  | "data_layer"
+  | "agent_tool"
+  | "webhook"
+  | "cron"
+  | "rpc"
+  | "queue";
 
 export type SurfaceExposure = "public" | "authenticated" | "internal" | "unknown";
 
@@ -103,6 +108,11 @@ const HIGH_VALUE_KINDS = new Set<SurfaceKind>([
   "webview",
   "secure_storage",
   "data_layer",
+  "agent_tool",
+  "webhook",
+  "cron",
+  "rpc",
+  "queue",
 ]);
 
 function baseName(relativePath: string): string {
@@ -265,6 +275,12 @@ function buildTypedSurfaces(
   const webviewName = /webview|wkwebview|wkscript|javascriptbridge|react-native-webview/i;
   const secureStorageName = /keychain|securestore|secure-store|secentitlement|ksecattr/i;
   const dataName = /prisma|drizzle|supabase|repository|swiftdata|coredata|model\//i;
+  const webhookName = /webhook|stripe-hook|svix/i;
+  const cronName = /(^|\/)(?:cron|crons|scheduled)(?:\/|\.[cm]?[jt]sx?$)|\/jobs\/scheduled/i;
+  const agentToolName =
+    /(^|\/)(?:mcp|agent-?tools?)(?:\/|-)|tool-handler|registertool|(^|\/)tools\/[^/]+\.[cm]?[jt]sx?$/i;
+  const rpcName = /(^|\/)(?:rpc|trpc|grpc)(?:\/|\.)/i;
+  const queueName = /(^|\/)(?:queues?|workers?|bullmq|inngest|sqs)(?:\/|\.)/i;
 
   // When Next is detected, its TS/JS paths are represented by the more precise
   // Next surfaces. Avoid duplicating them as generic TypeScript surfaces.
@@ -414,6 +430,45 @@ function buildTypedSurfaces(
         : stack === "common"
           ? false
           : isJavaScriptOrTypeScriptPath(path);
+
+    push(
+      "webhook",
+      stackPaths((path) => sourceMatchesStack(path) && webhookName.test(path)),
+      "public",
+      "Verify signatures and authenticate the publisher before side effects.",
+      [stack],
+    );
+    push(
+      "cron",
+      stackPaths((path, base) => sourceMatchesStack(path) && (cronName.test(path) || /^cron\.[cm]?[jt]sx?$/i.test(base))),
+      "internal",
+      "Treat scheduled jobs as privileged: lock down triggers and secrets.",
+      [stack],
+    );
+    if (stack !== "swift") {
+      push(
+        "agent_tool",
+        stackPaths((path) => isJavaScriptOrTypeScriptPath(path) && agentToolName.test(path)),
+        "internal",
+        "Treat agent/MCP tools as public ingress: authenticate callers and constrain side effects.",
+        [stack],
+      );
+      push(
+        "rpc",
+        stackPaths((path) => isJavaScriptOrTypeScriptPath(path) && rpcName.test(path)),
+        "public",
+        "Authenticate and authorize every RPC procedure; do not trust client-supplied identity.",
+        [stack],
+      );
+      push(
+        "queue",
+        stackPaths((path) => isJavaScriptOrTypeScriptPath(path) && queueName.test(path)),
+        "internal",
+        "Validate queue payloads as untrusted input and isolate worker credentials.",
+        [stack],
+      );
+    }
+
     push(
       "auth_surface",
       stackPaths((path) => sourceMatchesStack(path) && authName.test(path)),
@@ -482,6 +537,11 @@ function toolsForSurfaceKind(kind: SurfaceKind): string[] {
     case "auth_surface":
     case "deep_link":
     case "webview":
+    case "agent_tool":
+    case "webhook":
+    case "cron":
+    case "rpc":
+    case "queue":
       return [
         "secure_mcp_check_authentication",
         "secure_mcp_analyze_injection_risks",

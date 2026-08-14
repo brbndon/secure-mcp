@@ -529,6 +529,28 @@ describe("architecture typed surfaces", () => {
         "export function requireUser() {}\n",
         "utf8",
       );
+      await fs.mkdir(path.join(root, "app", "api", "webhooks", "stripe"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "webhooks", "stripe", "route.ts"),
+        "export async function POST() { return Response.json({}); }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "app", "api", "cron"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "cron", "route.ts"),
+        "export async function GET() { return Response.json({}); }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "tools"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "tools", "lookup.ts"),
+        "export async function lookup() {}\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "trpc"), { recursive: true });
+      await fs.writeFile(path.join(root, "src", "trpc", "router.ts"), "export const router = {};\n", "utf8");
+      await fs.mkdir(path.join(root, "src", "workers"), { recursive: true });
+      await fs.writeFile(path.join(root, "src", "workers", "ingest.ts"), "export async function ingest() {}\n", "utf8");
 
       await server.connect(serverTransport);
       await client.connect(clientTransport);
@@ -563,6 +585,11 @@ describe("architecture typed surfaces", () => {
       assert.ok(data.surfaces.length > 0);
       assert.ok(data.surfaces.some((s) => s.kind === "http_route"));
       assert.ok(data.surfaces.some((s) => s.kind === "middleware" || s.kind === "auth_surface"));
+      assert.ok(data.surfaces.some((s) => s.kind === "webhook"));
+      assert.ok(data.surfaces.some((s) => s.kind === "cron"));
+      assert.ok(data.surfaces.some((s) => s.kind === "agent_tool"));
+      assert.ok(data.surfaces.some((s) => s.kind === "rpc"));
+      assert.ok(data.surfaces.some((s) => s.kind === "queue"));
       for (const surface of data.surfaces) {
         assert.ok(surface.auth_expectation.length > 0);
         assert.ok(["public", "internal", "unknown"].includes(surface.exposure));
@@ -636,6 +663,11 @@ describe("architecture typed surfaces", () => {
       assert.ok(!data.surfaces.some((s) => s.kind === "middleware"));
       assert.ok(!data.surfaces.some((s) => s.kind === "page_entry"));
       assert.ok(!data.surfaces.some((s) => s.kind === "deep_link"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "webhook"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "cron"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "agent_tool"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "rpc"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "queue"));
       assert.ok(data.threat_highlights.some((item) => item.pack_id === "swift-ios"));
       assert.ok(!data.threat_highlights.some((item) => item.stack === "nextjs"));
       assert.ok(!data.threat_highlights.some((item) => /server action|middleware/i.test(item.text)));
