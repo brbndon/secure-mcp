@@ -14,4 +14,5 @@ export const REQUIRED_TOOLS = [
   "secure_mcp_produce_findings",
   "secure_mcp_list_authorized_roots",
   "secure_mcp_list_projects",
+  "secure_mcp_run_local_scanners",
 ] as const;
