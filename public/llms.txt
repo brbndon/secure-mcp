@@ -66,7 +66,7 @@ The server strictly requires MCP protocol revision `2026-07-28`. Configuration s
 - `secure_mcp_analyze_injection_risks`: injection-class and unsafe-boundary candidates.
 - `secure_mcp_review_secrets`: secret-hygiene candidates, redacted evidence, and rotation/remediation guidance.
 - `secure_mcp_build_remediation_threat_model`: optional STRIDE-oriented assets, trust boundaries, residual risks, and hardening controls; never an attack plan.
-- `secure_mcp_produce_findings`: deduplicated, prioritized remediation report from manually confirmed findings.
+- `secure_mcp_produce_findings`: deduplicated, prioritized remediation report from manually confirmed findings; each finding carries a `validation_status` label (`static_only` or `needs_runtime`) and `response_format: "sarif"` returns a redacted SARIF 2.1.0 subset for CI annotation adjacency.
 
 All tools are read-only. Scanning tools inspect files within explicit count, size, depth, aggregate-byte, ignore-pattern, and focus-path bounds. They do not execute target-project code, install its dependencies, or contact target services.
 
@@ -81,6 +81,12 @@ All tools are read-only. Scanning tools inspect files within explicit count, siz
 7. If at least one confirmed finding remains, pass that set to `secure_mcp_produce_findings`. If none remain, skip that tool because it requires a non-empty findings array. In either case, write a human-facing summary, prioritized fix plan when applicable, residual risks, coverage/method limits, and retest steps.
 
 For a category-only request, use the relevant tool but preserve the same defensive framing, root authorization, evidence confirmation, and coverage honesty.
+
+## Export and validation handoff
+
+- `secure_mcp_produce_findings` accepts `response_format: "json" | "markdown" | "sarif"`. The SARIF form is a redacted SARIF 2.1.0 subset (severity→level, stable rule ids, file/line locations, remediation help text) intended for CI annotations; secrets are redacted the same way as every other output boundary.
+- Every produced finding carries `validation_status`: `static_only` when code review alone confirms and verifies the fix, or `needs_runtime` when owner-authorized runtime/configuration verification is still required. `needs_runtime` is a handoff signal to schedule a retest (manual QA or existing DAST), never an exploit step.
+- Reviews are resumable: re-run any category tool with the same `project_root` plus `focus_paths` to resume a partially covered area; see `review_checkpoint` on the findings report.
 
 ## Guardrails and interpretation
 

@@ -25,7 +25,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
 async function callProduceResult(
   findings: Finding | Finding[],
   reportTitle = "Boundary report",
-  response_format: "json" | "markdown" = "markdown",
+  response_format: "json" | "markdown" | "sarif" = "markdown",
 ): Promise<{ text: string; structured: any }> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createServer({
@@ -439,5 +439,208 @@ describe("produceFindings disposition counting and priority", () => {
     assert.doesNotMatch(json.structured.summary, /Prioritise remediation/i);
     assert.match(markdown.text, /Open remediation work by severity/i);
     assert.match(markdown.text, /Ledger items by severity/i);
+  });
+});
+
+describe("produceFindings validation_status labels", () => {
+  it("labels unconfirmed heuristic candidates needs_runtime by default", async () => {
+    const result = await callProduceResult(
+      makeFinding({ id: "V-1", title: "Unconfirmed candidate" }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0]?.validation_status, "needs_runtime");
+  });
+
+  it("labels revalidated fixed findings static_only", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-2",
+        title: "Revalidated control",
+        disposition: "fixed",
+        disposition_reason: "The control is present and verified.",
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("labels a confirmed finding with cleared proof gaps static_only", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-3",
+        title: "Confirmed static finding",
+        disposition: "reportable",
+        disposition_reason: "Confirmed via code review.",
+        proof_gap: [],
+        counterevidence: [],
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("preserves an explicit validation_status override", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-4",
+        title: "Explicitly static",
+        disposition: "needs_review",
+        validation_status: "static_only",
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("reports validation_counts in the executive summary", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({ id: "V-5", title: "Needs runtime A", file: "src/a.ts", line: 1 }),
+        makeFinding({
+          id: "V-6",
+          title: "Static B",
+          file: "src/b.ts",
+          line: 1,
+          disposition: "fixed",
+          disposition_reason: "Verified.",
+        }),
+      ],
+      "Validation count report",
+      "json",
+    );
+    const counts = result.structured.executive_summary.validation_counts as Record<
+      string,
+      number
+    >;
+    assert.equal(counts.needs_runtime, 1);
+    assert.equal(counts.static_only, 1);
+  });
+
+  it("exposes a resumable review_checkpoint for interrupted audits", async () => {
+    const result = await callProduceResult(
+      makeFinding({ id: "V-7", title: "Resumable candidate", file: "src/c.ts", line: 1 }),
+      "Checkpoint report",
+      "json",
+    );
+    const checkpoint = result.structured.review_checkpoint as {
+      resumable: boolean;
+      next_steps: string[];
+    };
+    assert.equal(checkpoint.resumable, true);
+    assert.ok(checkpoint.next_steps.length >= 1);
+    assert.match(checkpoint.next_steps.join("\n"), /focus_paths/);
+  });
+});
+
+describe("produceFindings SARIF export", () => {
+  it("emits a valid SARIF 2.1.0 subset", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({
+          id: "S-1",
+          title: "Unsafe command",
+          severity: "critical",
+          confidence: "high",
+          category: "injection-risk",
+          file: "app/api/search/route.ts",
+          line: 12,
+          cwe: "CWE-78",
+          disposition: "reportable",
+          disposition_reason: "Confirmed open weakness.",
+          proof_gap: [],
+          counterevidence: [],
+        }),
+        makeFinding({
+          id: "S-2",
+          title: "Hardcoded secret",
+          severity: "medium",
+          confidence: "medium",
+          category: "secrets",
+          file: "lib/auth.ts",
+          line: 3,
+          disposition: "needs_review",
+        }),
+      ],
+      "SARIF report",
+      "sarif",
+    );
+    const sarif = result.structured;
+    assert.equal(sarif.version, "2.1.0");
+    assert.match(sarif.$schema, /sarif-2\.1\.0/);
+    assert.equal(sarif.runs.length, 1);
+    const run = sarif.runs[0];
+    assert.equal(run.tool.driver.name, "secure-mcp");
+    assert.ok(run.tool.driver.version);
+    assert.equal(run.results.length, 2);
+    const rules = run.tool.driver.rules as Array<{ id: string }>;
+    const ruleIds = new Set(rules.map((rule) => rule.id));
+    for (const res of run.results) {
+      assert.ok(ruleIds.has(res.ruleId), `missing rule ${res.ruleId}`);
+      assert.equal(typeof res.ruleIndex, "number");
+      assert.equal(rules[res.ruleIndex].id, res.ruleId);
+    }
+    const first = run.results.find((r) => r.properties.instance_id);
+    assert.ok(first, "expected a result");
+    const location = first.locations.find((loc) => loc.physicalLocation.artifactLocation.uri);
+    assert.ok(location, "expected a physical location when a file is present");
+  });
+
+  it("maps severity to SARIF level", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({ id: "L-1", title: "Critical", severity: "critical", file: "a.ts", line: 1 }),
+        makeFinding({ id: "L-2", title: "High", severity: "high", file: "b.ts", line: 1 }),
+        makeFinding({ id: "L-3", title: "Medium", severity: "medium", file: "c.ts", line: 1 }),
+        makeFinding({ id: "L-4", title: "Low", severity: "low", file: "d.ts", line: 1 }),
+        makeFinding({ id: "L-5", title: "Info", severity: "info", file: "e.ts", line: 1 }),
+      ],
+      "Level map",
+      "sarif",
+    );
+    const levels = result.structured.runs[0].results.map((r: { level: string }) => r.level);
+    assert.deepEqual(levels, ["error", "error", "warning", "note", "note"]);
+  });
+
+  it("redacts secrets from SARIF export", async () => {
+    const secret = "sarifsecretvalue777";
+    const result = await callProduceResult(
+      makeFinding({
+        id: "R-1",
+        title: "Leak",
+        category: `secrets api_key=${secret}`,
+        evidence: `token=${secret}`,
+        file: "lib/auth.ts",
+        line: 1,
+      }),
+      "Redaction SARIF",
+      "sarif",
+    );
+    assert.ok(!JSON.stringify(result.structured).includes(secret));
+    assert.ok(!result.text.includes(secret));
+  });
+
+  it("emits remediation help text on SARIF rules", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "H-1",
+        title: "Unsafe sink",
+        remediation: "Parameterize queries.",
+        file: "src/x.ts",
+        line: 2,
+      }),
+      "Help text",
+      "sarif",
+    );
+    const rule = result.structured.runs[0].tool.driver.rules[0];
+    assert.ok(rule.help.text.length > 0);
   });
 });
