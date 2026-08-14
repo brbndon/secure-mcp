@@ -38,6 +38,9 @@ Rule-based scanners are useful, but agents still need:
 | `secure_mcp_review_secrets` | Secret hygiene, rotation, and remediation |
 | `secure_mcp_build_remediation_threat_model` | STRIDE fragments for hardening priorities |
 | `secure_mcp_produce_findings` | Deduplicated, prioritized remediation report |
+| `secure_mcp_list_authorized_roots` | List allowlisted roots and whether each exists |
+| `secure_mcp_list_projects` | Depth-capped discovery of package-manifest project roots |
+| `secure_mcp_run_local_scanners` | Optional, default-off compose of local `semgrep`/`gitleaks` |
 
 All tools are read-only, never execute project code, and respect ignore patterns and size caps. Bounded audit tools return structured `coverage` with reviewed and excluded paths, ignore reasons, caps, truncation, and candidate dispositions. An empty finding list is not a claim that the entire tree was scanned.
 
@@ -281,6 +284,7 @@ server.json         # MCP Registry metadata (repo-only, not published to npm)
 | `SECURE_MCP_MAX_FILE_BYTES` | `262144` | Per-file read cap |
 | `SECURE_MCP_MAX_DEPTH` | `12` | Directory depth cap |
 | `SECURE_MCP_MAX_TOTAL_BYTES` | `67108864` | Aggregate file-size cap per walk |
+| `SECURE_MCP_LOCAL_SCANNERS` | unset (off) | Set `1` to allow `secure_mcp_run_local_scanners` (still requires `enable: true` per call) |
 
 The server clamps configurable values to fixed hard limits.
 
