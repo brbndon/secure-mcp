@@ -12,4 +12,6 @@ export const REQUIRED_TOOLS = [
   "secure_mcp_review_secrets",
   "secure_mcp_build_remediation_threat_model",
   "secure_mcp_produce_findings",
+  "secure_mcp_list_authorized_roots",
+  "secure_mcp_list_projects",
 ] as const;
