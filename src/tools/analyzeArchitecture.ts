@@ -218,6 +218,84 @@ function classifyBuckets(relativePaths: string[]): SurfaceBuckets {
   };
 }
 
+/**
+ * Unsupported-stack honesty: detect recognizable-but-uncovered stacks so agents
+ * report a limited generic review instead of pretending full AppSec coverage.
+ * Detection is marker-file based (bounded, no extra tree walk); no pack is
+ * routed for these stacks and no surfaces are invented for them.
+ */
+export interface UnsupportedStackSignal {
+  stack: string;
+  evidence: string[];
+  frameworks: string[];
+}
+
+const UNSUPPORTED_MARKER_MAP: ReadonlyArray<{
+  stack: string;
+  markers: readonly string[];
+}> = [
+  {
+    stack: "python",
+    markers: [
+      "pyproject.toml",
+      "requirements.txt",
+      "setup.py",
+      "setup.cfg",
+      "Pipfile",
+      "Pipfile.lock",
+      "poetry.lock",
+    ],
+  },
+  { stack: "go", markers: ["go.mod", "go.sum"] },
+  {
+    stack: "android-kotlin",
+    markers: ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+  },
+  { stack: "java", markers: ["pom.xml", "build.xml", "gradlew"] },
+  { stack: "dotnet", markers: ["global.json", "packages.config", "Directory.Build.props"] },
+  { stack: "ruby", markers: ["Gemfile", "Gemfile.lock", "Rakefile"] },
+  { stack: "php", markers: ["composer.json", "composer.lock"] },
+  { stack: "rust", markers: ["Cargo.toml", "Cargo.lock"] },
+];
+
+const PYTHON_FRAMEWORK_RE =
+  /\b(fastapi|django|flask|starlette|tornado|sanic|pyramid|aiohttp)\b/gi;
+
+/** Exported for tests: map top-level entry names to unsupported-stack signals. */
+export function unsupportedSignalsForEntries(
+  topLevelEntries: readonly string[],
+): UnsupportedStackSignal[] {
+  const names = topLevelEntries.map((entry) => entry.replace(/\/$/, ""));
+  const signals: UnsupportedStackSignal[] = [];
+  for (const { stack, markers } of UNSUPPORTED_MARKER_MAP) {
+    const evidence = markers.filter((marker) => names.includes(marker));
+    if (evidence.length === 0) continue;
+    signals.push({ stack, evidence, frameworks: [] });
+  }
+  return signals;
+}
+
+/** Enrich python signals with a framework name read from requirements/pyproject. */
+async function enrichPythonFrameworks(
+  root: string,
+  signals: UnsupportedStackSignal[],
+  maxFileBytes: number | undefined,
+  allowedRoots: readonly string[] | undefined,
+): Promise<void> {
+  const python = signals.find((signal) => signal.stack === "python");
+  if (!python) return;
+  for (const file of ["requirements.txt", "pyproject.toml"]) {
+    const content = await readProjectFileIfExists(root, file, maxFileBytes, allowedRoots);
+    if (!content) continue;
+    const matches = content.content.match(PYTHON_FRAMEWORK_RE) ?? [];
+    for (const match of matches) {
+      const framework = match.toLowerCase();
+      if (!python.frameworks.includes(framework)) python.frameworks.push(framework);
+      if (python.frameworks.length >= 4) return;
+    }
+  }
+}
+
 function collectKindPaths(
   relativePaths: string[],
   matcher: (relativePath: string, base: string) => boolean,
@@ -762,6 +840,16 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
         const safeGaps = redactCoverageGaps(coverage_gaps);
         const safePriorityPaths = redactedSecretPaths(priority_paths);
 
+        // Unsupported-stack honesty: flag recognizable-but-uncovered stacks so
+        // agents degrade to a limited generic review instead of claiming coverage.
+        const unsupported = unsupportedSignalsForEntries(profile.topLevelEntries);
+        await enrichPythonFrameworks(
+          root,
+          unsupported,
+          config.maxFileBytes,
+          config.allowedRoots,
+        );
+
         const packageJson = await readProjectFileIfExists(
           root,
           "package.json",
@@ -847,12 +935,19 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
             priority_paths: safePriorityPaths,
           }),
         );
+        if (unsupported.length > 0) {
+          security_brief.notes.push(
+            `Unsupported stack(s) detected (${unsupported.map((s) => s.stack).join(", ")}): limited generic review only — no stack-specific packs or surfaces for these stacks.`,
+          );
+        }
 
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}.`,
+          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}${unsupported.length > 0 ? `; unsupported=${unsupported.map((s) => s.stack).join(",")}` : ""}.`,
           stacks,
+          /** Recognizable-but-uncovered stacks (marker-file detected). Limited generic review only. */
+          unsupported_signals: unsupported,
           detection: {
             hasExpo: profile.hasExpo,
             hasMacOS: profile.hasMacOS,
@@ -911,6 +1006,15 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
             "Defensive architecture review for control placement and remediation planning.",
             "Retain surfaces, coverage_gaps, priority_paths, security_brief, and threat_highlights as the architecture-as-brief artifact.",
             "threat_highlights is an advisory shortlist gated by detected/forced stacks — not findings and not a noise tier.",
+            ...(unsupported.length > 0
+              ? [
+                  `Unsupported stack(s) detected: ${unsupported
+                    .map((s) =>
+                      s.frameworks.length > 0 ? `${s.stack} (${s.frameworks.join(", ")})` : s.stack,
+                    )
+                    .join(", ")}. This review degrades to core/secrets/threat-model; report a limited generic review, not full stack coverage.`,
+                ]
+              : []),
             ...(surfaces_truncated
               ? [
                   "surface kind cap reached; some later stacks' surfaces were dropped — run architecture per deployable package root for a mixed monorepo.",
