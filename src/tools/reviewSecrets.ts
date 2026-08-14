@@ -1,6 +1,10 @@
 /**
  * Tool: secure_mcp_review_secrets
  * Defensive identification of secret exposure for rotation and remediation.
+ *
+ * applied_pack_ids derives from detector families that actually evaluated
+ * successfully opened content. Routed packs stay in
+ * knowledge_pack_traceability.consulted_pack_ids.
  */
 
 import type { McpServer } from "@modelcontextprotocol/server";
@@ -77,6 +81,35 @@ export function secretsPackIdsForStack(
   return recommendCategoryPackIds(detectorStacks, ["secrets"]);
 }
 
+export const SECRETS_DETECTOR_FAMILIES = [
+  "secrets.secret-patterns",
+  "secrets.environment-file",
+  "web-next.client-bundle-secrets",
+  "swift-ios.secret-config",
+  "swift-ios.secret-handling",
+] as const;
+export type SecretsDetectorFamily = (typeof SECRETS_DETECTOR_FAMILIES)[number];
+
+const PACK_ID_BY_SECRETS_FAMILY: Record<SecretsDetectorFamily, PackId> = {
+  "secrets.secret-patterns": "secrets",
+  "secrets.environment-file": "secrets",
+  "web-next.client-bundle-secrets": "web-next",
+  "swift-ios.secret-config": "swift-ios",
+  "swift-ios.secret-handling": "swift-ios",
+};
+
+/** Packs behind families that actually evaluated opened content. */
+export function appliedSecretsPackIds(evaluatedFamilies: readonly string[]): PackId[] {
+  const set = new Set(evaluatedFamilies);
+  const ids: PackId[] = [];
+  for (const family of SECRETS_DETECTOR_FAMILIES) {
+    if (!set.has(family)) continue;
+    const packId = PACK_ID_BY_SECRETS_FAMILY[family];
+    if (packId && !ids.includes(packId)) ids.push(packId);
+  }
+  return ids;
+}
+
 const FALSE_POSITIVE_HINTS =
   /example|sample|placeholder|your[_-]?key|xxx+|todo|changeme|dummy|fake|test[_-]?key|process\.env/i;
 
@@ -105,7 +138,7 @@ const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential 
 
 Args: project_root, stack?, max_files?, focus_paths?, response_format.
 
-Returns: findings[] (category secrets, remediation fields; evidence redacted), env_related_files, truncated, applied_pack_ids.
+Returns: findings[] (category secrets, remediation fields; evidence redacted), env_related_files, truncated, applied_pack_ids (packs whose detectors evaluated content), knowledge_pack_traceability.consulted_pack_ids (routed secrets packs).
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
@@ -226,6 +259,7 @@ export function registerReviewSecrets(
             /(^|\/)\.env($|\.(local|development|production|staging))/i.test(file.relativePath) &&
             !file.relativePath.endsWith(".example")
           ) {
+            detectorFamiliesRun.add("secrets.environment-file");
             findings.push(
               buildFinding({
                 id: nextId(),
@@ -259,6 +293,7 @@ export function registerReviewSecrets(
             shouldRunSwiftSecretDetectors(params.stack, detectedStacks) &&
             /GoogleService-Info\.plist$/i.test(file.relativePath)
           ) {
+            detectorFamiliesRun.add("swift-ios.secret-config");
             findings.push(
               buildFinding({
                 id: nextId(),
@@ -429,14 +464,16 @@ export function registerReviewSecrets(
         const finalizedCoverage = coverageSession.finish(findings);
         const safeFindings = redactFindings(findings);
 
-        const applied_pack_ids = secretsPackIdsForStack(params.stack, detectedStacks);
+        const consulted_pack_ids = secretsPackIdsForStack(params.stack, detectedStacks);
+        const applied_pack_ids = appliedSecretsPackIds([...detectorFamiliesRun]);
         const detectorFamiliesAvailable = [
           "secrets.secret-patterns",
+          "secrets.environment-file",
           ...(shouldRunNextjsSecretDetectors(params.stack, detectedStacks)
             ? ["web-next.client-bundle-secrets"]
             : []),
           ...(shouldRunSwiftSecretDetectors(params.stack, detectedStacks)
-            ? ["swift-ios.secret-handling"]
+            ? ["swift-ios.secret-handling", "swift-ios.secret-config"]
             : []),
         ];
         const data = {
@@ -450,7 +487,7 @@ export function registerReviewSecrets(
           coverage: redactCoverageReport(finalizedCoverage),
           applied_pack_ids,
           knowledge_pack_traceability: {
-            consulted_pack_ids: applied_pack_ids,
+            consulted_pack_ids,
             detector_families_run: [...detectorFamiliesRun].sort(),
             detector_families_not_run: detectorFamiliesAvailable
               .filter((family) => !detectorFamiliesRun.has(family))
@@ -461,7 +498,7 @@ export function registerReviewSecrets(
             "Defensive secret hygiene only: identify → classify → rotate/remediate.",
             "Evidence is partially redacted; open the file locally to confirm.",
             "Never use discovered credentials against systems — only help owners fix and rotate.",
-            "Pack ids are for traceability; load checklists via secure_mcp_get_knowledge_pack when needed.",
+            "applied_pack_ids are packs whose detectors evaluated opened content; knowledge_pack_traceability.consulted_pack_ids are the routed secrets packs for this stack.",
           ],
         };
 

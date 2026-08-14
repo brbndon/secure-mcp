@@ -243,6 +243,47 @@ export function threatModelPackIds(stacks: readonly string[]): PackId[] {
   return uniquePackIds(["threat-model", "core", ...recommended]);
 }
 
+export const THREAT_MODEL_DETECTOR_FAMILIES = [
+  "threat-model.stride",
+  "web-next.stride",
+  "swift-ios.stride",
+] as const;
+export type ThreatModelDetectorFamily = (typeof THREAT_MODEL_DETECTOR_FAMILIES)[number];
+
+const PACK_ID_BY_THREAT_FAMILY: Record<ThreatModelDetectorFamily, PackId> = {
+  "threat-model.stride": "threat-model",
+  "web-next.stride": "web-next",
+  "swift-ios.stride": "swift-ios",
+};
+
+/**
+ * Families whose stack-gated STRIDE fragments were actually emitted.
+ * Generic STRIDE is always applied; Next/Swift families only when those
+ * stacks contributed threat content.
+ */
+export function threatModelFamiliesForStacks(
+  stacks: readonly string[],
+): ThreatModelDetectorFamily[] {
+  const families: ThreatModelDetectorFamily[] = ["threat-model.stride"];
+  if (stacks.includes("nextjs") || stacks.includes("typescript")) {
+    families.push("web-next.stride");
+  }
+  if (stacks.includes("swift")) families.push("swift-ios.stride");
+  return families;
+}
+
+/** Packs behind emitted threat-model families (content-true, not merely routed). */
+export function appliedThreatModelPackIds(evaluatedFamilies: readonly string[]): PackId[] {
+  const set = new Set(evaluatedFamilies);
+  const ids: PackId[] = [];
+  for (const family of THREAT_MODEL_DETECTOR_FAMILIES) {
+    if (!set.has(family)) continue;
+    const packId = PACK_ID_BY_THREAT_FAMILY[family];
+    if (packId && !ids.includes(packId)) ids.push(packId);
+  }
+  return ids;
+}
+
 function buildThreats(
   stacks: string[],
   surface: { api: string[]; auth: string[]; webview: boolean },
@@ -457,7 +498,7 @@ function buildThreats(
   return threats;
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: produce STRIDE-oriented remediation threat fragments and high-residual finding seeds to prioritise hardening.\n\nArgs: project_root, stack?, focus_area?, assets?, max_files?, focus_paths?, response_format.\nReturns: threats[], finding_seeds (also exposed as findings).\n\nGuidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
+const TOOL_DESCRIPTION = `Defensive tool: produce STRIDE-oriented remediation threat fragments and high-residual finding seeds to prioritise hardening.\n\nArgs: project_root, stack?, focus_area?, assets?, max_files?, focus_paths?, response_format.\nReturns: threats[], finding_seeds (also exposed as findings), applied_pack_ids (packs whose STRIDE fragments were emitted), knowledge_pack_traceability.consulted_pack_ids (routed packs).\n\nGuidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
 export function registerBuildRemediationThreatModel(
   server: McpServer,
@@ -580,7 +621,9 @@ export function registerBuildRemediationThreatModel(
           );
 
         const findings = finding_seeds;
-        const applied_pack_ids = threatModelPackIds(stacks);
+        const consulted_pack_ids = threatModelPackIds(stacks);
+        const detectorFamiliesRun = threatModelFamiliesForStacks(stacks);
+        const applied_pack_ids = appliedThreatModelPackIds(detectorFamiliesRun);
 
         const data = {
           ok: true as const,
@@ -591,6 +634,12 @@ export function registerBuildRemediationThreatModel(
           evidence_backed_assets: evidence.assets,
           focus_area: params.focus_area ?? null,
           applied_pack_ids,
+          knowledge_pack_traceability: {
+            consulted_pack_ids,
+            detector_families_run: [...detectorFamiliesRun].sort(),
+            detector_families_not_run: [],
+            consulted_via: "bundled STRIDE templates and routed pack metadata; no remote pack lookup",
+          },
           findings,
           coverage: redactCoverageReport(coverageSession.finish(findings)),
           evidence,
@@ -620,6 +669,7 @@ export function registerBuildRemediationThreatModel(
             "Evidence-backed fields are based on bounded path inventory unless marked caller_supplied or inferred_from_stack.",
             "Do not generate exploits, PoCs, or bypass instructions from these fragments.",
             "Merge confirmed seeds with scan evidence via secure_mcp_produce_findings.",
+            "applied_pack_ids are packs whose STRIDE fragments were emitted; knowledge_pack_traceability.consulted_pack_ids are the routed packs for this stack.",
             "Load the threat-model pack via secure_mcp_get_knowledge_pack when you need the checklist text.",
           ],
         };

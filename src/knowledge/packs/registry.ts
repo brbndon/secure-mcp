@@ -239,8 +239,9 @@ export function filterPackItems(
 
 /**
  * Narrow pack ids to those that actually carry items in the given categories.
- * Category tools use this so applied_pack_ids reflects the packs behind their
- * heuristics (e.g. an Expo-only project should not claim auth-web).
+ * Category tools use this so consulted_pack_ids reflects the packs behind
+ * their routing (e.g. an Expo-only project should not consult auth-web).
+ * applied_pack_ids is the subset whose detectors actually evaluated content.
  */
 export function packIdsWithCategories(
   ids: readonly PackId[],

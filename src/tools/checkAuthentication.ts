@@ -1,6 +1,10 @@
 /**
  * Tool: secure_mcp_check_authentication
  * Defensive authentication / authorization review for remediation.
+ *
+ * applied_pack_ids derives from detector families that actually evaluated
+ * successfully opened content (or emitted a stack-gated profile detector).
+ * Routed packs stay in knowledge_pack_traceability.consulted_pack_ids.
  */
 
 import type { McpServer } from "@modelcontextprotocol/server";
@@ -82,15 +86,49 @@ interface AuthPattern {
   filter?: (match: string, content: string) => boolean;
 }
 
+/** Stable traceability families this tool can configure. */
+export const AUTH_DETECTOR_FAMILIES = [
+  "core.authentication",
+  "web-next.authentication",
+  "web-next.profile-auth-boundary",
+  "expo-rn.authentication",
+  "expo-rn.profile-auth-storage",
+  "swift-ios.authentication",
+  "swift-ios.profile-auth-storage",
+] as const;
+export type AuthDetectorFamily = (typeof AUTH_DETECTOR_FAMILIES)[number];
+
+const PACK_ID_BY_AUTH_FAMILY: Record<AuthDetectorFamily, PackId> = {
+  "core.authentication": "core",
+  "web-next.authentication": "web-next",
+  "web-next.profile-auth-boundary": "web-next",
+  "expo-rn.authentication": "expo-rn",
+  "expo-rn.profile-auth-storage": "expo-rn",
+  "swift-ios.authentication": "swift-ios",
+  "swift-ios.profile-auth-storage": "swift-ios",
+};
+
 /** Stable traceability family for an auth detector, independent of report ids. */
-export function authDetectorFamily(stack: AuthPattern["stack"]): string {
+export function authDetectorFamily(stack: AuthPattern["stack"]): AuthDetectorFamily {
   return stack === "swift"
     ? "swift-ios.authentication"
     : stack === "expo"
       ? "expo-rn.authentication"
       : stack === "nextjs"
         ? "web-next.authentication"
-        : "auth-web.authentication";
+        : "core.authentication";
+}
+
+/** Packs behind families that actually evaluated content or profile detectors. */
+export function appliedAuthPackIds(evaluatedFamilies: readonly string[]): PackId[] {
+  const set = new Set(evaluatedFamilies);
+  const ids: PackId[] = [];
+  for (const family of AUTH_DETECTOR_FAMILIES) {
+    if (!set.has(family)) continue;
+    const packId = PACK_ID_BY_AUTH_FAMILY[family];
+    if (packId && !ids.includes(packId)) ids.push(packId);
+  }
+  return ids;
 }
 
 /**
@@ -109,8 +147,16 @@ const PATTERN_STACKS_BY_FOCUS: Record<StackFocus, StackFocus[]> = {
 export function authPatternAppliesToStack(
   patternStack: Finding["stack"] | undefined,
   focus?: StackFocus | "auto",
+  detectedStacks?: readonly StackFocus[],
 ): boolean {
-  if (!focus || focus === "auto") return true;
+  if (!focus || focus === "auto") {
+    // Unknown inventory stays permissive; auto with detected stacks is
+    // stack-honest so Next-only families are not evaluated on Expo/Swift roots.
+    if (!detectedStacks || detectedStacks.length === 0) return true;
+    return detectedStacks.some((stack) =>
+      PATTERN_STACKS_BY_FOCUS[stack].includes(patternStack ?? "common"),
+    );
+  }
   return PATTERN_STACKS_BY_FOCUS[focus].includes(patternStack ?? "common");
 }
 
@@ -287,7 +333,7 @@ const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential 
 
 Args: project_root, stack?, max_files?, focus_paths?, response_format.
 
-Returns: findings[] (shared Finding schema), applied_pack_ids, files_reviewed, notes.
+Returns: findings[] (shared Finding schema), applied_pack_ids (packs whose detectors evaluated content), knowledge_pack_traceability.consulted_pack_ids (routed authn/authz packs), files_reviewed, notes.
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
@@ -407,7 +453,7 @@ export function registerCheckAuthentication(
           coverageSession.recordReviewedFile(file.relativePath);
 
           for (const pattern of AUTH_PATTERNS) {
-            if (!authPatternAppliesToStack(pattern.stack, params.stack)) continue;
+            if (!authPatternAppliesToStack(pattern.stack, params.stack, profile.likelyStacks)) continue;
 
             const detectorFamily = authDetectorFamily(pattern.stack);
             detectorFamiliesRun.add(detectorFamily);
@@ -553,9 +599,9 @@ export function registerCheckAuthentication(
         }
 
         const detectorFamiliesAvailable = new Set(
-          AUTH_PATTERNS.filter((pattern) => authPatternAppliesToStack(pattern.stack, params.stack)).map(
-            (pattern) => authDetectorFamily(pattern.stack),
-          ),
+          AUTH_PATTERNS.filter((pattern) =>
+            authPatternAppliesToStack(pattern.stack, params.stack, profile.likelyStacks),
+          ).map((pattern) => authDetectorFamily(pattern.stack)),
         );
         if (shouldEmitProfileAuthFinding("nextjs", nextProfileSignal, params.stack) && hasMiddleware) {
           detectorFamiliesAvailable.add("web-next.profile-auth-boundary");
@@ -567,7 +613,8 @@ export function registerCheckAuthentication(
           detectorFamiliesAvailable.add("swift-ios.profile-auth-storage");
         }
 
-        const applied_pack_ids = authPackIdsForProfile(profile, params.stack);
+        const consulted_pack_ids = authPackIdsForProfile(profile, params.stack);
+        const applied_pack_ids = appliedAuthPackIds([...detectorFamiliesRun]);
         const finalizedCoverage = coverageSession.finish(findings);
         const safeFindings = redactFindings(findings);
 
@@ -581,7 +628,7 @@ export function registerCheckAuthentication(
           coverage: redactCoverageReport(finalizedCoverage),
           applied_pack_ids,
           knowledge_pack_traceability: {
-            consulted_pack_ids: applied_pack_ids,
+            consulted_pack_ids,
             detector_families_run: [...detectorFamiliesRun].sort(),
             detector_families_not_run: [...detectorFamiliesAvailable]
               .filter((family) => !detectorFamiliesRun.has(family))
@@ -592,7 +639,7 @@ export function registerCheckAuthentication(
             "Defensive review only: identify → classify → remediate.",
             "Heuristic candidates need manual confirmation of data flow and authorization logic.",
             "Prioritize critical/high severity with high confidence for remediation first.",
-            "applied_pack_ids follow the routed packs for the detected stacks (authn/authz content only); full checklists load via secure_mcp_get_knowledge_pack.",
+            "applied_pack_ids are packs whose detectors evaluated opened content or profile signals; knowledge_pack_traceability.consulted_pack_ids are the routed authn/authz packs for this stack.",
           ],
         };
 

@@ -59,7 +59,7 @@ After each phase, retain structured notes the final report can cite:
 | Architecture | legacy `surface` buckets, typed `surfaces`, `coverage_gaps`, `priority_paths`, optional `security_brief`, trust boundaries, `recommended_packs`, `pack_batches`, small `checklist_seed` |
 | Knowledge packs | checklist items for detected stacks only |
 | Threat model (remediation) | STRIDE items + recommended controls |
-| Category findings | raw tool findings with confidence |
+| Category findings | raw tool findings with confidence; `applied_pack_ids` vs `consulted_pack_ids` |
 | Confirmed set | evidence-verified findings with full schema |
 | Final report | `produce_findings` output + narrative |
 

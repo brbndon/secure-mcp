@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../server.js";
 import {
+  appliedSecretsPackIds,
   classifySecretPatternMatch,
   secretsPackIdsForStack,
   shouldRunNextjsSecretDetectors,
@@ -33,6 +34,17 @@ describe("secret-pattern false-positive classification", () => {
       classifySecretPatternMatch("Slack token", "credential-shaped-value", "production config"),
       { suppressed: false, confidence: "high" },
     );
+  });
+});
+
+describe("appliedSecretsPackIds", () => {
+  it("maps evaluated families without claiming consulted-only packs", () => {
+    assert.deepEqual(appliedSecretsPackIds(["secrets.secret-patterns"]), ["secrets"]);
+    assert.deepEqual(
+      appliedSecretsPackIds(["secrets.secret-patterns", "web-next.client-bundle-secrets"]),
+      ["secrets", "web-next"],
+    );
+    assert.deepEqual(appliedSecretsPackIds(["core.secrets"]), []);
   });
 });
 
@@ -95,12 +107,15 @@ describe("secrets stack routing", () => {
       const data = result.structuredContent as {
         applied_pack_ids: string[];
         knowledge_pack_traceability: {
+          consulted_pack_ids: string[];
           detector_families_run: string[];
           detector_families_not_run: string[];
         };
       };
 
-      assert.deepEqual(data.applied_pack_ids, ["core", "secrets"]);
+      assert.deepEqual(data.knowledge_pack_traceability.consulted_pack_ids, ["core", "secrets"]);
+      assert.deepEqual(data.applied_pack_ids, ["secrets"]);
+      assert.ok(!data.applied_pack_ids.includes("core"));
       assert.ok(!data.applied_pack_ids.includes("web-next"));
       assert.ok(!data.applied_pack_ids.includes("swift-ios"));
       const detectorTrace = JSON.stringify(data.knowledge_pack_traceability);

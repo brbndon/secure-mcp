@@ -123,7 +123,7 @@ After architecture and initial pack loading, call these tools with the same root
 - `secure_mcp_analyze_injection_risks` for input-to-sink candidates across SQL, commands, paths, HTML, redirects, WebViews, deep links, and unsafe evaluation.
 - `secure_mcp_review_secrets` for committed credentials, public/client configuration, unsafe storage, logging, plist/config exposure, and rotation needs.
 
-Run the three tools in parallel when the client supports it. Retain each result's findings, coverage, candidate dispositions, and scan status. Do not merge away the source tool or coverage metadata.
+Run the three tools in parallel when the client supports it. Retain each result's findings, coverage, candidate dispositions, and scan status. Do not merge away the source tool or coverage metadata. Treat `applied_pack_ids` as packs whose detectors actually evaluated content; `knowledge_pack_traceability.consulted_pack_ids` are routed checklists only.
 
 After category tools return, reconcile architecture `coverage_gaps` and `priority_paths`:
 
