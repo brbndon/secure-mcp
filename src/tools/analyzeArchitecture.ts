@@ -69,6 +69,8 @@ export interface TypedSurface {
   auth_expectation: string;
   stacks: StackFocus[];
   evidence_basis: "path_inventory";
+  /** True when any path is an authorization-sensitive surface (dynamic ids, admin, webhooks, server actions). */
+  authz_sensitive: boolean;
 }
 
 export interface CoverageGap {
@@ -117,6 +119,31 @@ const HIGH_VALUE_KINDS = new Set<SurfaceKind>([
   "rpc",
   "queue",
 ]);
+
+/**
+ * Authorization-sensitive path heuristic. Used only to rank sample/priority
+ * ordering, never to emit findings. Targets object-level authz (BOLA/IDOR)
+ * surfaces: Next dynamic route segments, admin/account/tenant paths, webhooks,
+ * server actions, and mobile deep-link/AuthSession entry points.
+ */
+const AUTHZ_DYNAMIC_SEGMENT_RE = /\/\[[^\]]+\]/;
+const AUTHZ_PATH_SEGMENT_RE =
+  /(^|\/)(admin|account|dashboard|settings|profile|billing|checkout|team|teams|org|organizations|users?|members|roles?|permissions?|tenants?)(\/|\.|$)/i;
+const AUTHZ_WEBHOOK_RE = /webhook|stripe-hook|svix|callback/i;
+const AUTHZ_SERVER_ACTION_RE = /(^|\/)actions?\//i;
+const AUTHZ_DEEP_LINK_RE = /authsession|deep.?link|universal.?link|onopenurl|linking/i;
+
+/** Exported for tests. */
+export function isAuthzSensitivePath(relativePath: string): boolean {
+  if (!relativePath) return false;
+  const lower = relativePath.toLowerCase();
+  if (AUTHZ_DYNAMIC_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_PATH_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_WEBHOOK_RE.test(lower)) return true;
+  if (AUTHZ_SERVER_ACTION_RE.test(lower)) return true;
+  if (AUTHZ_DEEP_LINK_RE.test(lower)) return true;
+  return false;
+}
 
 function baseName(relativePath: string): string {
   const lower = relativePath.toLowerCase();
@@ -352,6 +379,7 @@ function buildTypedSurfaces(
       auth_expectation,
       stacks: kindStacks,
       evidence_basis: "path_inventory",
+      authz_sensitive: paths.some(isAuthzSensitivePath),
     });
   };
 
@@ -668,6 +696,9 @@ function buildPriorityPaths(
   focusPaths: string[] | undefined,
 ): string[] {
   const ranked = [...surfaces].sort((a, b) => {
+    const aAuthz = a.authz_sensitive ? 1 : 0;
+    const bAuthz = b.authz_sensitive ? 1 : 0;
+    if (aAuthz !== bAuthz) return bAuthz - aAuthz;
     const aHigh = HIGH_VALUE_KINDS.has(a.kind) ? 1 : 0;
     const bHigh = HIGH_VALUE_KINDS.has(b.kind) ? 1 : 0;
     if (aHigh !== bHigh) return bHigh - aHigh;
@@ -675,7 +706,11 @@ function buildPriorityPaths(
   });
   const paths: string[] = [];
   for (const surface of ranked) {
-    for (const p of surface.paths) {
+    const ordered = [...surface.paths].sort(
+      (a, b) =>
+        (isAuthzSensitivePath(b) ? 1 : 0) - (isAuthzSensitivePath(a) ? 1 : 0),
+    );
+    for (const p of ordered) {
       if (!paths.includes(p)) paths.push(p);
       if (paths.length >= PRIORITY_PATH_CAP) {
         return paths;
@@ -718,6 +753,11 @@ function buildSecurityBrief(input: {
       "Derived from architecture path inventory and pack routing — not a separate project walk.",
       "Treat as the security brief for this root; retain through category tools and revalidation.",
       "Reconcile coverage_gaps after category detectors: sample zero-hit high-value surfaces manually.",
+      ...(input.surfaces.some((s) => s.authz_sensitive)
+        ? [
+            "Authorization-sensitive surfaces detected (dynamic ids, admin/tenant, webhooks, server actions). Verify object-level authorization on every sensitive action before trusting empty auth findings.",
+          ]
+        : []),
     ],
   };
 }
