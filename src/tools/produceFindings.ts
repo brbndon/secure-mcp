@@ -97,6 +97,34 @@ function dedupeKey(f: Finding): string {
   ).toLowerCase();
 }
 
+/** Runtime-verification handoff label (defensive only; no exploit steps). */
+export type ValidationStatus = "static_only" | "needs_runtime";
+
+/** A produced finding that carries the derived validation handoff label. */
+export type ExportedFinding = Finding & { validation_status: ValidationStatus };
+
+/**
+ * Derive a validation label when the caller did not set one. A finding is
+ * "needs_runtime" when it is still an unconfirmed candidate or when it carries
+ * an unresolved proof gap / counterevidence that only runtime or configuration
+ * observation can close; a revalidated `fixed` finding is "static_only".
+ */
+export function deriveValidationStatus(finding: Finding): ValidationStatus {
+  if (finding.disposition === "fixed") return "static_only";
+  const runtimeGap =
+    (finding.proof_gap?.length ?? 0) > 0 || (finding.counterevidence?.length ?? 0) > 0;
+  if (runtimeGap || finding.disposition === "needs_review") return "needs_runtime";
+  return "static_only";
+}
+
+function countValidationStatuses(
+  findings: readonly ExportedFinding[],
+): Record<ValidationStatus, number> {
+  const counts: Record<ValidationStatus, number> = { static_only: 0, needs_runtime: 0 };
+  for (const finding of findings) counts[finding.validation_status]++;
+  return counts;
+}
+
 /** Exported for tests: markdown includes additive proof/traceability fields. */
 export function findingsToMarkdown(
   title: string,
@@ -120,7 +148,7 @@ export function findingsToMarkdown(
   });
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[], executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk).\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.`;
+const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format.\nReturns: findings[] (each with a derived validation_status: static_only | needs_runtime), executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk), validation_counts.\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.\n\nValidation: a finding is needs_runtime when it is an unconfirmed candidate or carries an unresolved proof_gap/counterevidence that only runtime or configuration observation can close; static_only otherwise. needs_runtime is a handoff signal to schedule owner-authorized retest, never an exploit step.`;
 
 export function registerProduceFindings(server: McpServer): void {
   server.registerTool(
@@ -169,30 +197,34 @@ export function registerProduceFindings(server: McpServer): void {
         });
 
         // Redact after identity/dedupe so stable keys use unredacted location metadata.
-        list = redactFindings(list).map((f, i) =>
-          boundFinding({
-            ...f,
-            tags: [
-              ...new Set([
-                ...(f.tags ?? []),
-                `source-id:${f.id}`,
-                ...(f.instance_id ? [`instance-id:${f.instance_id}`] : []),
-                "remediation-report",
-              ]),
-            ],
-            id: `F-${String(i + 1).padStart(3, "0")}`,
-          }),
-        );
+        const exported: ExportedFinding[] = redactFindings(list).map((f, i) => {
+          const validation_status = f.validation_status ?? deriveValidationStatus(f);
+          return {
+            ...boundFinding({
+              ...f,
+              tags: [
+                ...new Set([
+                  ...(f.tags ?? []),
+                  `source-id:${f.id}`,
+                  ...(f.instance_id ? [`instance-id:${f.instance_id}`] : []),
+                  "remediation-report",
+                ]),
+              ],
+              id: `F-${String(i + 1).padStart(3, "0")}`,
+            }),
+            validation_status,
+          } as ExportedFinding;
+        });
 
         const counts = emptySeverityCounts();
-        for (const f of list) counts[f.severity]++;
+        for (const f of exported) counts[f.severity]++;
         const openCounts = emptySeverityCounts();
-        for (const finding of list) {
+        for (const finding of exported) {
           if (candidateDispositionPolicy(finding.disposition).openWork) {
             openCounts[finding.severity]++;
           }
         }
-        const dispositionCounts = countDispositions(list);
+        const dispositionCounts = countDispositions(exported);
 
         const title = boundText(
           redactedEvidence(params.report_title ?? "Secure code review — remediation findings"),
@@ -211,14 +243,14 @@ export function registerProduceFindings(server: McpServer): void {
         const openTotal = Object.values(openCounts).reduce((sum, count) => sum + count, 0);
 
         const executive_summary = {
-          total: list.length,
+          total: exported.length,
           counts,
           open_total: openTotal,
           open_counts: openCounts,
           risk_score,
           ledger_risk_score,
-          top_categories: topCategories(list, 5),
-          remediation_priority: list
+          top_categories: topCategories(exported, 5),
+          remediation_priority: exported
             .filter(
               (f) =>
                 (f.severity === "critical" || f.severity === "high") &&
@@ -231,8 +263,10 @@ export function registerProduceFindings(server: McpServer): void {
               title: f.title,
               severity: f.severity,
               disposition: f.disposition,
+              validation_status: f.validation_status,
               remediation: f.remediation,
             })),
+          validation_counts: countValidationStatuses(exported),
           framing:
             "Defensive secure-code-review for the development team. Identify weaknesses, classify them, and remediate. No exploit content.",
         };
@@ -240,13 +274,14 @@ export function registerProduceFindings(server: McpServer): void {
         const data = {
           ok: true as const,
           project_root: projectRoot ?? null,
-          summary: `${title}: ${list.length} ledger item(s); open=${openTotal} (critical=${openCounts.critical}, high=${openCounts.high}, medium=${openCounts.medium}, low=${openCounts.low}, info=${openCounts.info}); needs_review=${dispositionCounts.needs_review}; fixed=${dispositionCounts.fixed}.${openTotal > 0 ? " Prioritise open remediation." : " No confirmed open remediation remains in this ledger."}`,
+          summary: `${title}: ${exported.length} ledger item(s); open=${openTotal} (critical=${openCounts.critical}, high=${openCounts.high}, medium=${openCounts.medium}, low=${openCounts.low}, info=${openCounts.info}); needs_review=${dispositionCounts.needs_review}; fixed=${dispositionCounts.fixed}.${openTotal > 0 ? " Prioritise open remediation." : " No confirmed open remediation remains in this ledger."}`,
           executive_summary,
-          findings: list,
+          findings: exported,
           candidate_disposition_counts: dispositionCounts,
           notes: [
             "Each finding follows evidence → classify → impact → remediate → verify.",
             "Deferred and reportable are confirmed open work; needs_review is an unconfirmed candidate; fixed/suppressed/accepted_risk/not_applicable are excluded from open risk and remediation_priority.",
+            "validation_status labels handoff needs: static_only means code review alone confirms and verifies; needs_runtime means schedule owner-authorized runtime/configuration verification (manual QA or existing DAST).",
             "Do not expand this report into exploit or PoC attack material.",
           ],
         };
@@ -256,7 +291,7 @@ export function registerProduceFindings(server: McpServer): void {
           markdown: renderFindingsReportMarkdown({
             title,
             projectRoot,
-            findings: list,
+            findings: exported,
             counts,
             openCounts,
             dispositionCounts,

@@ -163,6 +163,12 @@ export const FindingSchema = z
       .array(z.string().min(1).max(MAX_FINDING_LIST_ITEM))
       .max(MAX_FINDING_LIST_ITEMS)
       .optional(),
+    validation_status: z
+      .enum(["static_only", "needs_runtime"])
+      .optional()
+      .describe(
+        "Validation label: static_only when code review alone confirms and verifies the finding; needs_runtime when owner-authorized runtime/configuration verification (manual QA or existing DAST) is still required. Defensive only; never exploit steps.",
+      ),
   })
   .strict();
 
@@ -239,6 +245,7 @@ export const FINDING_FIELD_METADATA = {
     maxItems: MAX_FINDING_LIST_ITEMS,
     itemMaxChars: MAX_FINDING_LIST_ITEM,
   },
+  validation_status: { merge: "first-defined" },
 } as const satisfies Record<keyof FindingInput, FindingFieldMetadata>;
 
 const FINDING_FIELDS = Object.keys(FINDING_FIELD_METADATA) as Array<keyof FindingInput>;

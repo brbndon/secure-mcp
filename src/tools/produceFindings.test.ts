@@ -441,3 +441,87 @@ describe("produceFindings disposition counting and priority", () => {
     assert.match(markdown.text, /Ledger items by severity/i);
   });
 });
+
+describe("produceFindings validation_status labels", () => {
+  it("labels unconfirmed heuristic candidates needs_runtime by default", async () => {
+    const result = await callProduceResult(
+      makeFinding({ id: "V-1", title: "Unconfirmed candidate" }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0]?.validation_status, "needs_runtime");
+  });
+
+  it("labels revalidated fixed findings static_only", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-2",
+        title: "Revalidated control",
+        disposition: "fixed",
+        disposition_reason: "The control is present and verified.",
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("labels a confirmed finding with cleared proof gaps static_only", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-3",
+        title: "Confirmed static finding",
+        disposition: "reportable",
+        disposition_reason: "Confirmed via code review.",
+        proof_gap: [],
+        counterevidence: [],
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("preserves an explicit validation_status override", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-4",
+        title: "Explicitly static",
+        disposition: "needs_review",
+        validation_status: "static_only",
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("reports validation_counts in the executive summary", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({ id: "V-5", title: "Needs runtime A", file: "src/a.ts", line: 1 }),
+        makeFinding({
+          id: "V-6",
+          title: "Static B",
+          file: "src/b.ts",
+          line: 1,
+          disposition: "fixed",
+          disposition_reason: "Verified.",
+        }),
+      ],
+      "Validation count report",
+      "json",
+    );
+    const counts = result.structured.executive_summary.validation_counts as Record<
+      string,
+      number
+    >;
+    assert.equal(counts.needs_runtime, 1);
+    assert.equal(counts.static_only, 1);
+  });
+});
