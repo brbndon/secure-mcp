@@ -422,6 +422,34 @@ describe("structural and URI secret redaction", () => {
     );
   });
 
+  it("fails closed on an unterminated final YAML block line", () => {
+    const safe = redactedEvidence("secret: |\n    body1\n    body2");
+    assert.ok(!safe.includes("body1"));
+    assert.ok(!safe.includes("body2"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]");
+  });
+
+  it("redacts YAML block scalars beyond sixty-four lines", () => {
+    const body = Array.from({ length: 65 }, (_, i) => `    line${i}`).join("\n");
+    const safe = redactedEvidence(`secret: |\n${body}\n  next: 1`);
+    assert.ok(!safe.includes("line64"));
+    assert.ok(!safe.includes("line65"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]\n  next: 1");
+  });
+
+  it("keeps blank lines inside a YAML block scalar within the redaction", () => {
+    const safe = redactedEvidence("secret: |\n    body1\n\n    body2\n  next: 1");
+    assert.ok(!safe.includes("body1"));
+    assert.ok(!safe.includes("body2"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]\n  next: 1");
+  });
+
+  it("redacts a leading blank line in a YAML block scalar", () => {
+    const safe = redactedEvidence("secret: |\n\n    body\n  next: 1");
+    assert.ok(!safe.includes("body"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]\n  next: 1");
+  });
+
   it("redacts URI userinfo credentials and keeps the host", () => {
     const safe = redactedEvidence(
       "postgres://app:dbpass123@db.internal:5432/main https://user:webpass456@example.com/x",
@@ -461,6 +489,12 @@ describe("structural and URI secret redaction", () => {
     assert.ok(!safe.includes("querysecret"));
     assert.ok(!safe.includes("keyvalue123"));
     assert.ok(safe.includes("x=1"));
+  });
+
+  it("keeps backslash inside unquoted values so escaped paths stay redacted", () => {
+    assert.equal(redactedEvidence("token=abc\\def"), "token=[REDACTED:****]");
+    assert.equal(redactedEvidence("secret=C:\\path\\to\\key"), "secret=[REDACTED:****]");
+    assert.equal(redactedEvidence("token=abc\\def ghi"), "token=[REDACTED:****] ghi");
   });
 
   it("redacts compound and prefixed keys without over-redacting prose", () => {

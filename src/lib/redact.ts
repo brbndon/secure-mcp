@@ -155,6 +155,8 @@ export function redactedSecretPaths(paths: readonly string[]): string[] {
  * most-specific-first, so quoted beats unquoted rematch of the same value,
  * PEM beats inner tokens, etc. Required so applyPortionEditsToEscaped never
  * double-splices the same origin range (which garbles markers and drops quotes).
+ * This is the only super-linear step in the pipeline: the sort is O(E log E)
+ * in the number of candidate edits, while every scanner pass is linear.
  */
 function dedupeOverlappingEdits(edits: readonly SecretPortionEdit[]): SecretPortionEdit[] {
   // Array sorting is stable on supported Node versions, so equal starts keep
@@ -435,6 +437,12 @@ function isLabeledTerminator(char: string | undefined): boolean {
   return char === ":" || char === "=";
 }
 
+/**
+ * A single token in an unquoted labeled value. Backslash is deliberately kept
+ * as an ordinary value character: the former class excluded it, which stopped
+ * redaction at Windows paths and backslash-escaped values and leaked the suffix.
+ * Treating it as value content redacts the whole token and stays fail-closed.
+ */
 function isUnquotedValueChar(char: string | undefined): boolean {
   return (
     char !== undefined &&
@@ -447,6 +455,13 @@ function isUnquotedValueChar(char: string | undefined): boolean {
     char !== "&" &&
     char !== "}"
   );
+}
+
+/** Count leading spaces and tabs at `from`, stopping at a newline or EOF. */
+function countLeadingHorizontalWhitespace(text: string, from: number): number {
+  let i = from;
+  while (i < text.length && (text[i] === " " || text[i] === "\t")) i += 1;
+  return i - from;
 }
 
 /**
@@ -541,21 +556,48 @@ function collectLabeledSecretEdits(
       const indicatorLineEnd = text.indexOf("\n", separatorEnd);
       if (indicatorLineEnd >= 0) {
         const bodyStart = indicatorLineEnd + 1;
-        let bodyEnd = bodyStart;
-        let lineCount = 0;
-        while (lineCount < 64 && bodyEnd < length) {
-          const char = text[bodyEnd];
-          if (char !== " " && char !== "\t") break;
-          const nextNewline = text.indexOf("\n", bodyEnd);
-          if (nextNewline < 0) break;
-          bodyEnd = nextNewline + 1;
-          lineCount += 1;
+
+        // Establish the scalar's indentation from its first non-blank line.
+        // Leading blank lines belong to the block and are consumed below.
+        let bodyIndent = 0;
+        let probe = bodyStart;
+        while (probe < length) {
+          const indent = countLeadingHorizontalWhitespace(text, probe);
+          const newline = text.indexOf("\n", probe);
+          const lineContentEnd = newline < 0 ? length : newline;
+          if (probe + indent < lineContentEnd) {
+            bodyIndent = indent;
+            break;
+          }
+          probe = newline < 0 ? length : newline + 1;
         }
-        if (lineCount > 0) {
+
+        // A block scalar body must be more indented than its key. An
+        // unindented first line means there is no scalar body to redact.
+        if (bodyIndent > 0) {
+          let bodyEnd = bodyStart;
+          let cursor = bodyStart;
+          while (cursor < length) {
+            const indent = countLeadingHorizontalWhitespace(text, cursor);
+            const newline = text.indexOf("\n", cursor);
+            const lineContentEnd = newline < 0 ? length : newline;
+            const isBlank = cursor + indent >= lineContentEnd;
+            // The block ends at the first non-blank line less indented than the
+            // body. Everything else (indented or blank) is secret content,
+            // including a final line that has no trailing newline.
+            if (!isBlank && indent < bodyIndent) break;
+            bodyEnd = newline < 0 ? length : newline + 1;
+            cursor = bodyEnd;
+          }
           yaml.push({
             start: bodyStart,
             end: bodyEnd,
-            replacement: `${VALUE_MARKER}\n`,
+            // Preserve the trailing newline only when one was consumed; an
+            // unterminated final line should not gain a synthetic newline.
+            replacement:
+              bodyEnd > bodyStart && text[bodyEnd - 1] === "\n"
+                ? `${VALUE_MARKER}\n`
+                : VALUE_MARKER,
           });
           continue;
         }
@@ -565,7 +607,6 @@ function collectLabeledSecretEdits(
     // Unquoted single-token value. A bare YAML indicator (`|`, `|-`, `|+2`)
     // is skipped so it is never mistaken for a secret value.
     let valueStart = separatorEnd;
-    if (isQuoteChar(text[valueStart])) valueStart += 1;
     let valueEnd = valueStart;
     while (valueEnd < length && isUnquotedValueChar(text[valueEnd])) valueEnd += 1;
     if (valueEnd > valueStart) {
