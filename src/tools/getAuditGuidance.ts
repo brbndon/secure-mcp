@@ -46,7 +46,7 @@ Call secure_mcp_get_audit_guidance with other sections for details. Prefer multi
 
   workflow: `MANDATORY MULTI-PHASE AGENT WORKFLOW (defensive only)
 Phase 1: secure_mcp_list_project_structure (inventory)
-Phase 2: secure_mcp_analyze_architecture (stacks, typed surfaces, coverage_gaps, priority_paths, security_brief, recommended_packs, pack_batches, trust boundaries)
+Phase 2: secure_mcp_analyze_architecture (stacks, typed surfaces, coverage_gaps, priority_paths, security_brief, threat_highlights, recommended_packs, pack_batches, trust boundaries)
          secure_mcp_get_knowledge_pack (start with pack_batches[0], detail=summary; max 6 ids/call; fair sample)
          (optional) secure_mcp_build_remediation_threat_model
 Phase 3: secure_mcp_check_authentication
@@ -83,7 +83,7 @@ WORKFLOW: after arch, call with optional focus_area/assets; use recommended_cont
 GUARDRAILS: only for owners strengthening their own system; no attack plans.`,
 
   architecture: `secure_mcp_analyze_architecture
-Returns stacks, legacy surface path buckets, typed surfaces (kind/exposure/auth_expectation/paths), coverage_gaps, priority_paths, security_brief, trust boundaries, recommended_packs/pack_batches, checklist_seed.
+Returns stacks, legacy surface path buckets, typed surfaces (kind/exposure/auth_expectation/paths), coverage_gaps, priority_paths, security_brief, threat_highlights (advisory shortlist, not findings), trust boundaries, recommended_packs/pack_batches, checklist_seed.
 Retain architecture as the security brief. After category tools, sample zero-hit high-value surfaces from coverage_gaps/priority_paths.
 Host agents may map PR diffs into focus_paths; the server does not run git.`,
 

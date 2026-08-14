@@ -23,6 +23,7 @@ import {
   focusedProfileForStack,
   recommendPackPlan,
 } from "../knowledge/packs/registry.js";
+import { threatHighlightsForStacks } from "../knowledge/threat-highlights.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
@@ -647,7 +648,7 @@ export function registerAnalyzeArchitecture(
       description: `Defensive secure-code-review tool: high-level architecture map (stacks, typed surfaces, coverage gaps, trust boundaries) and recommended knowledge packs for progressive loading.
 
 Args: project_root, stack?, max_files?, focus_paths?, response_format.
-Returns: stacks, surface (legacy path buckets), surfaces (typed), coverage_gaps, priority_paths, security_brief, trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
+Returns: stacks, surface (legacy path buckets), surfaces (typed), coverage_gaps, priority_paths, security_brief, threat_highlights (advisory stack-gated shortlist, not findings), trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`,
       inputSchema: InputSchema,
@@ -764,6 +765,9 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           );
         }
 
+        const threat_highlights = threatHighlightsForStacks(stacks, {
+          hasMacOS: profile.hasMacOS,
+        });
         const security_brief = redactSecurityBrief(
           buildSecurityBrief({
             stacks,
@@ -804,6 +808,11 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
            * Retain this as the agent-side project brief through the rest of the audit.
            */
           security_brief,
+          /**
+           * Advisory stack-gated shortlist lifted from pack titles.
+           * Not a finding list and not a substitute for category tools.
+           */
+          threat_highlights,
           coverage: redactCoverageReport(detected.coverage),
           files_reviewed: [],
           trust_boundaries,
@@ -829,7 +838,8 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           ],
           notes: [
             "Defensive architecture review for control placement and remediation planning.",
-            "Retain surfaces, coverage_gaps, priority_paths, and security_brief as the architecture-as-brief artifact.",
+            "Retain surfaces, coverage_gaps, priority_paths, security_brief, and threat_highlights as the architecture-as-brief artifact.",
+            "threat_highlights is an advisory shortlist gated by detected/forced stacks — not findings and not a noise tier.",
             pack_batches.length > 1
               ? `Load knowledge in ${pack_batches.length} get_knowledge_pack calls using pack_batches (max 6 ids each); start with pack_batches[0], detail=summary.`
               : "Load knowledge via secure_mcp_get_knowledge_pack(pack_ids=pack_batches[0] or recommended_packs) with detail=summary first.",
@@ -886,6 +896,12 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
                 `Coverage gap count: ${security_brief.coverage_gap_count}`,
                 ...security_brief.notes,
               ],
+            },
+            {
+              heading: `Threat highlights (${threat_highlights.length}, advisory)`,
+              bullets: threat_highlights.map(
+                (item) => `[${item.stack}/${item.pack_id}] ${item.text}`,
+              ),
             },
             {
               heading: `Auth-related paths (${surface.auth_related.length})`,

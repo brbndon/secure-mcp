@@ -95,7 +95,7 @@ Call `secure_mcp_analyze_architecture` with the same root and the stack forced b
 - `priority_paths` (follow-up focus order)
 - `security_brief` (compact derived summary from those fields; no extra walk)
 
-Treat pack summaries and `checklist_seed` as the short threat shortlist. Do not invent a public `threat_highlights` field.
+Treat `threat_highlights` as an advisory stack-gated shortlist (pack titles, not findings). Do not invent a public `noise_tier` field.
 
 Load `secure_mcp_get_knowledge_pack` only after architecture analysis:
 

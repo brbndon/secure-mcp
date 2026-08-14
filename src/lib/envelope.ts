@@ -90,6 +90,7 @@ const SHRINKABLE_ARRAY_KEYS = [
   "trust_boundaries",
   "notable_dependencies",
   "top_level",
+  "threat_highlights",
 ] as const;
 
 /** Nested coverage arrays that can dominate structuredContent size. */

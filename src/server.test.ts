@@ -554,6 +554,7 @@ describe("architecture typed surfaces", () => {
           high_value_surfaces: unknown[];
           priority_paths: string[];
         };
+        threat_highlights: Array<{ stack: string; pack_id: string; id: string; text: string }>;
         trust_boundaries: string[];
       };
 
@@ -589,6 +590,8 @@ describe("architecture typed surfaces", () => {
       assert.ok(data.security_brief.coverage_gap_count === data.coverage_gaps.length);
       assert.ok(data.security_brief.high_value_surfaces.length > 0);
       assert.ok(data.trust_boundaries.length > 0);
+      assert.ok(data.threat_highlights.some((item) => item.id === "NEXT-MIDDLEWARE-AUTH"));
+      assert.ok(!data.threat_highlights.some((item) => item.pack_id === "swift-ios"));
     } finally {
       await client.close();
       await server.close();
@@ -626,12 +629,16 @@ describe("architecture typed surfaces", () => {
       const data = result.structuredContent as {
         stacks: string[];
         surfaces: Array<{ kind: string }>;
+        threat_highlights: Array<{ stack: string; pack_id: string; text: string }>;
       };
       assert.ok(data.stacks.includes("swift"));
       assert.ok(!data.surfaces.some((s) => s.kind === "server_action"));
       assert.ok(!data.surfaces.some((s) => s.kind === "middleware"));
       assert.ok(!data.surfaces.some((s) => s.kind === "page_entry"));
       assert.ok(!data.surfaces.some((s) => s.kind === "deep_link"));
+      assert.ok(data.threat_highlights.some((item) => item.pack_id === "swift-ios"));
+      assert.ok(!data.threat_highlights.some((item) => item.stack === "nextjs"));
+      assert.ok(!data.threat_highlights.some((item) => /server action|middleware/i.test(item.text)));
     } finally {
       await client.close();
       await server.close();

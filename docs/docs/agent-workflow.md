@@ -56,7 +56,7 @@ After each phase, retain structured notes the final report can cite:
 |----------|----------|
 | Inventory | stacks, file counts, sample paths |
 | Coverage | included/reviewed paths, ignored/excluded reasons, caps, truncation, and candidate dispositions |
-| Architecture | legacy `surface` buckets, typed `surfaces`, `coverage_gaps`, `priority_paths`, optional `security_brief`, trust boundaries, `recommended_packs`, `pack_batches`, small `checklist_seed` |
+| Architecture | legacy `surface` buckets, typed `surfaces`, `coverage_gaps`, `priority_paths`, optional `security_brief`, stack-gated `threat_highlights` (advisory, not findings), trust boundaries, `recommended_packs`, `pack_batches`, small `checklist_seed` |
 | Knowledge packs | checklist items for detected stacks only |
 | Threat model (remediation) | STRIDE items + recommended controls |
 | Category findings | raw tool findings with confidence; `applied_pack_ids` vs `consulted_pack_ids` |
