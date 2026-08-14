@@ -49,16 +49,9 @@ const SECRET_PATH_SUFFIXES = [
 const SECRET_KEYS =
   "(?:aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|session[_-]?token|auth[_-]?token|secret[_-]?key|private[_-]?key|api[_-]?key|apikey|proxy[_-]?authorization|authorization|password|passwd|pwd|secret|token|credential)";
 
-/**
- * Separator between a secret key and its value: optional whitespace, an
- * optional closing quote (quoted JSON/YAML keys such as "password":), then
- * `:` or `=`. The original sanitizer missed the quoted-key form because the
- * closing quote sits between the key and the colon.
- */
-const SECRET_KEY_SEPARATOR = '\\s*["\'`]?\\s*[:=]\\s*';
-
 const VALUE_MARKER = "[REDACTED:****]";
 const PATH_MARKER = "[redacted-secret-file]";
+const WHITESPACE_RE = /\s/;
 
 /** A secret span in original-input coordinates, with its replacement text. */
 interface SecretPortionEdit {
@@ -94,70 +87,29 @@ const fullMatchPortion = (match: RegExpMatchArray, index: number): SecretPortion
 const YAML_BLOCK_INDICATOR_RE = /^[|>][+-]?\d*$/;
 
 /**
- * Prefix for a labeled quoted value. The value itself is scanned below rather
- * than captured by a regex: a delimiter-aware scan can distinguish escaped
- * quotes from closing quotes, allow other quote types inside the value, and
- * fail closed on unterminated input without an arbitrary length ceiling.
+ * Authorization headers are kept separate from standalone token rules because
+ * they must outrank the generic unquoted-labeled scanner (so `Authorization:
+ * Bearer <token>` redacts the whole token, not just the `Bearer` label).
+ * Labeled values (quoted, unquoted, and YAML block scalars) are collected by a
+ * linear scanner instead, because their key/separator grammar contains optional
+ * whitespace runs that regex engines backtrack over quadratically on
+ * whitespace-only near-misses.
  */
-const QUOTED_SECRET_PREFIX_RE = new RegExp(
-  `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR})(["'\`])`,
-  "gi",
-);
+const AUTHORIZATION_HEADER_RULE: SecretValueRule = {
+  name: "authorization-header",
+  pattern:
+    /((?:authorization|proxy-authorization)\s*[:=]\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
+  portion: (match, index) => {
+    const prefix = match[1] ?? "";
+    return {
+      start: index + prefix.length,
+      end: index + match[0].length,
+      replacement: VALUE_MARKER,
+    };
+  },
+};
 
-/**
- * Secret-value regex rules. Scanner-backed quoted values, PEM blocks, and URI
- * userinfo are collected separately so their delimiter searches stay linear.
- * Structured formats run before the generic single-line fallback.
- */
-const SECRET_VALUE_RULES: readonly SecretValueRule[] = [
-  {
-    name: "authorization-header",
-    pattern:
-      /((?:authorization|proxy-authorization)\s*[:=]\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._+\-/=]{8,}/gi,
-    portion: (match, index) => {
-      const prefix = match[1] ?? "";
-      return {
-        start: index + prefix.length,
-        end: index + match[0].length,
-        replacement: VALUE_MARKER,
-      };
-    },
-  },
-  {
-    name: "yaml-block-scalar",
-    // Labeled key, `|`/`>` indicator, indented body lines.
-    pattern: new RegExp(
-      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}[|>][^\\n]*\\n)((?:[ \\t]+[^\\n]*\\n){1,64})`,
-      "gi",
-    ),
-    portion: (match, index) => {
-      const prefix = match[1] ?? "";
-      return {
-        start: index + prefix.length,
-        end: index + match[0].length,
-        replacement: `${VALUE_MARKER}\n`,
-      };
-    },
-  },
-  {
-    name: "unquoted-labeled",
-    // Env files, URL query tokens, config. `&` is an RFC 3986 query separator.
-    pattern: new RegExp(
-      `(${SECRET_KEYS}${SECRET_KEY_SEPARATOR}["'\`]?)([^\\s"'\\\`,;&}]+)(["'\`]*)`,
-      "gi",
-    ),
-    portion: (match, index) => {
-      const prefix = match[1] ?? "";
-      const value = match[2] ?? "";
-      if (YAML_BLOCK_INDICATOR_RE.test(value)) return null;
-      const valueStart = index + prefix.length;
-      return {
-        start: valueStart,
-        end: valueStart + value.length,
-        replacement: VALUE_MARKER,
-      };
-    },
-  },
+const STANDALONE_SECRET_RULES: readonly SecretValueRule[] = [
   // Standalone token shapes from lib/secret-tokens.ts — same set the secrets
   // detector uses, so a detected token is always masked here.
   ...SECRET_TOKEN_REGEXES.map(
@@ -475,8 +427,52 @@ function collectSecretPathEdits(text: string): SecretPortionEdit[] {
   return edits;
 }
 
+function isQuoteChar(char: string | undefined): boolean {
+  return char === '"' || char === "'" || char === "`";
+}
+
+function isLabeledTerminator(char: string | undefined): boolean {
+  return char === ":" || char === "=";
+}
+
+function isUnquotedValueChar(char: string | undefined): boolean {
+  return (
+    char !== undefined &&
+    !WHITESPACE_RE.test(char) &&
+    char !== '"' &&
+    char !== "'" &&
+    char !== "`" &&
+    char !== "," &&
+    char !== ";" &&
+    char !== "&" &&
+    char !== "}"
+  );
+}
+
 /**
- * Scan labeled quoted values once, preserving their surrounding delimiter.
+ * Scan forward for the labeled separator (`\s*["'`]?\s*[:=]\s*`) after a key.
+ * Returns the exclusive end of the trailing whitespace, or -1 when no `:`/`=`
+ * terminator follows. The scan is monotonic per key, so adversarial whitespace
+ * runs are never revisited by later candidates.
+ */
+function findLabeledSeparatorEnd(text: string, from: number): number {
+  const length = text.length;
+  let i = from;
+  while (i < length && WHITESPACE_RE.test(text[i] ?? "")) i += 1;
+  if (i < length && isQuoteChar(text[i])) i += 1;
+  while (i < length && WHITESPACE_RE.test(text[i] ?? "")) i += 1;
+  if (i >= length || !isLabeledTerminator(text[i])) return -1;
+  i += 1;
+  while (i < length && WHITESPACE_RE.test(text[i] ?? "")) i += 1;
+  return i;
+}
+
+/**
+ * Collect quoted, unquoted, and YAML block-scalar secret values with a single
+ * linear pass over the plain text. The former regex rules embedded the
+ * separator's optional whitespace runs, which V8 backtracks over every start
+ * position on whitespace-only near-misses; scanning the separator and value
+ * directly keeps the worst case proportional to the input length.
  *
  * `presentationEscaped[i]` records whether plain character `i` came from a
  * one-layer Markdown escape. A raw opening quote closes on a raw delimiter and
@@ -485,49 +481,102 @@ function collectSecretPathEdits(text: string): SecretPortionEdit[] {
  * Other quote types are ordinary value characters. If no matching delimiter
  * exists, redact through end-of-input rather than exposing a suffix.
  */
-function collectQuotedLabeledEdits(
+function collectLabeledSecretEdits(
   text: string,
   presentationEscaped: readonly boolean[],
   precededByOddPlainBackslashRun: readonly boolean[],
-): SecretPortionEdit[] {
-  const edits: SecretPortionEdit[] = [];
-  const pattern = new RegExp(QUOTED_SECRET_PREFIX_RE.source, QUOTED_SECRET_PREFIX_RE.flags);
-  let match: RegExpExecArray | null;
+): {
+  quoted: SecretPortionEdit[];
+  yaml: SecretPortionEdit[];
+  unquoted: SecretPortionEdit[];
+} {
+  const quoted: SecretPortionEdit[] = [];
+  const yaml: SecretPortionEdit[] = [];
+  const unquoted: SecretPortionEdit[] = [];
+  const length = text.length;
+  const keyPattern = new RegExp(SECRET_KEYS, "gi");
+  let keyMatch: RegExpExecArray | null;
 
-  while ((match = pattern.exec(text)) !== null) {
-    const quote = match[2];
-    if (!quote) continue;
-    const openIndex = match.index + match[0].length - quote.length;
-    const valueStart = openIndex + quote.length;
-    const delimiterIsPresentationEscaped = presentationEscaped[openIndex] ?? false;
-    let valueEnd = text.length;
-    let closed = false;
+  while ((keyMatch = keyPattern.exec(text)) !== null) {
+    const separatorEnd = findLabeledSeparatorEnd(
+      text,
+      keyMatch.index + keyMatch[0].length,
+    );
+    if (separatorEnd < 0) continue;
 
-    for (let i = valueStart; i < text.length; i++) {
-      if (
-        text[i] === quote &&
-        (presentationEscaped[i] ?? false) === delimiterIsPresentationEscaped &&
-        // In raw input, presentationEscaped already represents source
-        // backslash parity: an odd run consumed the quote into the plain view.
-        // In one-layer input, remove that presentation layer conceptually and
-        // use the remaining plain backslash parity for semantic quote escapes.
-        (!delimiterIsPresentationEscaped ||
-          !(precededByOddPlainBackslashRun[i] ?? false))
-      ) {
-        valueEnd = i;
-        pattern.lastIndex = i + quote.length;
-        closed = true;
-        break;
+    const opening = text[separatorEnd];
+
+    if (isQuoteChar(opening)) {
+      const valueStart = separatorEnd + 1;
+      const delimiterIsPresentationEscaped =
+        presentationEscaped[separatorEnd] ?? false;
+      let valueEnd = length;
+      let closed = false;
+
+      for (let i = valueStart; i < length; i++) {
+        if (
+          text[i] === opening &&
+          (presentationEscaped[i] ?? false) === delimiterIsPresentationEscaped &&
+          // In raw input, presentationEscaped already represents source
+          // backslash parity: an odd run consumed the quote into the plain view.
+          // In one-layer input, remove that presentation layer conceptually and
+          // use the remaining plain backslash parity for semantic quote escapes.
+          (!delimiterIsPresentationEscaped ||
+            !(precededByOddPlainBackslashRun[i] ?? false))
+        ) {
+          valueEnd = i;
+          closed = true;
+          break;
+        }
+      }
+
+      if (valueEnd > valueStart) {
+        quoted.push({ start: valueStart, end: valueEnd, replacement: VALUE_MARKER });
+      }
+      if (!closed) break;
+      continue;
+    }
+
+    if (opening === "|" || opening === ">") {
+      const indicatorLineEnd = text.indexOf("\n", separatorEnd);
+      if (indicatorLineEnd >= 0) {
+        const bodyStart = indicatorLineEnd + 1;
+        let bodyEnd = bodyStart;
+        let lineCount = 0;
+        while (lineCount < 64 && bodyEnd < length) {
+          const char = text[bodyEnd];
+          if (char !== " " && char !== "\t") break;
+          const nextNewline = text.indexOf("\n", bodyEnd);
+          if (nextNewline < 0) break;
+          bodyEnd = nextNewline + 1;
+          lineCount += 1;
+        }
+        if (lineCount > 0) {
+          yaml.push({
+            start: bodyStart,
+            end: bodyEnd,
+            replacement: `${VALUE_MARKER}\n`,
+          });
+          continue;
+        }
       }
     }
 
+    // Unquoted single-token value. A bare YAML indicator (`|`, `|-`, `|+2`)
+    // is skipped so it is never mistaken for a secret value.
+    let valueStart = separatorEnd;
+    if (isQuoteChar(text[valueStart])) valueStart += 1;
+    let valueEnd = valueStart;
+    while (valueEnd < length && isUnquotedValueChar(text[valueEnd])) valueEnd += 1;
     if (valueEnd > valueStart) {
-      edits.push({ start: valueStart, end: valueEnd, replacement: VALUE_MARKER });
+      const value = text.slice(valueStart, valueEnd);
+      if (!YAML_BLOCK_INDICATOR_RE.test(value)) {
+        unquoted.push({ start: valueStart, end: valueEnd, replacement: VALUE_MARKER });
+      }
     }
-    if (!closed) break;
   }
 
-  return edits;
+  return { quoted, yaml, unquoted };
 }
 
 /**
@@ -543,22 +592,30 @@ function collectSecretPortionEdits(
   precededByOddPlainBackslashRun: readonly boolean[],
 ): SecretPortionEdit[] {
   const text = input;
+  const labeled = collectLabeledSecretEdits(
+    text,
+    presentationEscaped,
+    precededByOddPlainBackslashRun,
+  );
   const edits: SecretPortionEdit[] = [
     ...collectPemEdits(text),
-    ...collectQuotedLabeledEdits(
-      text,
-      presentationEscaped,
-      precededByOddPlainBackslashRun,
-    ),
+    ...labeled.quoted,
     ...collectUriUserinfoEdits(text),
   ];
 
-  for (const rule of SECRET_VALUE_RULES) {
+  const collectRuleEdits = (rule: SecretValueRule): void => {
     for (const match of matchAllGlobal(text, rule.pattern)) {
       const index = match.index ?? 0;
       const edit = rule.portion(match, index);
       if (edit && edit.end > edit.start) edits.push(edit);
     }
+  };
+
+  // Authorization headers outrank the generic labeled scanner's unquoted form.
+  collectRuleEdits(AUTHORIZATION_HEADER_RULE);
+  edits.push(...labeled.yaml, ...labeled.unquoted);
+  for (const rule of STANDALONE_SECRET_RULES) {
+    collectRuleEdits(rule);
   }
 
   // Basename pass: every path segment that looks like a credential file.
@@ -747,9 +804,14 @@ export function redactValue(value: unknown, parentField?: string): unknown {
       const isDynamicMapKey = DYNAMIC_OBJECT_FIELDS.has(parentField ?? "");
       const safeKey = sanitizeStructuralKey(key, usedKeys);
       // Field-name redaction keys off the ORIGINAL key: sanitized keys are for
-      // output only, and dynamic identifier maps must never trigger it.
+      // output only, and dynamic identifier maps must never trigger it. Only
+      // prose strings and nested containers are replaced wholesale; numeric and
+      // boolean metadata (for example estimatedTokens) stays a scalar so the
+      // output boundary never coerces it into a string marker.
       next[safeKey] =
-        !isDynamicMapKey && SECRET_KEY_NAME_RE.test(key)
+        !isDynamicMapKey &&
+        SECRET_KEY_NAME_RE.test(key) &&
+        (typeof item === "string" || (item !== null && typeof item === "object"))
           ? "[REDACTED:****]"
           : redactValue(item, key);
     }

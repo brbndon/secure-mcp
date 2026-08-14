@@ -907,6 +907,40 @@ describe("redaction scanner scaling", () => {
 
     assert.equal(redactedEvidence(input), "[REDACTED:****]\nkept suffix");
   });
+
+  it("keeps secret-key whitespace near-misses linear and unchanged", () => {
+    // Regression for quadratic backtracking in the old separator: a secret-like
+    // key followed by a long whitespace run with no `:`/`=` terminator used to
+    // make redactedEvidence revisit every split point.
+    for (const size of [32_000, 200_000]) {
+      const raw = `token${" ".repeat(size)}`;
+      const started = performance.now();
+      assert.equal(redactedEvidence(raw), raw);
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed < 2_000, `${size} whitespace near-miss took ${elapsed.toFixed(1)}ms`);
+    }
+  });
+
+  it("keeps whitespace-only near-misses linear and unchanged", () => {
+    const raw = " ".repeat(200_000);
+    const started = performance.now();
+    assert.equal(redactedEvidence(raw), raw);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2_000, `whitespace-only near-miss took ${elapsed.toFixed(1)}ms`);
+  });
+
+  it("still redacts labeled values after long whitespace runs", () => {
+    const ws = " ".repeat(32_000);
+    assert.equal(redactedEvidence(`token${ws}=secretvalue`), `token${ws}=[REDACTED:****]`);
+    assert.equal(
+      redactedEvidence(`password${ws}: "secret"`),
+      `password${ws}: "[REDACTED:****]"`,
+    );
+    assert.equal(
+      redactedEvidence(`secret${ws}: |\n    body\n    line2\n  next: 1`),
+      `secret${ws}: |\n[REDACTED:****]\n  next: 1`,
+    );
+  });
 });
 
 describe("secret-shaped object key redaction", () => {
@@ -960,9 +994,9 @@ describe("secret-shaped object key redaction", () => {
     assert.equal(safe.by_extension[".ts"], 1);
     assert.equal(safe.file_counts["[redacted-secret-file]"], 3);
     assert.equal(safe.file_counts["[redacted-secret-file]#2"], 4);
-    // `credentials` is a secret field name: the colliding key is sanitized and
-    // its value is redacted wholesale by the field-name policy.
-    assert.equal(safe.file_counts["[redacted-secret-file]#3"], "[REDACTED:****]");
+    // `credentials` is a secret field name: the colliding key is sanitized, but
+    // its numeric value stays a scalar so metadata is never coerced to a string.
+    assert.equal(safe.file_counts["[redacted-secret-file]#3"], 5);
     assert.equal(safe.file_counts[".ts"], 6);
   });
 
@@ -1002,5 +1036,60 @@ describe("secret-shaped object key redaction", () => {
     assert.deepEqual(Object.keys(data.by_extension), ["[redacted-secret-file]", ".ts"]);
     assert.equal(data.by_extension[".ts"], 2);
     assert.equal(data.by_extension["[redacted-secret-file]"], 1);
+  });
+});
+
+describe("non-string metadata at the output boundary", () => {
+  it("keeps numeric estimatedTokens a number through toolSuccess", () => {
+    const success = toolSuccess({
+      ok: true as const,
+      summary: "Loaded knowledge packs",
+      available_packs: [
+        {
+          id: "secrets",
+          title: "Secrets",
+          stackTags: ["nextjs"],
+          itemCount: 12,
+          estimatedTokens: 1200,
+        },
+      ],
+    });
+    const data = success.structuredContent as {
+      available_packs: Array<{ estimatedTokens: number }>;
+    };
+    assert.equal(typeof data.available_packs[0]?.estimatedTokens, "number");
+    assert.equal(data.available_packs[0]?.estimatedTokens, 1200);
+    assert.ok(!JSON.stringify(data).includes('"estimatedTokens":"[REDACTED:****]"'));
+  });
+
+  it("leaves numeric and boolean scalars untouched under secret-shaped keys", () => {
+    const value = redactValue({
+      token: "secret-string-value",
+      estimatedTokens: 1200,
+      include_secret: true,
+      count: 3,
+    });
+    assert.deepEqual(value, {
+      token: "[REDACTED:****]",
+      estimatedTokens: 1200,
+      include_secret: true,
+      count: 3,
+    });
+  });
+
+  it("still redacts string and container values under secret-shaped keys", () => {
+    const value = redactValue({
+      credentials: { token: "nested-secret" },
+      api_key: ["arr-secret"],
+      password: "plain-secret",
+    });
+    assert.equal(
+      JSON.stringify(value),
+      JSON.stringify({
+        "[redacted-secret-file]": "[REDACTED:****]",
+        api_key: "[REDACTED:****]",
+        password: "[REDACTED:****]",
+      }),
+    );
   });
 });
