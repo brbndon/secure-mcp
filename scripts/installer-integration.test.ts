@@ -327,6 +327,18 @@ test("PowerShell installer parity", { timeout: 120_000, skip: isWindows ? false 
     const home = tempHome("pwsh");
     const roots = tempHome("roots-pwsh");
     tempDirs.push(home, roots);
+    // Seed a pre-existing client config with a single-element array and an
+    // explicit null field: ConvertTo-Hashtable must survive both (null values
+    // used to crash the Mandatory InputObject binding and abort every action).
+    const seededPi = path.join(home, ".pi", "agent", "mcp.json");
+    mkdirSync(path.dirname(seededPi), { recursive: true });
+    const seed = {
+      mcpServers: { other: { command: "echo", args: ["hello"] } },
+      keep: { note: "unrelated" },
+      nullable: null,
+    };
+    writeFileSync(seededPi, JSON.stringify(seed, null, 2));
+
     let result = runInstaller(home, roots, "install", "pwsh");
     assert.equal(result.status, 0, result.stderr);
     expectInstalled(home, roots);
@@ -335,6 +347,14 @@ test("PowerShell installer parity", { timeout: 120_000, skip: isWindows ? false 
     result = runInstaller(home, roots, "uninstall", "pwsh");
     assert.equal(result.status, 0, result.stderr);
     assertUninstalled(home);
+    const piAfter = readJson(seededPi);
+    assert.deepEqual((piAfter.mcpServers as Record<string, unknown>)["other"], {
+      command: "echo",
+      args: ["hello"],
+    });
+    assert.equal((piAfter.keep as { note: string }).note, "unrelated");
+    assert.equal("nullable" in piAfter, true, "explicit null key must survive the round-trip");
+    assert.equal(piAfter.nullable, null);
   } finally {
     for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   }
