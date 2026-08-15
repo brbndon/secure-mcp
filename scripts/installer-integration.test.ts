@@ -319,7 +319,8 @@ test("installed server starts and negotiates strict MCP v2", { timeout: 60_000 }
   }
 });
 
-test("setup.sh bootstraps a fresh home end-to-end", { timeout: 300_000 }, () => {
+test("setup.sh bootstraps a fresh home end-to-end", { timeout: 300_000, skip: isWindows }, () => {
+  // setup.sh is Unix-only by contract; Windows uses setup.ps1 (next test).
   ensureBuilt();
   const tempDirs: string[] = [];
   try {
