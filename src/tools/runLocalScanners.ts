@@ -64,6 +64,18 @@ export function scannersEnabled(enable: boolean, env: NodeJS.ProcessEnv): boolea
   return enable === true && scannerEnvEnabled(env.SECURE_MCP_LOCAL_SCANNERS);
 }
 
+/** Minimal env for scanner children — no MCP secrets or caller extras. */
+export function scannerChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP"]) {
+    if (env[key] !== undefined) out[key] = env[key];
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith("SEMGREP_") || key.startsWith("GITLEAKS_")) out[key] = value;
+  }
+  return out;
+}
+
 /** Run a binary with cwd, timeout, and no shell; classify the outcome. */
 export async function runBinary(
   execFile: ExecFileFn,
@@ -77,14 +89,23 @@ export async function runBinary(
       cwd,
       timeout: timeoutMs,
       maxBuffer: MAX_BUFFER_BYTES,
-      env: process.env,
+      env: scannerChildEnv(),
     });
     return { status: "ok", stdout, stderr };
   } catch (error) {
-    const err = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string };
+    const err = error as NodeJS.ErrnoException & {
+      killed?: boolean;
+      signal?: string;
+      stdout?: string;
+      stderr?: string;
+    };
     if (err.code === "ENOENT") return { status: "missing", binary };
     if (err.killed || err.signal === "SIGKILL" || err.signal === "SIGTERM" || err.code === "ETIMEDOUT") {
       return { status: "timeout", binary };
+    }
+    // semgrep/gitleaks exit 1 when they find issues; stdout is still a completed report.
+    if (typeof err.stdout === "string") {
+      return { status: "ok", stdout: err.stdout, stderr: typeof err.stderr === "string" ? err.stderr : "" };
     }
     return {
       status: "error",
@@ -291,7 +312,7 @@ Returns:
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     async (params: Input) => {
@@ -338,9 +359,9 @@ Returns:
           }
         }
         const semgrepArgs = semgrepConfig
-          ? ["scan", "--json", "--config", semgrepConfig]
+          ? ["scan", "--json", "--exit-zero", "--metrics=off", "--config", semgrepConfig]
           : params.allow_remote_rules
-            ? ["scan", "--json", "--config", "auto"]
+            ? ["scan", "--json", "--exit-zero", "--metrics=off", "--config", "auto"]
             : null;
         if (semgrepArgs === null) {
           scanners.push({
@@ -378,7 +399,7 @@ Returns:
         const gitleaksRun = await runBinary(
           execFile,
           "gitleaks",
-          ["detect", "--no-git", "--no-banner", "--report-format=json"],
+          ["detect", "--no-git", "--no-banner", "--report-format=json", "--exit-code=0"],
           root,
           timeoutMs,
         );

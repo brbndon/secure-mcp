@@ -1,20 +1,7 @@
 /**
  * Next.js / TypeScript App Router knowledge for defensive secure-code review.
- * Checklists live in packs; this module re-exports and keeps scan patterns.
+ * Checklists live in packs; this module keeps scan patterns.
  */
-
-import { authWebPack } from "./packs/auth-web.js";
-import type { PackItem } from "./packs/types.js";
-import { webNextPack } from "./packs/web-next.js";
-
-/** @deprecated Prefer PackItem from packs/types — kept for existing imports. */
-export type ChecklistItem = PackItem;
-
-/** Next.js checklist (web-next pack + CSRF item from auth-web for compatibility). */
-export const NEXTJS_CHECKLIST: PackItem[] = [
-  ...webNextPack.items,
-  ...authWebPack.items.filter((i) => i.id === "AUTHWEB-CSRF"),
-];
 
 /** Heuristics specific to Next.js source (remediation oriented). */
 export const NEXTJS_PATTERNS: {

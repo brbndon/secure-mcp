@@ -169,6 +169,41 @@ describe("profileProject fixtures", () => {
     assert.ok(profile.likelyStacks.includes("nextjs"));
   });
 
+  it("does not treat package.json alone as TypeScript or app/ as Next.js", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-not-next-"));
+    try {
+      await fs.mkdir(path.join(root, "app"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "rails-frontend-assets", dependencies: {} }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "app", "readme.txt"), "not next\n", "utf8");
+      const profile = await profileProject(root);
+      assert.equal(profile.hasPackageJson, true);
+      assert.equal(profile.hasTypeScriptFiles, false);
+      assert.ok(!profile.likelyStacks.includes("typescript"));
+      assert.ok(!profile.likelyStacks.includes("nextjs"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects Next.js from a next dependency without next.config", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-next-dep-"));
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ dependencies: { next: "15.0.0" } }),
+        "utf8",
+      );
+      const profile = await profileProject(root);
+      assert.ok(profile.likelyStacks.includes("nextjs"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("honors focus_paths during language sampling", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-focus-"));
     try {

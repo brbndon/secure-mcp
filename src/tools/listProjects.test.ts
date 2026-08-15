@@ -1,5 +1,5 @@
 /**
- * Tests for cross-repo allowlist ergonomics (Tier 2 unit B2):
+ * Tests for allowlist discovery:
  * secure_mcp_list_authorized_roots and secure_mcp_list_projects.
  */
 
@@ -149,9 +149,10 @@ describe("secure_mcp_list_projects", () => {
       });
       assert.equal(result.isError, undefined);
       const data = result.structuredContent as {
+        parent_root: string;
         project_count: number;
         truncated: boolean;
-        projects: Array<{ path: string; markers: string[] }>;
+        projects: Array<{ path: string; project_root: string; markers: string[] }>;
       };
       const paths = data.projects.map((p) => p.path);
       assert.ok(paths.includes("apps/web"));
@@ -160,6 +161,8 @@ describe("secure_mcp_list_projects", () => {
       const billing = data.projects.find((p) => p.path === "services/billing");
       assert.ok(billing);
       assert.deepEqual(billing.markers, ["pyproject.toml"]);
+      assert.equal(billing.project_root, path.join(data.parent_root, "services", "billing"));
+      assert.ok(path.isAbsolute(billing.project_root));
       assert.equal(data.truncated, false);
     } finally {
       await client.close();

@@ -94,6 +94,11 @@ function markerBasename(relativePath: string): string | null {
   return null;
 }
 
+/** Join a posix-relative discovery path onto the canonical parent root. */
+function projectRootFor(parent: string, relativeDir: string): string {
+  return relativeDir === "." ? parent : path.join(parent, ...relativeDir.split("/"));
+}
+
 export function registerListProjects(server: McpServer, config: ServerConfig = loadConfig()): void {
   server.registerTool(
     "secure_mcp_list_projects",
@@ -113,9 +118,9 @@ Args:
   - response_format (json|markdown): default json
 
 Returns:
-  parent_root, project_count, truncated, projects[] (path, markers), coverage, notes.
+  parent_root, project_count, truncated, projects[] (path, project_root, markers), coverage, notes.
 
-Only manifests are used to identify projects; contents are not opened.`,
+Only manifests are used to identify projects; contents are not opened. Pass project_root (absolute) to other tools — path is the parent-relative posix form.`,
       inputSchema: InputSchema,
       annotations: {
         readOnlyHint: true,
@@ -158,6 +163,7 @@ Only manifests are used to identify projects; contents are not opened.`,
         const projectTruncated = sorted.length > params.max_projects;
         const projects = sorted.slice(0, params.max_projects).map(([dir, markers]) => ({
           path: dir,
+          project_root: projectRootFor(parent, dir),
           markers: [...markers].sort(),
         }));
 
@@ -176,7 +182,7 @@ Only manifests are used to identify projects; contents are not opened.`,
             walkTruncated
               ? "File walk was truncated by max_files/max_depth; raise the parent scope or lower expectations for deep trees."
               : `Scanned to depth ${effectiveDepth}; raise max_depth for deeper monorepos.`,
-            "Pass a listed project path as project_root to the other tools for a package-scoped review.",
+            "Pass a listed project's project_root (absolute) to the other tools for a package-scoped review.",
           ],
         };
 
@@ -192,7 +198,7 @@ Only manifests are used to identify projects; contents are not opened.`,
               {
                 heading: "Project roots",
                 bullets: redactedSecretPaths(
-                  projects.map((p) => `${p.path} [${p.markers.join(", ")}]`),
+                  projects.map((p) => `${p.project_root} [${p.markers.join(", ")}]`),
                 ),
               },
             ],

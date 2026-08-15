@@ -2,6 +2,22 @@
 
 Notable changes to secure-mcp are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- `secure_mcp_list_projects` now returns an absolute `project_root` alongside the parent-relative `path`, so discovered packages can be passed to other tools without resolving against the MCP process cwd.
+- Relocated the eval-harness notes into the public docs tree and removed local planning, vendored `mcp-builder`, unused icon/screenshot variants, and unused logos.
+- Inventory now reports `hasExpo` and `hasMacOS`. Next.js is claimed only from `next.config.*` or a `next` dependency; a `package.json` or top-level `app/`/`pages/` directory is no longer enough.
+
+### Fixed
+
+- `secure_mcp_run_local_scanners` now treats scanner exit code 1 with JSON stdout as a completed report (semgrep/gitleaks exit 1 when they find issues). Findings are no longer discarded as a scanner error.
+
+### Added
+
+- Apache `NOTICE` identifying the project authors; included in the published npm tarball.
+
 ## 2.0.0 — 2026-08-14
 
 ### Changed

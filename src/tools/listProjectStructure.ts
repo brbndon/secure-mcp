@@ -107,7 +107,7 @@ MANDATORY AGENT WORKFLOW
 
 Args:
   - project_root (string): Path to the repository root under review
-  - stack (enum, optional): auto|common|typescript|nextjs|swift|expo
+  - stack (enum, optional): accepted for shared-schema compatibility; inventory is not stack-filtered. Use include_extensions or focus_paths to narrow.
   - max_files (number, optional): Cap on files to list
   - max_depth (number, optional): Directory depth limit
   - include_extensions (string[], optional): Limit to these extensions
@@ -185,6 +185,8 @@ Error Handling:
             hasXcodeProject: profile.hasXcodeProject,
             hasSwiftFiles: profile.hasSwiftFiles,
             hasTypeScriptFiles: profile.hasTypeScriptFiles,
+            hasExpo: profile.hasExpo,
+            hasMacOS: profile.hasMacOS,
             topLevelEntries: redactedSecretPaths(profile.topLevelEntries),
             topLevelEntriesTruncated: profile.topLevelEntriesTruncated,
           },
