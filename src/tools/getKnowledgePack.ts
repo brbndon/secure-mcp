@@ -5,7 +5,8 @@
 
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { toolError, toolSuccess } from "../lib/filesystem.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
 import {
   ABSOLUTE_MAX_ITEMS,
   DEFAULT_MAX_ITEMS,
@@ -171,23 +172,30 @@ Returns:
           ],
         };
 
-        const md = [
-          `# Knowledge packs`,
-          "",
-          `**Applied:** ${packIds.join(", ")}`,
-          `**Detail:** ${detail}`,
-          `**Items:** ${items.length}`,
-          "",
-          ...items.map((item) => {
-            const title = "title" in item ? item.title : "";
-            const id = "id" in item ? item.id : "";
-            const sev =
-              "severityHint" in item ? String(item.severityHint) : "";
-            return `- \`${id}\` (${sev}) ${title}`;
-          }),
-          "",
-          `_Do not load unused stack packs. Confirm issues in source before remediation reports._`,
-        ].join("\n");
+        const md = renderMarkdownDocument({
+          title: "Knowledge packs",
+          metadata: [
+            { label: "Applied", value: packIds.join(", ") },
+            { label: "Detail", value: detail },
+            { label: "Items", value: String(items.length) },
+          ],
+          sections: [
+            {
+              heading: "Checklist items",
+              fields: items.map((item) => ({
+                label: item.id,
+                labelCode: true,
+                value: `(${item.severityHint}) ${item.title}`,
+              })),
+            },
+            {
+              heading: "Guidance",
+              paragraphs: [
+                "Do not load unused stack packs. Confirm issues in source before remediation reports.",
+              ],
+            },
+          ],
+        });
 
         return toolSuccess(data, {
           responseFormat: params.response_format,

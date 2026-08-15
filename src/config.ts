@@ -12,7 +12,7 @@ import {
 } from "./lib/filesystem.js";
 
 export const SERVER_NAME = "secure-mcp";
-export const SERVER_VERSION = "1.0.0";
+export const SERVER_VERSION = "2.0.0";
 
 export interface ServerConfig {
   name: string;

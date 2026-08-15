@@ -17,12 +17,14 @@ import {
   focusedProfileForStack,
   getPack,
   packIdsWithCategories,
+  recommendCategoryPackIds,
   recommendPackIds,
   recommendPackPlan,
   uniquePackIds,
 } from "./registry.js";
 import type { StackFocus } from "../../lib/types.js";
 import type { KnowledgePack, PackItem } from "./types.js";
+import { recommendCategoryPackIds as recommendCategoryPackIdsFromBarrel } from "./index.js";
 
 const emptyProfile = {
   hasExpo: false,
@@ -31,6 +33,10 @@ const emptyProfile = {
   hasSwiftFiles: false,
 };
 
+it("keeps the published pack compatibility barrel available", () => {
+  assert.equal(recommendCategoryPackIdsFromBarrel, recommendCategoryPackIds);
+});
+
 function itemIdsFromPack(packId: string, items: PackItem[]): number {
   const pack = getPack(packId as Parameters<typeof getPack>[0]);
   const ids = new Set(pack.items.map((i) => i.id));
@@ -38,9 +44,9 @@ function itemIdsFromPack(packId: string, items: PackItem[]): number {
 }
 
 describe("recommendPackPlan", () => {
-  it("recommends core+threat-model for unknown stacks", () => {
+  it("recommends core+secrets+threat-model for unknown stacks", () => {
     const plan = recommendPackPlan([], emptyProfile);
-    assert.deepEqual(plan.recommended_packs, ["core", "threat-model"]);
+    assert.deepEqual(plan.recommended_packs, ["core", "secrets", "threat-model"]);
     assert.equal(plan.pack_batches.length, 1);
     assert.deepEqual(plan.pack_batches[0], plan.recommended_packs);
   });

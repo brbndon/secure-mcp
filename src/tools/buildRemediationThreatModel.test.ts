@@ -6,7 +6,12 @@ import { describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../server.js";
-import { threatEvidencePaths, threatModelPackIds } from "./buildRemediationThreatModel.js";
+import {
+  appliedThreatModelPackIds,
+  threatEvidencePaths,
+  threatModelFamiliesForStacks,
+  threatModelPackIds,
+} from "./buildRemediationThreatModel.js";
 
 describe("threat model provenance", () => {
   it("derives threat-specific evidence paths instead of a global union", () => {
@@ -41,6 +46,36 @@ describe("threat model provenance", () => {
     assert.ok(expoPacks.includes("threat-model"));
     assert.ok(expoPacks.includes("core"));
     assert.ok(!expoPacks.includes("web-next"));
+  });
+
+  it("distinguishes consulted routing from emitted STRIDE families", () => {
+    const nextConsulted = threatModelPackIds(["nextjs", "typescript"]);
+    const nextApplied = appliedThreatModelPackIds(threatModelFamiliesForStacks(["nextjs", "typescript"]));
+    assert.ok(nextConsulted.includes("auth-web"));
+    assert.ok(nextConsulted.includes("web-api"));
+    assert.deepEqual(nextApplied, ["threat-model", "web-next"]);
+    assert.ok(!nextApplied.includes("auth-web"));
+    assert.ok(!nextApplied.includes("expo-rn"));
+
+    const expoConsulted = threatModelPackIds(["expo"]);
+    const expoApplied = appliedThreatModelPackIds(threatModelFamiliesForStacks(["expo"]));
+    assert.ok(expoConsulted.includes("expo-rn"));
+    assert.deepEqual(expoApplied, ["threat-model"]);
+    assert.ok(!expoApplied.includes("expo-rn"));
+    assert.ok(!expoApplied.includes("web-next"));
+
+    const swiftApplied = appliedThreatModelPackIds(threatModelFamiliesForStacks(["swift"]));
+    assert.deepEqual(swiftApplied, ["threat-model", "swift-ios"]);
+  });
+
+  it("keeps applied pack ids within consulted routing for a generic TypeScript root", () => {
+    const consulted = threatModelPackIds(["typescript"]);
+    const applied = appliedThreatModelPackIds(threatModelFamiliesForStacks(["typescript"]));
+    // A generic TS/API root has no Next evidence: no web-next STRIDE fragments
+    // are emitted, so applied must be the generic subset of consulted.
+    assert.ok(!consulted.includes("web-next"));
+    assert.deepEqual(applied, ["threat-model"]);
+    for (const id of applied) assert.ok(consulted.includes(id));
   });
 
   it("does not report component labels as observed paths without inventory support", () => {
@@ -90,11 +125,13 @@ describe("threat-model inventory coverage", () => {
         });
         assert.equal(result.isError, undefined);
         const structured = result.structuredContent as {
+          findings?: unknown[];
           coverage?: {
             scan_status: string;
             not_observed_means: string;
             review_basis?: string;
             files_reviewed: unknown[];
+            candidate_disposition_counts: Record<string, number>;
           };
         };
         const coverage = structured.coverage;
@@ -106,6 +143,12 @@ describe("threat-model inventory coverage", () => {
         assert.equal(coverage.review_basis, "inventory_only");
         assert.deepEqual(coverage.files_reviewed, []);
         assert.notEqual(coverage.not_observed_means, "no_candidate_in_files_reviewed");
+        assert.ok(coverage.candidate_disposition_counts.needs_review > 0);
+        assert.equal(coverage.candidate_disposition_counts.needs_review, 2);
+        assert.ok(
+          coverage.candidate_disposition_counts.needs_review >=
+            (structured.findings?.length ?? 0),
+        );
       } finally {
         await client.close();
         await server.close();

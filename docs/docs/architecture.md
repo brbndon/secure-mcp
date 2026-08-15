@@ -3,7 +3,7 @@ title: Architecture
 description: Understand secure-mcp's stdio process boundary, filesystem safety policy, progressive knowledge packs, and the layers that keep audits read-only.
 sidebar:
   label: Architecture
-  order: 6
+  order: 7
 ---
 
 ## Overview
@@ -47,7 +47,7 @@ sidebar:
 
 ## Transport
 
-The server speaks the stateless MCP protocol (spec `2026-07-28`) over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained, and the SDK falls back to legacy behavior for older clients (`legacy: "serve"` in `src/index.ts`).
+The server speaks the stateless MCP protocol revision `2026-07-28` over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained. The entry runs with `legacy: "reject"`, so 2025-era `initialize` openings are answered with the unsupported-protocol-version error and never served.
 
 - Do **not** log to stdout (corrupts the protocol).
 - Use `console.error` for startup and failure messages.
@@ -81,7 +81,7 @@ Required remediation structure:
 - `residual_risk`
 - `verification_suggestion`
 
-Category tools emit findings; `secure_mcp_produce_findings` normalises them for reports.
+Category tools emit findings; `secure_mcp_produce_findings` normalises them for reports. Candidate dispositions include `fixed` for revalidated remediations (counted, but not prioritised over open work). Architecture responses include typed surfaces and coverage gaps so agents can prioritise entrypoints and sample zero-hit high-value paths; the architecture result is the security brief (no separate brief tool).
 
 ## Progressive knowledge packs
 
@@ -108,7 +108,7 @@ Scan heuristics remain in `common.ts` / `nextjs.ts` / `swift.ts` (used server-si
 
 Heuristics are intentionally imperfect. Confidence fields tell agents to verify before confirming.
 
-## Out of scope (v1)
+## Out of scope
 
 - HTTP / remote MCP transport
 - Database or persistent audit history

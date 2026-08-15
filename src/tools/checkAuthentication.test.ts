@@ -8,6 +8,7 @@ import { performance } from "node:perf_hooks";
 import { describe, it } from "node:test";
 import {
   AUTH_PATTERNS,
+  appliedAuthPackIds,
   authPackIdsForProfile,
   authPatternAppliesToStack,
   isAuthCandidatePath,
@@ -84,11 +85,30 @@ describe("authPackIdsForProfile", () => {
   });
 });
 
+describe("appliedAuthPackIds", () => {
+  it("maps evaluated families to content-true packs without inventing consulted-only ids", () => {
+    assert.deepEqual(appliedAuthPackIds(["expo-rn.profile-auth-storage"]), ["expo-rn"]);
+    assert.deepEqual(
+      appliedAuthPackIds(["core.authentication", "web-next.authentication", "web-next.profile-auth-boundary"]),
+      ["core", "web-next"],
+    );
+    assert.deepEqual(appliedAuthPackIds(["auth-web.authentication"]), []);
+  });
+});
+
 describe("authPatternAppliesToStack", () => {
   it("keeps every pattern under auto", () => {
     for (const pattern of AUTH_PATTERNS) {
       assert.equal(authPatternAppliesToStack(pattern.stack, "auto"), true);
     }
+  });
+
+  it("gates auto mode by detected stacks so Next families stay off Expo roots", () => {
+    assert.equal(authPatternAppliesToStack("nextjs", "auto", ["expo", "typescript"]), false);
+    assert.equal(authPatternAppliesToStack("expo", "auto", ["expo", "typescript"]), true);
+    assert.equal(authPatternAppliesToStack("swift", "auto", ["swift"]), true);
+    assert.equal(authPatternAppliesToStack("nextjs", "auto", ["swift"]), false);
+    assert.equal(authPatternAppliesToStack("typescript", "auto", ["expo"]), true);
   });
 
   it("excludes Swift patterns from Expo focus and vice versa", () => {

@@ -145,7 +145,11 @@ export function recommendPackPlan(
 
   const knownAppStack = hasNext || hasExpo || hasSwift || hasTs;
   if (!knownAppStack) {
-    const recommended_packs: PackId[] = ["core", "threat-model"];
+    // Honest degrade for unknown/minimal stacks: core + secrets + threat-model.
+    // Unknown repos can still leak credentials, so secrets is always in scope;
+    // no stack pack is ever claimed without evidence. Architecture adds explicit
+    // unsupported/gap notes so agents report a limited generic review, not a full audit.
+    const recommended_packs: PackId[] = ["core", "secrets", "threat-model"];
     return {
       recommended_packs,
       pack_batches: chunkPackIds(recommended_packs),
@@ -239,8 +243,9 @@ export function filterPackItems(
 
 /**
  * Narrow pack ids to those that actually carry items in the given categories.
- * Category tools use this so applied_pack_ids reflects the packs behind their
- * heuristics (e.g. an Expo-only project should not claim auth-web).
+ * Category tools use this so consulted_pack_ids reflects the packs behind
+ * their routing (e.g. an Expo-only project should not consult auth-web).
+ * applied_pack_ids is the subset whose detectors actually evaluated content.
  */
 export function packIdsWithCategories(
   ids: readonly PackId[],
@@ -250,6 +255,34 @@ export function packIdsWithCategories(
   return ids.filter((id) =>
     PACK_BY_ID[id].items.some((item) => wanted.has(item.category.toLowerCase())),
   );
+}
+
+type PackRoutingProfile = Pick<
+  ProjectProfile,
+  "hasExpo" | "hasMacOS" | "hasNextConfig" | "hasSwiftFiles"
+>;
+
+/**
+ * Shared category-tool routing: recommend from stack/profile evidence, apply
+ * exclusive forced-stack flags when requested, then narrow to pack content the
+ * tool actually uses. The threat-model pack is opt-in for detector tools.
+ */
+export function recommendCategoryPackIds(
+  stacks: readonly StackFocus[],
+  categories: readonly string[],
+  options: {
+    profile?: PackRoutingProfile;
+    focusedStack?: StackFocus;
+    includeThreatModel?: boolean;
+  } = {},
+): PackId[] {
+  const profile = options.focusedStack
+    ? focusedProfileForStack(options.focusedStack, options.profile)
+    : options.profile;
+  const routed = packIdsWithCategories(recommendPackIds([...stacks], profile), categories);
+  return options.includeThreatModel
+    ? routed
+    : routed.filter((id) => id !== "threat-model");
 }
 
 /**
@@ -274,10 +307,6 @@ export function countEligiblePackItems(
   return ids.size;
 }
 
-/**
- * Count how many returned items belong to each pack (by item id membership).
- * Used so agents can see fair multi-pack coverage (or truncation).
- */
 /** Preserve first-seen order while dropping duplicate pack ids. */
 export function uniquePackIds(packIds: readonly PackId[]): PackId[] {
   const seen = new Set<PackId>();
@@ -290,6 +319,10 @@ export function uniquePackIds(packIds: readonly PackId[]): PackId[] {
   return out;
 }
 
+/**
+ * Count how many returned items belong to each pack (by item id membership).
+ * Used so agents can see fair multi-pack coverage (or truncation).
+ */
 export function countItemsPerPack(
   items: ReadonlyArray<{ id: string }>,
   packIds: readonly PackId[],

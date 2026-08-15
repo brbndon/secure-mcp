@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.brbndon/secure-mcp",
+  "title": "secure-mcp",
+  "description": "Local stdio MCP server for defensive, remediation-focused secure code review of TypeScript/Next.js, Swift/SwiftUI, and Expo/React Native repositories, with optional SARIF/CI export.",
+  "repository": {
+    "url": "https://github.com/brbndon/secure-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/brbndon/secure-mcp#readme",
+  "version": "2.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@brdndon/secure-mcp",
+      "version": "2.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "SECURE_MCP_ALLOWED_ROOTS",
+          "description": "OS-path-delimited list of existing absolute directories the server may inspect.",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "SECURE_MCP_LOCAL_SCANNERS",
+          "description": "Set to 1 to allow secure_mcp_run_local_scanners when the tool is also called with enable: true. Default off.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

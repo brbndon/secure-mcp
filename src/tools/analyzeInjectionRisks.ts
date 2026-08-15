@@ -19,15 +19,8 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
 import { toolError, toolSuccess } from "../lib/envelope.js";
-import {
-  detectWithBudget,
-  findLineNumber,
-  normalizeAuthorizedProjectRoot,
-  profileProject,
-  readProjectFile,
-  snippetAround,
-  walkProject,
-} from "../lib/filesystem.js";
+import { detectWithBudget, findLineNumber, snippetAround } from "../lib/filesystem.js";
+import { runProjectScan } from "../lib/project-scan.js";
 import {
   redactCoverageReport,
   redactFinding,
@@ -306,166 +299,123 @@ export function registerAnalyzeInjectionRisks(
     },
     async (params: Input) => {
       try {
-        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const nextId = createFindingIdFactory("INJ");
         const findings: Finding[] = [];
-        const filesScanned: string[] = [];
 
         const stack = params.stack ?? "auto";
         // Auto mode routes by the stacks detected in the actual project, so a
         // Swift-only repo never configures Next.js families (and vice versa).
-        const profile =
-          stack === "auto"
-            ? await profileProject(root, {
-                focusPrefixes: params.focus_paths,
-                maxFiles: params.max_files ?? config.defaultMaxFiles,
-                maxDepth: config.maxDepth,
-                maxFileBytes: config.maxFileBytes,
-                maxTotalBytes: config.maxTotalBytes,
-                allowedRoots: config.allowedRoots,
-              })
-            : undefined;
-        const detectedStacks = (profile?.likelyStacks ?? []) as StackFocus[];
-        const patterns = buildInjectionPatterns(stack, detectedStacks);
-        const consultedPackIds = uniquePackIds(patterns.map((pattern) => pattern.packId));
-        const detectorFamiliesAvailable = new Set(
-          injectionDetectorFamiliesForStack(stack, detectedStacks),
-        );
         const detectorFamiliesRun = new Set<InjectionDetectorFamily>();
+        let consultedPackIds: ReturnType<typeof uniquePackIds> = [];
+        let detectorFamiliesAvailable = new Set<InjectionDetectorFamily>();
+        let configuredPatterns: ReturnType<typeof buildInjectionPatterns> | undefined;
 
-        const extensions = new Set([
-          ".ts",
-          ".tsx",
-          ".js",
-          ".jsx",
-          ".mjs",
-          ".cjs",
-          ".swift",
-          ".plist",
-          ".xml",
-          ".entitlements",
-          ".html",
-          ".md",
-        ]);
-
-        const { files, coverageSession } = await walkProject(root, {
-          maxFiles: params.max_files ?? config.defaultMaxFiles,
-          maxDepth: config.maxDepth,
-          maxFileBytes: config.maxFileBytes,
-          maxTotalBytes: config.maxTotalBytes,
-          allowedRoots: config.allowedRoots,
-          extensions,
-          focusPrefixes: params.focus_paths,
-        });
-
-        for (const file of files) {
-          if (file.size > config.maxFileBytes) {
-            coverageSession.recordExclusion({
-              path: file.relativePath,
-              kind: "file",
-              reason: "max_file_bytes",
-            });
-            continue;
-          }
-          if (
-            file.relativePath.endsWith(".md") &&
-            !file.relativePath.toLowerCase().includes("security")
-          ) {
-            coverageSession.recordExclusion({
-              path: file.relativePath,
-              kind: "file",
-              reason: "non_security_documentation",
-            });
-            continue;
-          }
-
-          // Explicit per-family extension applicability: a file is scanned
-          // only by the patterns whose families declare its extension.
-          const applicablePatterns = patterns.filter((pattern) =>
-            injectionPatternAppliesToFile(pattern, file.ext),
+        const configureForProfile = (profileStacks: readonly StackFocus[] | undefined) => {
+          if (configuredPatterns) return configuredPatterns;
+          const detectedStacks = (profileStacks ?? []) as StackFocus[];
+          configuredPatterns = buildInjectionPatterns(stack, detectedStacks);
+          consultedPackIds = uniquePackIds(configuredPatterns.map((pattern) => pattern.packId));
+          detectorFamiliesAvailable = new Set(
+            injectionDetectorFamiliesForStack(stack, detectedStacks),
           );
-          if (applicablePatterns.length === 0) {
-            coverageSession.recordExclusion({
-              path: file.relativePath,
-              kind: "file",
-              reason: "no_applicable_injection_detectors",
-            });
-            continue;
-          }
+          return configuredPatterns;
+        };
 
-          let content: string;
-          try {
-            content = (
-              await readProjectFile(
-                root,
-                file.relativePath,
-                config.maxFileBytes,
-                config.allowedRoots,
-              )
-            ).content;
-          } catch {
-            coverageSession.recordExclusion({
-              path: file.relativePath,
-              kind: "file",
-              reason: "file_read_error",
-            });
-            continue;
-          }
-          filesScanned.push(file.relativePath);
-          coverageSession.recordReviewedFile(file.relativePath);
-
-          for (const pattern of applicablePatterns) {
-            detectorFamiliesRun.add(pattern.detectorFamily);
-
-            let hits = 0;
-            for (const hit of detectWithBudget(pattern.regex, content)) {
-              if (pattern.filter && !pattern.filter(hit.match, content)) {
-                continue;
-              }
-              if (hits >= 8) break;
-              hits++;
-              findings.push(
-                redactFinding(
-                  buildFinding({
-                    id: nextId(),
-                    title: pattern.title,
-                    description: `Potential weakness pattern ${pattern.id} observed in ${file.relativePath}. Review whether untrusted input can influence this location and apply the remediation if so.`,
-                    severity: pattern.severity,
-                    confidence: pattern.confidence ?? "medium",
-                    category: pattern.category ?? "injection-risk",
-                    stack: pattern.stack,
-                    rule_family: pattern.detectorFamily,
-                    root_control: pattern.id,
-                    file: file.relativePath,
-                    line: findLineNumber(content, hit.index),
-                    evidence: snippetAround(content, hit.index),
-                    source: "Request, configuration, or other untrusted input is not proven by this heuristic.",
-                    control: pattern.remediation,
-                    sink: `${file.relativePath}:${findLineNumber(content, hit.index)}`,
-                    proof_gap: [
-                      "Trace the candidate input to this sink and confirm the runtime path is reachable.",
-                      "Confirm validation, encoding, parameterization, or allowlisting at the boundary.",
-                    ],
-                    validation: [
-                      "Review the cited file and add a regression test that rejects unsafe input at the boundary.",
-                    ],
-                    impact_if_unremediated: pattern.impact,
-                    remediation: pattern.remediation,
-                    residual_risk:
-                      "Even after fixing this sink, similar patterns may exist elsewhere; re-check related modules.",
-                    verification_suggestion:
-                      "Add tests or code-review checks that unsafe sinks do not receive unsanitized external input; re-run this tool after fixes.",
-                    cwe: pattern.cwe,
-                    tags: [pattern.category ?? "injection-risk", pattern.id, "remediation"],
-                  }),
-                ),
-              );
+        const scan = await runProjectScan({
+          projectRoot: params.project_root,
+          config,
+          maxFiles: params.max_files,
+          focusPaths: params.focus_paths,
+          profile: stack === "auto",
+          extensions: new Set([
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".mjs",
+            ".cjs",
+            ".swift",
+            ".plist",
+            ".xml",
+            ".entitlements",
+            ".html",
+            ".md",
+          ]),
+          selectFile: (file, ctx) => {
+            const patterns = configureForProfile(ctx.profile?.likelyStacks);
+            if (
+              file.relativePath.endsWith(".md") &&
+              !file.relativePath.toLowerCase().includes("security")
+            ) {
+              return { skip: true, reason: "non_security_documentation" };
             }
-          }
-        }
+            const applicablePatterns = patterns.filter((pattern) =>
+              injectionPatternAppliesToFile(pattern, file.ext),
+            );
+            if (applicablePatterns.length === 0) {
+              return { skip: true, reason: "no_applicable_injection_detectors" };
+            }
+            return { skip: false };
+          },
+          onFile: (file, content, ctx) => {
+            const patterns = configureForProfile(ctx.profile?.likelyStacks).filter((pattern) =>
+              injectionPatternAppliesToFile(pattern, file.ext),
+            );
+            for (const pattern of patterns) {
+              detectorFamiliesRun.add(pattern.detectorFamily);
+
+              let hits = 0;
+              for (const hit of detectWithBudget(pattern.regex, content)) {
+                if (pattern.filter && !pattern.filter(hit.match, content)) {
+                  continue;
+                }
+                if (hits >= 8) break;
+                hits++;
+                findings.push(
+                  redactFinding(
+                    buildFinding({
+                      id: nextId(),
+                      title: pattern.title,
+                      description: `Potential weakness pattern ${pattern.id} observed in ${file.relativePath}. Review whether untrusted input can influence this location and apply the remediation if so.`,
+                      severity: pattern.severity,
+                      confidence: pattern.confidence ?? "medium",
+                      category: pattern.category ?? "injection-risk",
+                      stack: pattern.stack,
+                      rule_family: pattern.detectorFamily,
+                      root_control: pattern.id,
+                      file: file.relativePath,
+                      line: findLineNumber(content, hit.index),
+                      evidence: snippetAround(content, hit.index),
+                      source: "Request, configuration, or other untrusted input is not proven by this heuristic.",
+                      control: pattern.remediation,
+                      sink: `${file.relativePath}:${findLineNumber(content, hit.index)}`,
+                      proof_gap: [
+                        "Trace the candidate input to this sink and confirm the runtime path is reachable.",
+                        "Confirm validation, encoding, parameterization, or allowlisting at the boundary.",
+                      ],
+                      validation: [
+                        "Review the cited file and add a regression test that rejects unsafe input at the boundary.",
+                      ],
+                      impact_if_unremediated: pattern.impact,
+                      remediation: pattern.remediation,
+                      residual_risk:
+                        "Even after fixing this sink, similar patterns may exist elsewhere; re-check related modules.",
+                      verification_suggestion:
+                        "Add tests or code-review checks that unsafe sinks do not receive unsanitized external input; re-run this tool after fixes.",
+                      cwe: pattern.cwe,
+                      tags: [pattern.category ?? "injection-risk", pattern.id, "remediation"],
+                    }),
+                  ),
+                );
+              }
+            }
+          },
+        });
+        const { root, profile, filesReviewed: filesScanned, finishCoverage } = scan;
+        configureForProfile(profile?.likelyStacks);
 
         findings.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
-        const finalizedCoverage = coverageSession.finish(findings);
+        const finalizedCoverage = finishCoverage(findings);
         const safeFindings = redactFindings(findings);
         const appliedPackIds = appliedInjectionPackIds([...detectorFamiliesRun]);
 

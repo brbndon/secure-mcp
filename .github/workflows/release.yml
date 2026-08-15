@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (must be 2.0.0)
+        required: true
+        default: "2.0.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-2.0.0
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    if: github.repository == 'brbndon/secure-mcp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      commit_sha: ${{ steps.identity.outputs.commit_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.20.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Require dispatch on merged main
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "release.yml only runs from workflow_dispatch" >&2
+            exit 1
+          fi
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "release.yml only runs from the canonical main branch" >&2
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "${{ github.sha }}" ]; then
+            echo "checkout HEAD does not match the dispatch commit" >&2
+            exit 1
+          fi
+          git fetch --tags --force
+
+      - name: Require requested version 2.0.0
+        id: identity
+        run: |
+          if [ "${{ inputs.version }}" != "2.0.0" ]; then
+            echo "only version 2.0.0 may be released through this workflow" >&2
+            exit 1
+          fi
+          node scripts/check-release-identity.mjs 2.0.0
+          if git rev-parse -q --verify refs/tags/v2.0.0 >/dev/null; then
+            echo "tag v2.0.0 already exists; refusing duplicate release" >&2
+            git show-ref --tags v2.0.0 >&2
+            exit 1
+          fi
+          echo "version=2.0.0" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run complete release gate
+        run: pnpm release:check
+
+      - name: Confirm npm 2.0.0 does not already exist
+        run: |
+          if npm view @brdndon/secure-mcp@2.0.0 version >/dev/null 2>&1; then
+            echo "npm package @brdndon/secure-mcp@2.0.0 already exists; refusing duplicate publish" >&2
+            exit 1
+          fi
+
+  publish:
+    name: Publish npm, tag, and GitHub release
+    needs: release-gate
+    runs-on: ubuntu-latest
+    environment: release
+    if: github.repository == 'brbndon/secure-mcp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-gate.outputs.commit_sha }}
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.20.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Confirm identity on the exact commit
+        run: node scripts/check-release-identity.mjs 2.0.0
+
+      - name: Publish with npm trusted publishing and provenance
+        run: npm publish --provenance --access public
+
+      - name: Tag the exact published commit
+        run: |
+          git tag -a v2.0.0 -m "secure-mcp 2.0.0"
+          git push origin v2.0.0
+
+      - name: Create GitHub release from changelog
+        run: |
+          node scripts/release-notes.mjs 2.0.0 > /tmp/secure-mcp-release-notes.md
+          gh release create v2.0.0 \
+            --repo brbndon/secure-mcp \
+            --title "secure-mcp 2.0.0" \
+            --notes-file /tmp/secure-mcp-release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Build secure-mcp locally, authorize repository roots, and connect the stdio MCP server to Claude, Cursor, Codex, or another client.
+description: Clone and build secure-mcp 2.x, authorize repository roots, and install the strict MCP v2 stdio server and agent workflow for pi, Cursor, or OpenAI Codex.
 sidebar:
   label: Installation
   order: 2
@@ -8,22 +8,27 @@ sidebar:
 
 ## Installation
 
-`secure-mcp` runs as a local subprocess over stdio. The client launches the built entrypoint, passes a filesystem allowlist in the environment, and exchanges MCP messages over stdin/stdout.
+`secure-mcp` runs as a local subprocess over stdio and speaks MCP protocol revision `2026-07-28` only. The client launches the built entrypoint, passes a filesystem allowlist in the environment, and exchanges MCP messages over stdin/stdout.
 
 ## Requirements
 
+- Git
 - Node.js 20 or newer
-- pnpm preferred (npm also works)
-- A local checkout of the server
+- pnpm 10
+- Bash and Python 3 for `scripts/install-agents.sh`; PowerShell 7 for `scripts/install-agents.ps1`
+- One or more existing absolute directories containing repositories you may review
+- An MCP client that supports protocol revision `2026-07-28`
 
-## Build the server
+## Clone and build
 
 ```bash
-pnpm install
+git clone https://github.com/brbndon/secure-mcp.git
+cd secure-mcp
+pnpm install --frozen-lockfile
 pnpm build
 ```
 
-The compiled entrypoint is `dist/index.js`.
+The checkout contains the server, installer, master agent skill, fixtures, source, and documentation. The compiled stdio entrypoint is `dist/index.js`.
 
 ## Authorize repository roots
 
@@ -35,9 +40,31 @@ export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
 
 Use `:` between multiple roots on macOS/Linux and `;` on Windows. Keep the scope as narrow as practical; canonical-path and symlink checks still apply within each authorized root.
 
-## Connect a client
+## Install the server and agent workflow
 
-Point your MCP client at the built entrypoint and pass the allowlist. Claude Desktop and Claude Code use a configuration shaped like this:
+The recommended installer wires this checkout's server and committed skill into pi, Cursor, and OpenAI Codex:
+
+```bash
+SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories \
+  ./scripts/install-agents.sh install
+./scripts/install-agents.sh check
+```
+
+The installer records the allowlist in each client configuration, points clients at this checkout's `dist/index.js`, and modifies only the secure-mcp entries it owns. Restart agent sessions after installation so they reload the MCP configuration and skill. Re-run the installer when the authorized roots change.
+
+Windows users use the equivalent PowerShell installer:
+
+```powershell
+$env:SECURE_MCP_ALLOWED_ROOTS = "C:\absolute\path\to\repositories"
+.\scripts\install-agents.ps1 install
+.\scripts\install-agents.ps1 check
+```
+
+`check` verifies installation; `uninstall` removes only entries owned by secure-mcp.
+
+## Manual client configuration
+
+If you do not use the installer, point any stdio MCP client that supports protocol `2026-07-28` at the built entrypoint and pass the allowlist:
 
 ```json
 {
@@ -53,14 +80,25 @@ Point your MCP client at the built entrypoint and pass the allowlist. Claude Des
 }
 ```
 
-Cursor and other stdio clients use the same `command`, `args`, and `env` values. The `project_root` supplied to a tool must be visible to the machine running the server, fall under an allowed root, and is safest as an absolute path.
+The `project_root` supplied to a tool must be visible to the machine running the server, fall under an allowed root, and is safest as an absolute path. See [Client compatibility](/docs/clients) for per-client shapes, including VS Code / GitHub Copilot's top-level `servers` key.
 
-:::tip
-`./scripts/install-agents.sh install` configures this server **and** the master skill for pi, Cursor, and Codex in one idempotent command (`check` verifies, `uninstall` removes).
+:::note
+The npm package `@brdndon/secure-mcp` is server-only and does not include the agent skill or installer. Prefer the checkout path for the complete workflow.
 :::
 
+## Server-only npm fallback
+
+After publication, users who only need the stdio server can target the v2 artifact explicitly:
+
+```bash
+export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
+npx -y @brdndon/secure-mcp@2
+```
+
+The npm tarball contains only the compiled server and public project documents. It does not include the agent skill, installer, fixtures, source, or `server.json` registry metadata.
+
 :::tip
-Run `pnpm smoke` after building to confirm the server starts, lists its tools, and can analyze the included fixture without executing it.
+Run `pnpm smoke` after building to confirm the server starts, negotiates protocol `2026-07-28`, lists its tools, and can analyze the included fixture without executing it.
 :::
 
 ## Development loop

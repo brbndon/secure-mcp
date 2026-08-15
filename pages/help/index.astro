@@ -1,8 +1,7 @@
 ---
 import LandingLayout from "../_home/LandingLayout.astro";
 import PageIntro from "../_home/components/PageIntro.astro";
-
-const base = import.meta.env.BASE_URL;
+import { withBase } from "blume/components/islands/base-path.ts";
 
 const pageTitle = "Getting started — secure-mcp";
 const pageDescription =
@@ -10,42 +9,32 @@ const pageDescription =
 
 const steps = [
   {
-    id: "install-and-build-the-server",
+    id: "clone-and-build-the-server",
     number: "01",
-    title: "Install and build the server",
-    body: "Requires Node.js 20+ and pnpm (or npm). The build produces the stdio entrypoint used by every MCP client.",
-    code: "cd secure-mcp\npnpm install\npnpm build",
+    title: "Clone and build the server",
+    body: "Clone and build require Git, Node.js 20+, and pnpm 10; the installer also requires Bash and Python 3 (PowerShell on Windows). The checkout contains the server, installer, and master agent skill.",
+    code: "git clone https://github.com/brbndon/secure-mcp.git\ncd secure-mcp\npnpm install --frozen-lockfile\npnpm build",
   },
   {
-    id: "authorize-repository-roots",
+    id: "authorize-and-install",
     number: "02",
-    title: "Authorize repository roots",
-    body: "Filesystem tools fail closed until you configure the canonical roots they may inspect. Keep the scope as narrow as practical.",
-    code: "export SECURE_MCP_ALLOWED_ROOTS=/abs/path/repositories\npnpm start",
+    title: "Authorize and install",
+    body: "Set the narrowest existing absolute roots the server may inspect. The installer wires the checkout and skill into pi, Cursor, and Codex and requires MCP protocol 2026-07-28.",
+    code: "SECURE_MCP_ALLOWED_ROOTS=/abs/path/repositories \\\n  ./scripts/install-agents.sh install",
   },
   {
-    id: "connect-from-mcp-clients",
+    id: "verify-and-restart",
     number: "03",
-    title: "Connect from your client",
-    body: "Point any MCP client at the built entrypoint with the filesystem allowlist set. Works in Claude, Cursor, Codex, pi, and other stdio clients.",
-    code: `{
-  "mcpServers": {
-    "secure-mcp": {
-      "command": "node",
-      "args": ["/abs/path/secure-mcp/dist/index.js"],
-      "env": {
-        "SECURE_MCP_ALLOWED_ROOTS": "/abs/path/repositories"
-      }
-    }
-  }
-}`,
+    title: "Verify and restart",
+    body: "Check the installed skill, client configuration, allowlist, and server startup. Then restart agent sessions so they reload the integration.",
+    code: "./scripts/install-agents.sh check",
   },
   {
-    id: "install-the-agent-skill",
+    id: "start-the-first-review",
     number: "04",
-    title: "Install the agent skill",
-    body: "One script symlinks the master skill into pi, Cursor, and Codex, and wires the server config for each harness.",
-    code: "./scripts/install-agents.sh install\n./scripts/install-agents.sh check",
+    title: "Start the first review",
+    body: "Ask the agent for an authorized defensive review of an allowlisted repository. It should inventory first and preserve coverage through the final report.",
+    code: "Review /abs/path/repositories/my-app with secure-mcp.\nKeep it read-only and remediation-focused.",
   },
 ] as const;
 
@@ -73,7 +62,7 @@ const workflowPhases = [
   {
     phase: "Phase 5",
     title: "Remediation report",
-    body: "secure_mcp_produce_findings dedupes, filters, and prioritizes findings into a human-facing report.",
+    body: "When confirmed findings remain, secure_mcp_produce_findings dedupes, filters, and prioritizes them. Otherwise the agent writes a coverage-qualified no-findings narrative.",
   },
   {
     phase: "Phase 6",
@@ -86,9 +75,9 @@ const workflowPhases = [
 <LandingLayout title={pageTitle} description={pageDescription} route="/help">
   <PageIntro
     eyebrow="Getting started"
-    title="Run a review in five steps."
+    title="Install once. Review in six phases."
     titleId="help-title"
-    lede="Everything from install to handoff — the commands are real, from the current build."
+    lede="Everything from install to handoff — the commands are real, from the current v2 build."
     wide
   />
 
@@ -408,7 +397,7 @@ const workflowPhases = [
           </summary>
           <div class="max-w-2xl pb-6 pr-12 text-[1.025rem] leading-relaxed text-muted">
             <p class="m-0">
-              In v1: TypeScript and Next.js (App Router, Server Actions,
+              Current focus: TypeScript and Next.js (App Router, Server Actions,
               middleware) and Swift and SwiftUI, with Expo and React Native
               detection. More surfaces are planned.
             </p>
@@ -420,14 +409,14 @@ const workflowPhases = [
         Stuck on something specific?{" "}
         <a
           class="font-medium text-ink underline decoration-line underline-offset-[0.2em] transition-colors hover:decoration-ink"
-          href={`${base}support/`}
+          href={withBase("/support/")}
         >
           Contact support
         </a>
         . Or read the{" "}
         <a
           class="font-medium text-ink underline decoration-line underline-offset-[0.2em] transition-colors hover:decoration-ink"
-          href={`${base}docs/`}
+          href={withBase("/docs/")}
         >
           full documentation
         </a>

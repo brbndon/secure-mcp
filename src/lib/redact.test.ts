@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import { describe, it } from "node:test";
 import { toolError, toolSuccess } from "./envelope.js";
 import {
@@ -12,6 +13,31 @@ import {
 import type { CoverageReport, Finding } from "./types.js";
 import { snippetAround } from "./filesystem.js";
 import { escapeMarkdown, markdownCode, renderMarkdownDocument } from "./markdown.js";
+
+function fastestRun(run: () => void): number {
+  run();
+  let fastest = Number.POSITIVE_INFINITY;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const started = performance.now();
+    run();
+    fastest = Math.min(fastest, performance.now() - started);
+  }
+  return fastest;
+}
+
+function assertGenerousLinearScaling(
+  label: string,
+  smallRun: () => void,
+  largeRun: () => void,
+): void {
+  const small = fastestRun(smallRun);
+  const large = fastestRun(largeRun);
+  assert.ok(large < 2_000, `${label} large probe took ${large.toFixed(1)}ms`);
+  assert.ok(
+    large < small * 8 + 100,
+    `${label} scaled from ${small.toFixed(1)}ms to ${large.toFixed(1)}ms`,
+  );
+}
 
 describe("secret evidence redaction", () => {
   it("redacts secret shapes before Markdown escaping can transform them", () => {
@@ -88,6 +114,10 @@ describe("secret evidence redaction", () => {
       redactedEvidence("check the .env file for the value"),
       "check the .env file for the value",
     );
+    assert.equal(
+      redactedEvidence("prose uses .pem, .key, and .crt formats"),
+      "prose uses .pem, .key, and .crt formats",
+    );
   });
 
   it("redacts secret-like names in path context only", () => {
@@ -125,10 +155,20 @@ describe("secret evidence redaction", () => {
       redactedEvidence("credentials.json, then rotate"),
       "[redacted-secret-file], then rotate",
     );
+    assert.equal(
+      redactedEvidence("say credentials.json/next"),
+      "say credentials.json/next",
+    );
+    assert.equal(
+      redactedEvidence("source:credentials.json/next"),
+      "source:[redacted-secret-file].json/next",
+    );
   });
 
   it("redacts bare secret basenames used as whole-string paths", () => {
     assert.equal(redactedEvidence(".env"), "[redacted-secret-file]");
+    assert.equal(redactedEvidence(".pem"), "[redacted-secret-file]");
+    assert.equal(redactedEvidence("certs/.pem"), "certs/[redacted-secret-file]");
     assert.equal(redactedEvidence("id_rsa"), "[redacted-secret-file]");
     assert.equal(redactedEvidence("credentials"), "[redacted-secret-file]");
     assert.equal(
@@ -221,7 +261,9 @@ describe("secret evidence redaction", () => {
         needs_review: 1,
         suppressed: 0,
         not_applicable: 0,
+        accepted_risk: 0,
         deferred: 0,
+        fixed: 0,
       },
       scan_status: "complete",
       not_observed_means: "no_candidate_in_files_reviewed",
@@ -294,8 +336,8 @@ describe("structural and URI secret redaction", () => {
   });
 
   it("redacts quoted values over 2048 chars including multi-word passphrases", () => {
-    // The quoted rule bounds its value group; the unquoted fallback stops at
-    // the first space, so an over-long multi-word value must not leak its tail.
+    // Regression for the former 2048-character regex ceiling: the
+    // delimiter-aware scanner must redact the complete multi-word value.
     const long = `${"a".repeat(2500)} ${"b".repeat(60)}`;
     assert.ok(long.length > 2048);
     const raw = `password="${long}"`;
@@ -304,6 +346,68 @@ describe("structural and URI secret redaction", () => {
     assert.ok(!safe.includes("b".repeat(60)));
     assert.ok(!safe.includes("a".repeat(2500)));
     assert.equal(safe, `password="[REDACTED:****]"`);
+  });
+
+  it("redacts quoted values exactly at and immediately beyond the former boundary", () => {
+    for (const length of [2048, 2049]) {
+      assert.equal(
+        redactedEvidence(`password="${"a".repeat(length)}"`),
+        `password="[REDACTED:****]"`,
+      );
+    }
+  });
+
+  it("redacts long quoted values with escaped delimiters and other quote types", () => {
+    const escaped = `${"a".repeat(2050)}\\"${"b".repeat(80)}\\\\${"c".repeat(80)}`;
+    const otherQuote = `${"d".repeat(2050)}'${"tail".repeat(40)}`;
+
+    assert.equal(redactedEvidence(`password="${escaped}"`), `password="[REDACTED:****]"`);
+    assert.equal(redactedEvidence(`password="${otherQuote}"`), `password="[REDACTED:****]"`);
+  });
+
+  it("redacts quoted values without a length ceiling and fails closed when unterminated", () => {
+    const overFormerLimit = `a ${"tail".repeat(18_000)}`;
+    assert.ok(overFormerLimit.length > 65_536);
+    assert.equal(
+      redactedEvidence(`password="${overFormerLimit}"`),
+      `password="[REDACTED:****]"`,
+    );
+    assert.equal(
+      redactedEvidence(`password="${overFormerLimit}`),
+      `password="[REDACTED:****]`,
+    );
+  });
+
+  it("redacts multiple long values and overlapping secret-path-looking text", () => {
+    const first = `${"x".repeat(2500)} config/.env ${"one".repeat(30)}`;
+    const second = `${"y".repeat(2500)} two`;
+    assert.equal(
+      redactedEvidence(`password="${first}" token="${second}"`),
+      `password="[REDACTED:****]" token="[REDACTED:****]"`,
+    );
+  });
+
+  it("keeps adversarial URI near-misses linear enough for the output boundary", () => {
+    const adversarial = "a".repeat(1_000_000);
+    const started = performance.now();
+    assert.equal(redactedEvidence(adversarial), adversarial);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2_000, `1M near-miss took ${elapsed.toFixed(1)}ms`);
+  });
+
+  it("keeps escaped and over-limit quoted secrets out of success and error envelopes", () => {
+    const tail = "synthetic-tail".repeat(20);
+    const escapedRaw = `password="${"a".repeat(2050)}\\"${tail}"`;
+    const overFormerLimitRaw = `password="a ${tail.repeat(300)}"`;
+
+    for (const raw of [escapedRaw, overFormerLimitRaw]) {
+      const success = toolSuccess({ ok: true, evidence: raw });
+      const error = toolError(new Error(raw));
+      assert.ok(!JSON.stringify(success.structuredContent).includes("synthetic-tail"));
+      assert.ok(!success.content[0]?.text.includes("synthetic-tail"));
+      assert.ok(!JSON.stringify(error.structuredContent).includes("synthetic-tail"));
+      assert.ok(!error.content[0]?.text.includes("synthetic-tail"));
+    }
   });
 
   it("redacts YAML block scalars", () => {
@@ -317,6 +421,34 @@ describe("structural and URI secret redaction", () => {
       safe,
       "api:\n  secret: |\n[REDACTED:****]\n  other: 1",
     );
+  });
+
+  it("fails closed on an unterminated final YAML block line", () => {
+    const safe = redactedEvidence("secret: |\n    body1\n    body2");
+    assert.ok(!safe.includes("body1"));
+    assert.ok(!safe.includes("body2"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]");
+  });
+
+  it("redacts YAML block scalars beyond sixty-four lines", () => {
+    const body = Array.from({ length: 65 }, (_, i) => `    line${i}`).join("\n");
+    const safe = redactedEvidence(`secret: |\n${body}\n  next: 1`);
+    assert.ok(!safe.includes("line64"));
+    assert.ok(!safe.includes("line65"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]\n  next: 1");
+  });
+
+  it("keeps blank lines inside a YAML block scalar within the redaction", () => {
+    const safe = redactedEvidence("secret: |\n    body1\n\n    body2\n  next: 1");
+    assert.ok(!safe.includes("body1"));
+    assert.ok(!safe.includes("body2"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]\n  next: 1");
+  });
+
+  it("redacts a leading blank line in a YAML block scalar", () => {
+    const safe = redactedEvidence("secret: |\n\n    body\n  next: 1");
+    assert.ok(!safe.includes("body"));
+    assert.equal(safe, "secret: |\n[REDACTED:****]\n  next: 1");
   });
 
   it("redacts URI userinfo credentials and keeps the host", () => {
@@ -335,6 +467,22 @@ describe("structural and URI secret redaction", () => {
     assert.match(safe, /redis:\/\/\[REDACTED:\*\*\*\*\]@cache/);
   });
 
+  it("redacts punctuation-prefixed ordinary and compound URI schemes", () => {
+    for (const punctuation of [".", "-", "+"]) {
+      for (const scheme of ["postgres", "git+ssh", "vendor.db+tls"]) {
+        const secret = `${scheme}-userinfo-secret`;
+        const safe = redactedEvidence(
+          `${punctuation}${scheme}://user:${secret}@db.internal/path`,
+        );
+        assert.equal(
+          safe,
+          `${punctuation}${scheme}://[REDACTED:****]@db.internal/path`,
+        );
+        assert.ok(!safe.includes(secret));
+      }
+    }
+  });
+
   it("redacts query-string credentials inside URLs", () => {
     const safe = redactedEvidence(
       "https://api.example.com/v1?token=querysecret&api_key=keyvalue123&x=1",
@@ -342,6 +490,12 @@ describe("structural and URI secret redaction", () => {
     assert.ok(!safe.includes("querysecret"));
     assert.ok(!safe.includes("keyvalue123"));
     assert.ok(safe.includes("x=1"));
+  });
+
+  it("keeps backslash inside unquoted values so escaped paths stay redacted", () => {
+    assert.equal(redactedEvidence("token=abc\\def"), "token=[REDACTED:****]");
+    assert.equal(redactedEvidence("secret=C:\\path\\to\\key"), "secret=[REDACTED:****]");
+    assert.equal(redactedEvidence("token=abc\\def ghi"), "token=[REDACTED:****] ghi");
   });
 
   it("redacts compound and prefixed keys without over-redacting prose", () => {
@@ -494,6 +648,32 @@ describe("escaped-markdown secret redaction", () => {
     assert.match(doc, /REDACTED/);
   });
 
+  it("fails closed on mismatched PEM labels through every output seam", () => {
+    const tail = "PEM-MISMATCHED-TAIL-MUST-NOT-LEAK";
+    const oneLayer = preEscaped(
+      [
+        "-----BEGIN PRIVATE KEY-----",
+        "SYNTHETIC-KEY-BODY",
+        "-----END CERTIFICATE-----",
+        tail,
+      ].join("\n"),
+    );
+    const success = toolSuccess({ ok: true as const, evidence: oneLayer });
+    const error = toolError(new Error(oneLayer));
+    const markdown = renderMarkdownDocument({ title: "PEM mismatch", summary: oneLayer });
+
+    for (const rendered of [
+      redactedEvidence(oneLayer),
+      JSON.stringify(success.structuredContent),
+      success.content[0]?.text ?? "",
+      JSON.stringify(error.structuredContent),
+      error.content[0]?.text ?? "",
+      markdown,
+    ]) {
+      assert.ok(!fullyUnescaped(rendered).includes(tail));
+    }
+  });
+
   it("redacts pre-escaped secret paths in evidence", () => {
     const cases: Array<[string, string]> = [
       [preEscaped("config/.env.production:3"), ".env.production"],
@@ -604,6 +784,56 @@ describe("escaped-markdown secret redaction", () => {
     );
   });
 
+  it("preserves raw and one-layer quote/backslash parity across all delimiters", () => {
+    const marker = "[REDACTED:****]";
+    for (const quote of ['"', "'", "`"]) {
+      for (const backslashCount of [0, 1, 2, 3, 4]) {
+        const prefix = `password=${quote}`;
+        const valuePrefix = `head${"\\".repeat(backslashCount)}`;
+        const tail = "ACTIVE-DELIMITER-TAIL";
+        const raw = `${prefix}${valuePrefix}${quote}${tail}${quote}`;
+        const activeDelimiterCloses = backslashCount % 2 === 0;
+        const suffix = activeDelimiterCloses ? `${quote}${tail}${quote}` : quote;
+
+        assert.equal(
+          redactedEvidence(raw),
+          `${prefix}${marker}${suffix}`,
+          `raw ${quote} with ${backslashCount} backslashes`,
+        );
+
+        const oneLayer = preEscaped(raw);
+        assert.equal(
+          redactedEvidence(oneLayer),
+          `${preEscaped(prefix)}${marker}${preEscaped(suffix)}`,
+          `one-layer ${quote} with ${backslashCount} backslashes`,
+        );
+        if (!activeDelimiterCloses) {
+          assert.ok(!fullyUnescaped(redactedEvidence(oneLayer)).includes(tail));
+        }
+      }
+    }
+  });
+
+  it("keeps escaped active-delimiter tails out of Markdown and both envelopes", () => {
+    for (const quote of ['"', "'", "`"]) {
+      const tail = `TAIL-${quote.charCodeAt(0)}-MUST-NOT-LEAK`;
+      const oneLayer = preEscaped(`password=${quote}head\\${quote}${tail}${quote}`);
+      const success = toolSuccess({ ok: true as const, evidence: oneLayer });
+      const error = toolError(new Error(oneLayer));
+      const markdown = renderMarkdownDocument({ title: "Quote regression", summary: oneLayer });
+
+      for (const rendered of [
+        JSON.stringify(success.structuredContent),
+        success.content[0]?.text ?? "",
+        JSON.stringify(error.structuredContent),
+        error.content[0]?.text ?? "",
+        markdown,
+      ]) {
+        assert.ok(!fullyUnescaped(rendered).includes(tail), `${quote} tail leaked`);
+      }
+    }
+  });
+
   it("masks one-layer pre-escaped secrets but not double-escaped input", () => {
     // One layer is the contract: content already escaped once (Markdown) is
     // masked. Double-escaped material is out of scope — escapeMarkdown redacts
@@ -615,6 +845,135 @@ describe("escaped-markdown secret redaction", () => {
     assert.ok(
       fullyUnescaped(doubleSafe).includes(assignmentSecret),
       "double-escaped secrets remain out of one-layer policy scope",
+    );
+  });
+});
+
+describe("redaction scanner scaling", () => {
+  it("keeps dense quoted and unquoted edit processing near-linear", () => {
+    const makeDense = (count: number): string =>
+      `password="quoted value" token=unquoted-value `.repeat(count);
+    const small = makeDense(2_000);
+    const large = makeDense(8_000);
+
+    assertGenerousLinearScaling(
+      "dense edits",
+      () => void redactedEvidence(small),
+      () => void redactedEvidence(large),
+    );
+    assert.ok(!redactedEvidence(large).includes("quoted value"));
+    assert.ok(!redactedEvidence(large).includes("unquoted-value"));
+  });
+
+  it("keeps quote-heavy secret-path near-misses near-linear", () => {
+    const small = '"'.repeat(250_000);
+    const large = '"'.repeat(1_000_000);
+
+    assertGenerousLinearScaling(
+      "quote-heavy paths",
+      () => assert.equal(redactedEvidence(small), small),
+      () => assert.equal(redactedEvidence(large), large),
+    );
+  });
+
+  it("keeps punctuation-heavy URI near-misses near-linear", () => {
+    const makeNearMiss = (size: number): string => {
+      const scheme = "a.".repeat(Math.floor(size / 4));
+      return `${scheme}a://${"u".repeat(size - scheme.length - 4)}`;
+    };
+    const small = makeNearMiss(250_000);
+    const large = makeNearMiss(1_000_000);
+
+    assertGenerousLinearScaling(
+      "punctuation URI near-misses",
+      () => assert.equal(redactedEvidence(small), small),
+      () => assert.equal(redactedEvidence(large), large),
+    );
+  });
+
+  it("fails closed on repeated unterminated PEM headers in near-linear time", () => {
+    const header = "-----BEGIN PRIVATE KEY-----\n";
+    const small = header.repeat(2_000);
+    const large = header.repeat(8_000);
+
+    assertGenerousLinearScaling(
+      "unterminated PEM headers",
+      () => assert.equal(redactedEvidence(small), "[REDACTED:****]"),
+      () => assert.equal(redactedEvidence(large), "[REDACTED:****]"),
+    );
+  });
+
+  it("keeps repeated mismatched PEM END headers near-linear and fails closed", () => {
+    const begin = "-----BEGIN PRIVATE KEY-----\n";
+    const mismatch = "-----END CERTIFICATE-----\n";
+    const small = `${begin}${mismatch.repeat(2_000)}`;
+    const large = `${begin}${mismatch.repeat(8_000)}`;
+
+    assertGenerousLinearScaling(
+      "mismatched PEM END headers",
+      () => assert.equal(redactedEvidence(small), "[REDACTED:****]"),
+      () => assert.equal(redactedEvidence(large), "[REDACTED:****]"),
+    );
+  });
+
+  it("redacts complete PEM blocks before failing closed on a later unmatched BEGIN", () => {
+    const complete = [
+      "-----BEGIN CERTIFICATE-----",
+      "FIRST-SECRET-BODY",
+      "-----END CERTIFICATE-----",
+    ].join("\n");
+    const unmatched = "-----BEGIN PRIVATE KEY-----\nSECOND-SECRET-BODY";
+    const safe = redactedEvidence(`${complete}\nkept separator\n${unmatched}`);
+
+    assert.equal(safe, "[REDACTED:****]\nkept separator\n[REDACTED:****]");
+    assert.ok(!safe.includes("FIRST-SECRET-BODY"));
+    assert.ok(!safe.includes("SECOND-SECRET-BODY"));
+  });
+
+  it("ignores mismatched END labels until the matching PEM END", () => {
+    const input = [
+      "-----BEGIN PRIVATE KEY-----",
+      "FIRST-SECRET-BODY",
+      "-----END CERTIFICATE-----",
+      "SECOND-SECRET-BODY",
+      "-----END PRIVATE KEY-----",
+      "kept suffix",
+    ].join("\n");
+
+    assert.equal(redactedEvidence(input), "[REDACTED:****]\nkept suffix");
+  });
+
+  it("keeps secret-key whitespace near-misses linear and unchanged", () => {
+    // Regression for quadratic backtracking in the old separator: a secret-like
+    // key followed by a long whitespace run with no `:`/`=` terminator used to
+    // make redactedEvidence revisit every split point.
+    for (const size of [32_000, 200_000]) {
+      const raw = `token${" ".repeat(size)}`;
+      const started = performance.now();
+      assert.equal(redactedEvidence(raw), raw);
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed < 2_000, `${size} whitespace near-miss took ${elapsed.toFixed(1)}ms`);
+    }
+  });
+
+  it("keeps whitespace-only near-misses linear and unchanged", () => {
+    const raw = " ".repeat(200_000);
+    const started = performance.now();
+    assert.equal(redactedEvidence(raw), raw);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2_000, `whitespace-only near-miss took ${elapsed.toFixed(1)}ms`);
+  });
+
+  it("still redacts labeled values after long whitespace runs", () => {
+    const ws = " ".repeat(32_000);
+    assert.equal(redactedEvidence(`token${ws}=secretvalue`), `token${ws}=[REDACTED:****]`);
+    assert.equal(
+      redactedEvidence(`password${ws}: "secret"`),
+      `password${ws}: "[REDACTED:****]"`,
+    );
+    assert.equal(
+      redactedEvidence(`secret${ws}: |\n    body\n    line2\n  next: 1`),
+      `secret${ws}: |\n[REDACTED:****]\n  next: 1`,
     );
   });
 });
@@ -670,9 +1029,9 @@ describe("secret-shaped object key redaction", () => {
     assert.equal(safe.by_extension[".ts"], 1);
     assert.equal(safe.file_counts["[redacted-secret-file]"], 3);
     assert.equal(safe.file_counts["[redacted-secret-file]#2"], 4);
-    // `credentials` is a secret field name: the colliding key is sanitized and
-    // its value is redacted wholesale by the field-name policy.
-    assert.equal(safe.file_counts["[redacted-secret-file]#3"], "[REDACTED:****]");
+    // `credentials` is a secret field name: the colliding key is sanitized, but
+    // its numeric value stays a scalar so metadata is never coerced to a string.
+    assert.equal(safe.file_counts["[redacted-secret-file]#3"], 5);
     assert.equal(safe.file_counts[".ts"], 6);
   });
 
@@ -712,5 +1071,60 @@ describe("secret-shaped object key redaction", () => {
     assert.deepEqual(Object.keys(data.by_extension), ["[redacted-secret-file]", ".ts"]);
     assert.equal(data.by_extension[".ts"], 2);
     assert.equal(data.by_extension["[redacted-secret-file]"], 1);
+  });
+});
+
+describe("non-string metadata at the output boundary", () => {
+  it("keeps numeric estimatedTokens a number through toolSuccess", () => {
+    const success = toolSuccess({
+      ok: true as const,
+      summary: "Loaded knowledge packs",
+      available_packs: [
+        {
+          id: "secrets",
+          title: "Secrets",
+          stackTags: ["nextjs"],
+          itemCount: 12,
+          estimatedTokens: 1200,
+        },
+      ],
+    });
+    const data = success.structuredContent as {
+      available_packs: Array<{ estimatedTokens: number }>;
+    };
+    assert.equal(typeof data.available_packs[0]?.estimatedTokens, "number");
+    assert.equal(data.available_packs[0]?.estimatedTokens, 1200);
+    assert.ok(!JSON.stringify(data).includes('"estimatedTokens":"[REDACTED:****]"'));
+  });
+
+  it("leaves numeric and boolean scalars untouched under secret-shaped keys", () => {
+    const value = redactValue({
+      token: "secret-string-value",
+      estimatedTokens: 1200,
+      include_secret: true,
+      count: 3,
+    });
+    assert.deepEqual(value, {
+      token: "[REDACTED:****]",
+      estimatedTokens: 1200,
+      include_secret: true,
+      count: 3,
+    });
+  });
+
+  it("still redacts string and container values under secret-shaped keys", () => {
+    const value = redactValue({
+      credentials: { token: "nested-secret" },
+      api_key: ["arr-secret"],
+      password: "plain-secret",
+    });
+    assert.equal(
+      JSON.stringify(value),
+      JSON.stringify({
+        "[redacted-secret-file]": "[REDACTED:****]",
+        api_key: "[REDACTED:****]",
+        password: "[REDACTED:****]",
+      }),
+    );
   });
 });

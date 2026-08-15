@@ -39,8 +39,10 @@ export const CandidateDispositionSchema = z.enum([
   "reportable",
   "needs_review",
   "suppressed",
+  "accepted_risk",
   "not_applicable",
   "deferred",
+  "fixed",
 ]);
 
 /**
@@ -143,7 +145,7 @@ export const FindingSchema = z
       .optional()
       .describe("Stable identity for the same source instance across audit runs"),
     disposition: CandidateDispositionSchema.optional().describe(
-      "Candidate disposition before human/data-flow confirmation",
+      "Candidate disposition: reportable or deferred for confirmed open work; fixed after revalidation proves remediation; accepted_risk for a conscious residual; needs_review/suppressed/not_applicable otherwise",
     ),
     disposition_reason: z.string().min(1).max(MAX_FINDING_DISPOSITION_REASON).optional(),
     source: z.string().min(1).max(MAX_FINDING_NARRATIVE).optional().describe("Evidence-backed input/source context"),
@@ -161,10 +163,199 @@ export const FindingSchema = z
       .array(z.string().min(1).max(MAX_FINDING_LIST_ITEM))
       .max(MAX_FINDING_LIST_ITEMS)
       .optional(),
+    validation_status: z
+      .enum(["static_only", "needs_runtime"])
+      .optional()
+      .describe(
+        "Validation label: static_only when code review alone confirms and verifies the finding; needs_runtime when owner-authorized runtime/configuration verification (manual QA or existing DAST) is still required. Defensive only; never exploit steps.",
+      ),
   })
   .strict();
 
 export type FindingInput = z.infer<typeof FindingSchema>;
+
+type FindingMergeStrategy =
+  | "first"
+  | "first-defined"
+  | "longest"
+  | "severity-max"
+  | "confidence-max"
+  | "reportable"
+  | "unique-list";
+
+interface FindingFieldMetadata {
+  merge: FindingMergeStrategy;
+  maxChars?: number;
+  maxItems?: number;
+  itemMaxChars?: number;
+  omitWhenEmpty?: boolean;
+}
+
+/**
+ * Exhaustive policy for merging and bounding every field in FindingSchema.
+ * Adding a schema field requires a policy here, preventing dedupe or output
+ * bounding from silently dropping it in a distant tool module.
+ */
+export const FINDING_FIELD_METADATA = {
+  id: { merge: "first", maxChars: MAX_FINDING_ID },
+  title: { merge: "first", maxChars: MAX_FINDING_TITLE },
+  description: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  severity: { merge: "severity-max" },
+  confidence: { merge: "confidence-max" },
+  category: { merge: "first", maxChars: MAX_FINDING_CATEGORY },
+  stack: { merge: "first-defined" },
+  file: { merge: "first-defined", maxChars: MAX_FINDING_PATH },
+  line: { merge: "first-defined" },
+  evidence: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  impact_if_unremediated: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  remediation: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  residual_risk: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  verification_suggestion: { merge: "longest", maxChars: MAX_FINDING_NARRATIVE },
+  cwe: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  owasp: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  tags: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_TAGS,
+    itemMaxChars: MAX_FINDING_TAG,
+    omitWhenEmpty: true,
+  },
+  rule_family: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  root_control: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  instance_id: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
+  disposition: { merge: "reportable" },
+  disposition_reason: {
+    merge: "first-defined",
+    maxChars: MAX_FINDING_DISPOSITION_REASON,
+  },
+  source: { merge: "first-defined", maxChars: MAX_FINDING_NARRATIVE },
+  control: { merge: "first-defined", maxChars: MAX_FINDING_NARRATIVE },
+  sink: { merge: "first-defined", maxChars: MAX_FINDING_NARRATIVE },
+  counterevidence: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_LIST_ITEMS,
+    itemMaxChars: MAX_FINDING_LIST_ITEM,
+  },
+  proof_gap: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_LIST_ITEMS,
+    itemMaxChars: MAX_FINDING_LIST_ITEM,
+  },
+  validation: {
+    merge: "unique-list",
+    maxItems: MAX_FINDING_LIST_ITEMS,
+    itemMaxChars: MAX_FINDING_LIST_ITEM,
+  },
+  validation_status: { merge: "first-defined" },
+} as const satisfies Record<keyof FindingInput, FindingFieldMetadata>;
+
+const FINDING_FIELDS = Object.keys(FINDING_FIELD_METADATA) as Array<keyof FindingInput>;
+const CONFIDENCE_RANK = Object.fromEntries(
+  ConfidenceSchema.options.map((confidence, index, confidences) => [
+    confidence,
+    confidences.length - index,
+  ]),
+) as Record<z.infer<typeof ConfidenceSchema>, number>;
+const SEVERITY_RANK = Object.fromEntries(
+  SeveritySchema.options.map((severity, index, severities) => [
+    severity,
+    severities.length - index,
+  ]),
+) as Record<z.infer<typeof SeveritySchema>, number>;
+const OUTPUT_TRUNCATION_MARKER = "…[truncated]";
+
+function mergeField(
+  strategy: FindingMergeStrategy,
+  left: unknown,
+  right: unknown,
+  maxItems?: number,
+): unknown {
+  switch (strategy) {
+    case "first":
+      return left;
+    case "first-defined":
+      return left ?? right;
+    case "longest":
+      return typeof left === "string" && typeof right === "string" && right.length > left.length
+        ? right
+        : left;
+    case "severity-max":
+      return SEVERITY_RANK[right as z.infer<typeof SeveritySchema>] >
+        SEVERITY_RANK[left as z.infer<typeof SeveritySchema>]
+        ? right
+        : left;
+    case "confidence-max":
+      return CONFIDENCE_RANK[right as z.infer<typeof ConfidenceSchema>] >
+        CONFIDENCE_RANK[left as z.infer<typeof ConfidenceSchema>]
+        ? right
+        : left;
+    case "reportable":
+      return left === "reportable" || right === "reportable" ? "reportable" : left ?? right;
+    case "unique-list": {
+      const merged = [
+        ...new Set([
+          ...(Array.isArray(left) ? left : []),
+          ...(Array.isArray(right) ? right : []),
+        ]),
+      ];
+      return merged.slice(0, maxItems ?? merged.length);
+    }
+  }
+}
+
+/** Merge duplicate findings according to the exhaustive schema field policy. */
+export function mergeFindings(left: FindingInput, right: FindingInput): FindingInput {
+  const merged: Record<string, unknown> = {};
+  for (const field of FINDING_FIELDS) {
+    const metadata: FindingFieldMetadata = FINDING_FIELD_METADATA[field];
+    const value = mergeField(metadata.merge, left[field], right[field], metadata.maxItems);
+    if (metadata.omitWhenEmpty && Array.isArray(value) && value.length === 0) continue;
+    if (value !== undefined) merged[field] = value;
+  }
+  if (merged.disposition !== undefined) {
+    // A disposition reason is state-specific. Take it only from a side whose
+    // disposition matches the winning state; never retain prose from a losing
+    // fixed/deferred/needs_review/reportable candidate.
+    const winningReason = [left, right].find(
+      (finding) =>
+        finding.disposition === merged.disposition &&
+        finding.disposition_reason !== undefined,
+    )?.disposition_reason;
+    if (winningReason === undefined) delete merged.disposition_reason;
+    else merged.disposition_reason = winningReason;
+  }
+  return merged as FindingInput;
+}
+
+/** Deterministically bound text while preserving an explicit truncation marker. */
+export function boundText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  if (limit <= OUTPUT_TRUNCATION_MARKER.length) return value.slice(0, limit);
+  return `${value.slice(0, limit - OUTPUT_TRUNCATION_MARKER.length)}${OUTPUT_TRUNCATION_MARKER}`;
+}
+
+/** Keep post-redaction/merge fields within the same deterministic budgets as input. */
+export function boundFinding(finding: FindingInput): FindingInput {
+  const bounded: Record<string, unknown> = {};
+  for (const field of FINDING_FIELDS) {
+    const metadata: FindingFieldMetadata = FINDING_FIELD_METADATA[field];
+    const value = finding[field];
+    if (value === undefined) continue;
+    if (typeof value === "string" && metadata.maxChars !== undefined) {
+      bounded[field] = boundText(value, metadata.maxChars);
+    } else if (Array.isArray(value)) {
+      bounded[field] = value
+        .slice(0, metadata.maxItems ?? value.length)
+        .map((item) =>
+          typeof item === "string" && metadata.itemMaxChars !== undefined
+            ? boundText(item, metadata.itemMaxChars)
+            : item,
+        );
+    } else {
+      bounded[field] = value;
+    }
+  }
+  return bounded as FindingInput;
+}
 
 export const ProjectRootInput = z
   .object({
@@ -176,7 +367,7 @@ export const ProjectRootInput = z
         "Absolute path (preferred) or path relative to the MCP server process cwd of the codebase to review for defensive hardening",
       ),
     stack: z
-      .enum(["auto", "common", "typescript", "nextjs", "swift", "expo"])
+      .enum(["auto", ...StackFocusSchema.options])
       .default("auto")
       .describe("Optional stack focus. Use auto to detect from project files."),
     max_files: z
@@ -252,7 +443,7 @@ export function buildFinding(
     disposition: partial.disposition ?? "needs_review",
     disposition_reason:
       partial.disposition_reason ??
-      "Heuristic or architecture candidate; confirm source-to-sink reachability before reporting as confirmed.",
+      defaultDispositionReason(partial.disposition ?? "needs_review"),
     source: partial.source ?? "Source or input flow not established by this bounded static review.",
     control: partial.control ?? "Expected security control requires manual confirmation.",
     sink: partial.sink ?? "Sink or trust boundary not fully established by this heuristic.",
@@ -273,6 +464,27 @@ export function buildFinding(
         "Confirm the change in code review; add or update tests that assert the secure behavior; re-run this audit category after the fix.",
     ],
   };
+}
+
+function defaultDispositionReason(
+  disposition: z.infer<typeof CandidateDispositionSchema>,
+): string {
+  switch (disposition) {
+    case "reportable":
+      return "Evidence confirms an open weakness that requires remediation.";
+    case "deferred":
+      return "Confirmed open remediation work is deferred; record the owner, rationale, and target date.";
+    case "fixed":
+      return "Revalidation confirmed the remediation is present; attach the verification evidence.";
+    case "suppressed":
+      return "The candidate is suppressed; record the evidence-based suppression rationale.";
+    case "accepted_risk":
+      return "The team consciously accepts this residual risk; record owner, rationale, and review date.";
+    case "not_applicable":
+      return "The candidate is not applicable to the reviewed code path; record the supporting evidence.";
+    case "needs_review":
+      return "Heuristic or architecture candidate; confirm source-to-sink reachability before reporting as confirmed.";
+  }
 }
 
 /** Add additive traceability defaults to findings received from older callers. */
