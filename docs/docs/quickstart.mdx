@@ -8,7 +8,7 @@ sidebar:
 
 ## Quickstart
 
-Install first: clone, build, and run `scripts/install-agents.sh install` (or `.ps1` on Windows), then restart your agent. The server requires MCP protocol `2026-07-28`.
+Install first: clone, then run the one-command bootstrap `./scripts/setup.sh` (or `.\scripts\setup.ps1` on Windows). It builds the server, prompts for the filesystem allowlist the first time, wires the skill and MCP server into pi, Cursor, and Codex, and verifies the result — then restart your agent. The server requires MCP protocol `2026-07-28`.
 
 The safest useful audit is staged. Each phase leaves a small artifact the next phase can use, so agents do not spend context on irrelevant checklists or jump from a regex hit to a confident claim.
 
