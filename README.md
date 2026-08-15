@@ -67,21 +67,31 @@ Findings can also include stable traceability fields such as `rule_family`, `roo
 - One or more existing absolute directories the server is allowed to inspect (`SECURE_MCP_ALLOWED_ROOTS`)
 - An MCP client that supports protocol revision `2026-07-28`
 
-## Quick start (recommended): clone + install script
+## Quick start (recommended): clone + setup script
 
-The primary path is a git checkout. That is what ships the **agent skill**, the **installer**, fixtures, source, and documentation. npm only provides the server binary (see [Server-only via npm](#server-only-via-npm) below).
-
-`SECURE_MCP_ALLOWED_ROOTS` is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Keep the allowlist narrow—one checkout is better than your entire home directory.
+The primary path is a git checkout. That is what ships the **agent skill**, the **installer**, fixtures, source, and documentation. npm only provides the server binary as a last resort (see [Server-only via npm](#server-only-via-npm) below).
 
 ```bash
 git clone https://github.com/brbndon/secure-mcp.git
 cd secure-mcp
+./scripts/setup.sh
+```
+
+`setup.sh` does everything for you: installs dependencies, builds the server, prompts for the filesystem allowlist (`SECURE_MCP_ALLOWED_ROOTS`) the first time, then installs the skill and MCP server wiring for pi, Cursor, and OpenAI Codex and verifies the result. On Windows, use the equivalent `.\scripts\setup.ps1` in PowerShell.
+
+The allowlist is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Keep it narrow — one checkout is better than your entire home directory. To skip the prompt, pass it explicitly:
+
+```bash
+SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories ./scripts/setup.sh
+```
+
+What `setup.sh` runs under the hood (also the manual path):
+
+```bash
 pnpm install --frozen-lockfile
 pnpm build
-
 # Absolute paths only; must exist on disk
 export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
-
 # Wire skill + MCP config for pi, Cursor, and OpenAI Codex
 ./scripts/install-agents.sh install
 ./scripts/install-agents.sh check
@@ -198,9 +208,9 @@ For a zero-setup, deterministic demo, run `pnpm smoke` after a checkout build. I
 export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code/example-app
 ```
 
-## Server-only via npm
+## Server-only via npm (last resort)
 
-Use the published package only when you need the **stdio server process** and will supply your own agent skill/workflow. It does **not** install the skill or run `install-agents.sh`.
+Use the published package only when you need the **stdio server process** and will supply your own agent skill/workflow. It does **not** install the skill or run `install-agents.sh`. The checkout path above is the supported way to get the full workflow.
 
 The npm tarball intentionally contains only the compiled server and public project documents. It does not include the agent skill, installer, fixtures, source, or `server.json` registry metadata.
 
