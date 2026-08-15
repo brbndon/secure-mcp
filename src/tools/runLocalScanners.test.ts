@@ -11,10 +11,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { McpServer } from "@modelcontextprotocol/server";
 import { createServer } from "../server.js";
 import {
   parseGitleaksJson,
   parseSemgrepJson,
+  registerRunLocalScanners,
   runBinary,
   scannerEnvEnabled,
   scannersEnabled,
@@ -86,9 +88,9 @@ describe("scanner output mapping", () => {
     assert.equal(mapped[0].line, 10);
   });
 
-  it("returns empty for malformed semgrep output", () => {
-    assert.deepEqual(parseSemgrepJson("not json"), []);
-    assert.deepEqual(parseSemgrepJson('{"results": "nope"}'), []);
+  it("returns null for malformed semgrep output", () => {
+    assert.equal(parseSemgrepJson("not json"), null);
+    assert.equal(parseSemgrepJson('{"results": "nope"}'), null);
   });
 
   it("maps gitleaks results without leaking the secret value", () => {
@@ -107,6 +109,11 @@ describe("scanner output mapping", () => {
     assert.equal(mapped[0].category, "secrets");
     assert.equal(mapped[0].rule_family, "gitleaks.generic-api-key");
     assert.ok(!JSON.stringify(mapped).includes("super-secret-value"));
+  });
+
+  it("returns null for malformed gitleaks output", () => {
+    assert.equal(parseGitleaksJson("not json"), null);
+    assert.equal(parseGitleaksJson('{"not": "an array"}'), null);
   });
 });
 
@@ -178,6 +185,118 @@ describe("secure_mcp_run_local_scanners", () => {
       await server.close();
       await fs.rm(allowed, { recursive: true, force: true });
       await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("reports scanner error status instead of a false clean when output is malformed", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-scanner-malformed-"));
+    await fs.writeFile(path.join(root, ".semgrep.yml"), "rules: []\n", "utf8");
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = new McpServer({ name: "secure-mcp-test", version: "test" });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    const previous = process.env.SECURE_MCP_LOCAL_SCANNERS;
+    const malformedExec: ExecFileFn = async () => ({ stdout: "definitely not json", stderr: "" });
+
+    try {
+      process.env.SECURE_MCP_LOCAL_SCANNERS = "1";
+      registerRunLocalScanners(
+        server,
+        { name: "secure-mcp-test", version: "test", defaultMaxFiles: 20, maxFileBytes: 8192, maxDepth: 12, allowedRoots: [root] },
+        malformedExec,
+      );
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_run_local_scanners",
+        arguments: { project_root: root, enable: true, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        enabled: boolean;
+        scanners: Array<{ id: string; status: string; findings: number; note?: string }>;
+        findings: unknown[];
+      };
+      assert.equal(data.enabled, true);
+      // Malformed output must surface as an error, never as "completed" with
+      // zero findings (which would read as a clean scan).
+      const semgrep = data.scanners.find((s) => s.id === "semgrep");
+      const gitleaks = data.scanners.find((s) => s.id === "gitleaks");
+      assert.equal(semgrep?.status, "error");
+      assert.ok(semgrep?.note?.includes("not valid JSON"), semgrep?.note);
+      assert.equal(gitleaks?.status, "error");
+      assert.ok(gitleaks?.note?.includes("not valid JSON"), gitleaks?.note);
+      assert.deepEqual(data.findings, []);
+    } finally {
+      if (previous === undefined) delete process.env.SECURE_MCP_LOCAL_SCANNERS;
+      else process.env.SECURE_MCP_LOCAL_SCANNERS = previous;
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("maps well-formed scanner output to completed status", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-scanner-valid-"));
+    await fs.writeFile(path.join(root, ".semgrep.yml"), "rules: []\n", "utf8");
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = new McpServer({ name: "secure-mcp-test", version: "test" });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    const previous = process.env.SECURE_MCP_LOCAL_SCANNERS;
+    const validExec: ExecFileFn = async (file: string) => ({
+      stdout:
+        file === "semgrep"
+          ? JSON.stringify({
+              results: [
+                {
+                  check_id: "semgrep.rule.one",
+                  path: "app/main.ts",
+                  start: { line: 5 },
+                  extra: { message: "candidate", severity: "WARNING" },
+                },
+              ],
+            })
+          : JSON.stringify([
+              {
+                RuleID: "generic-api-key",
+                Description: "Generic API Key",
+                File: "config.json",
+                StartLine: 3,
+              },
+            ]),
+      stderr: "",
+    });
+
+    try {
+      process.env.SECURE_MCP_LOCAL_SCANNERS = "1";
+      registerRunLocalScanners(
+        server,
+        { name: "secure-mcp-test", version: "test", defaultMaxFiles: 20, maxFileBytes: 8192, maxDepth: 12, allowedRoots: [root] },
+        validExec,
+      );
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_run_local_scanners",
+        arguments: { project_root: root, enable: true, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        enabled: boolean;
+        scanners: Array<{ id: string; status: string; findings: number }>;
+        findings: unknown[];
+      };
+      assert.equal(data.enabled, true);
+      assert.equal(data.scanners.find((s) => s.id === "semgrep")?.status, "completed");
+      assert.equal(data.scanners.find((s) => s.id === "semgrep")?.findings, 1);
+      assert.equal(data.scanners.find((s) => s.id === "gitleaks")?.status, "completed");
+      assert.equal(data.scanners.find((s) => s.id === "gitleaks")?.findings, 1);
+      assert.equal(data.findings.length, 2);
+    } finally {
+      if (previous === undefined) delete process.env.SECURE_MCP_LOCAL_SCANNERS;
+      else process.env.SECURE_MCP_LOCAL_SCANNERS = previous;
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

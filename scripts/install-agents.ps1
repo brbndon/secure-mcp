@@ -78,7 +78,7 @@ function Assert-ConfiguredRoots {
 }
 
 function ConvertTo-Hashtable {
-  param([Parameter(Mandatory)][object]$InputObject)
+  param([Parameter(Mandatory)][AllowNull()][object]$InputObject)
   if ($null -eq $InputObject) { return $null }
   if ($InputObject -is [System.Collections.IDictionary]) {
     $table = @{}
