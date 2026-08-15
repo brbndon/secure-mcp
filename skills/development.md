@@ -32,6 +32,7 @@ Install the master skill and MCP client wiring for pi / Cursor / Codex:
 ```bash
 ./scripts/install-agents.sh install    # idempotent; re-run any time
 ./scripts/install-agents.sh check     # verify symlinks, configs, server startup
+./scripts/install-agents.sh add-root /absolute/path
 ./scripts/install-agents.sh uninstall
 ```
 
@@ -47,7 +48,7 @@ overwrites conflicting non-owned entries or skills.
 | `src/tools/` | One tool per file + `index.ts` registration |
 | `src/knowledge/packs/` | Named packs + registry / stack routing |
 | `src/knowledge/common.ts` etc. | Scan patterns used by category detectors |
-| `scripts/install-agents.sh` / `install-agents.ps1` | Idempotent install/check/uninstall of the master skill links + MCP client configs (pi, Cursor, Codex) |
+| `scripts/install-agents.sh` / `install-agents.ps1` | Idempotent install/check/add-root/uninstall of the master skill links + MCP client configs (pi, Cursor, Codex) |
 | `agents/codex.toml` | OpenAI Codex agent manifest copied to `~/.codex/agents/secure-mcp.toml` by the install script |
 | `src/lib/filesystem.ts` | Safe FS walk/read/helpers + stack profiling |
 | `src/lib/types.ts` | Shared TS types |

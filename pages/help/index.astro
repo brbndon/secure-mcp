@@ -19,8 +19,8 @@ const steps = [
     id: "authorize-and-install",
     number: "02",
     title: "Authorize and install",
-    body: "Set the narrowest existing absolute roots the server may inspect. The installer wires the checkout and skill into pi, Cursor, and Codex and requires MCP protocol 2026-07-28.",
-    code: "SECURE_MCP_ALLOWED_ROOTS=/abs/path/repositories \\\n  ./scripts/install-agents.sh install",
+    body: "Allowlist the parent that contains the repositories you review. The installer wires the checkout and skill into pi, Cursor, and Codex and requires MCP protocol 2026-07-28. Grok is unsupported until it speaks that revision.",
+    code: "SECURE_MCP_ALLOWED_ROOTS=/abs/path/Code \\\n  ./scripts/install-agents.sh install",
   },
   {
     id: "verify-and-restart",

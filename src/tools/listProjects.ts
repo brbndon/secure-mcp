@@ -50,6 +50,7 @@ const DISCOVERY_EXTENSIONS = new Set([
   ".rb",
   ".php",
   ".txt",
+  ".xcworkspacedata",
 ]);
 
 const MAX_DISCOVERY_DEPTH = 10;
@@ -87,10 +88,29 @@ const InputSchema = z
 
 type Input = z.infer<typeof InputSchema>;
 
-function markerBasename(relativePath: string): string | null {
-  const base = relativePath.split("/").pop() ?? relativePath;
-  if (PROJECT_MARKER_BASENAMES.has(base)) return base;
-  if (base.endsWith(".csproj") || base.endsWith(".sln")) return base;
+/**
+ * Map a discovered file to the project directory it marks.
+ * Xcode bundles (`*.xcodeproj` / `*.xcworkspace`) mark their parent, not the
+ * bundle directory itself — a typical iOS app is `App/App.xcodeproj`, not SPM.
+ */
+function projectMarker(relativePath: string): { dir: string; marker: string } | null {
+  const parts = relativePath.split("/").filter(Boolean);
+  if (parts.length === 0) return null;
+
+  const bundleIndex = parts.findIndex(
+    (part) => part.endsWith(".xcodeproj") || part.endsWith(".xcworkspace"),
+  );
+  if (bundleIndex !== -1) {
+    const marker = parts[bundleIndex];
+    if (!marker) return null;
+    return { dir: bundleIndex === 0 ? "." : parts.slice(0, bundleIndex).join("/"), marker };
+  }
+
+  const base = parts[parts.length - 1];
+  if (!base) return null;
+  if (PROJECT_MARKER_BASENAMES.has(base) || base.endsWith(".csproj") || base.endsWith(".sln")) {
+    return { dir: parts.length === 1 ? "." : parts.slice(0, -1).join("/"), marker: base };
+  }
   return null;
 }
 
@@ -107,7 +127,7 @@ export function registerListProjects(server: McpServer, config: ServerConfig = l
       description: `Defensive secure-code-review tool: depth-capped discovery of project roots (package manifests) under a single allowlisted parent.
 
 PURPOSE (defensive only)
-- Discover deployable packages in a monorepo or multi-repo checkout before choosing project_root for a scoped review.
+- Discover deployable packages in a monorepo or multi-repo checkout before choosing project_root for a scoped review. Markers include package manifests and Xcode *.xcodeproj / *.xcworkspace bundles (the project root is the bundle's parent).
 - Hard caps (depth, project count, file count) and ignore rules keep discovery bounded and cheap.
 - Fail-closed: parent_root must resolve under SECURE_MCP_ALLOWED_ROOTS; symlink escapes are rejected.
 
@@ -120,7 +140,7 @@ Args:
 Returns:
   parent_root, project_count, truncated, projects[] (path, project_root, markers), coverage, notes.
 
-Only manifests are used to identify projects; contents are not opened. Pass project_root (absolute) to other tools — path is the parent-relative posix form.`,
+Only manifests and Xcode project/workspace bundles are used to identify projects; contents are not opened. Pass project_root (absolute) to other tools — path is the parent-relative posix form.`,
       inputSchema: InputSchema,
       annotations: {
         readOnlyHint: true,
@@ -148,13 +168,11 @@ Only manifests are used to identify projects; contents are not opened. Pass proj
 
         const markersByRoot = new Map<string, string[]>();
         for (const file of files) {
-          const marker = markerBasename(file.relativePath);
-          if (!marker) continue;
-          const dir = path.posix.dirname(file.relativePath);
-          const key = dir === "." ? "." : dir;
-          const markers = markersByRoot.get(key) ?? [];
-          if (!markers.includes(marker)) markers.push(marker);
-          markersByRoot.set(key, markers);
+          const found = projectMarker(file.relativePath);
+          if (!found) continue;
+          const markers = markersByRoot.get(found.dir) ?? [];
+          if (!markers.includes(found.marker)) markers.push(found.marker);
+          markersByRoot.set(found.dir, markers);
         }
 
         const sorted = [...markersByRoot.entries()].sort((a, b) =>
@@ -175,7 +193,7 @@ Only manifests are used to identify projects; contents are not opened. Pass proj
           projects,
           coverage: redactCoverageReport(coverageSession.finish()),
           notes: [
-            "Discovery is marker-file based (package manifests only); a directory with no manifest is not listed.",
+            "Discovery is marker-based (package manifests and Xcode project/workspace bundles); a directory with neither is not listed.",
             projectTruncated
               ? `More than max_projects (${params.max_projects}) manifests found; lower the parent or raise max_projects.`
               : `Found ${projects.length} project root(s) under ${parent}.`,

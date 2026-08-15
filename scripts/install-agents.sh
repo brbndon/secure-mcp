@@ -9,6 +9,7 @@
 # Usage:
 #   SECURE_MCP_ALLOWED_ROOTS=/path/to/repos ./scripts/install-agents.sh install
 #   ./scripts/install-agents.sh check      # verify symlinks, configs, and server startup
+#   ./scripts/install-agents.sh add-root /absolute/path   # append a root to an existing install
 #   ./scripts/install-agents.sh uninstall  # remove exactly what install added
 #
 # Windows users should use scripts/install-agents.ps1 instead.
@@ -217,6 +218,54 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
+# json_read_roots <file> — print the entry's allowlist, but only when the
+# entry is owned by this installer (marker) or points at this checkout
+# (installer-equivalent). Never read a conflicting non-owned entry.
+json_read_roots() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_INSTALL_REPO="$INSTALL_REPO" \
+  SECURE_MCP_INSTALL_VERSION="$INSTALL_VERSION" SECURE_MCP_MARKER_KEY="$MARKER_KEY" \
+  python3 - "$file" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+marker_key = os.environ["SECURE_MCP_MARKER_KEY"]
+
+def owned(data):
+    return data.get(marker_key) == {
+        "owner": os.environ["SECURE_MCP_INSTALL_REPO"],
+        "version": os.environ["SECURE_MCP_INSTALL_VERSION"],
+    }
+
+def points_to_checkout(existing):
+    env = existing.get("env") if isinstance(existing, dict) else None
+    roots = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+    return (
+        existing.get("command") == "node"
+        and existing.get("args") == [os.environ["SECURE_MCP_ENTRY"]]
+        and isinstance(roots, str)
+        and roots.strip() != ""
+    )
+
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError):
+    sys.exit(1)
+if not isinstance(data, dict):
+    sys.exit(1)
+entry = (data.get("mcpServers") or {}).get("secure-mcp")
+if not isinstance(entry, dict) or not (owned(data) or points_to_checkout(entry)):
+    sys.exit(1)
+env = entry.get("env")
+raw = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+if isinstance(raw, str) and raw.strip():
+    print(raw)
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
 json_has_entry() {
   local file="$1"
   [ -f "$file" ] || return 1
@@ -233,6 +282,91 @@ sys.exit(0 if isinstance(roots, str) and roots.strip() else 1)
 PY
 }
 
+# json_set_preflight <file> — read-only mirror of the json_set refusal checks,
+# so add-root can fail before mutating any client.
+json_set_preflight() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_INSTALL_REPO="$INSTALL_REPO" \
+  SECURE_MCP_INSTALL_VERSION="$INSTALL_VERSION" SECURE_MCP_MARKER_KEY="$MARKER_KEY" \
+  python3 - "$file" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+marker_key = os.environ["SECURE_MCP_MARKER_KEY"]
+marker = {
+    "owner": os.environ["SECURE_MCP_INSTALL_REPO"],
+    "version": os.environ["SECURE_MCP_INSTALL_VERSION"],
+}
+
+def owned(data):
+    return data.get(marker_key) == marker
+
+def points_to_checkout(existing):
+    env = existing.get("env") if isinstance(existing, dict) else None
+    roots = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+    return (
+        existing.get("command") == "node"
+        and existing.get("args") == [os.environ["SECURE_MCP_ENTRY"]]
+        and isinstance(roots, str)
+        and roots.strip() != ""
+    )
+
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except json.JSONDecodeError as exc:
+    sys.exit(f"cannot parse {path}: {exc}")
+if not isinstance(data, dict):
+    sys.exit(f"cannot update {path}: top-level JSON value must be an object")
+servers = data.get("mcpServers")
+if servers is not None and not isinstance(servers, dict):
+    sys.exit(f"cannot update {path}: mcpServers must be an object")
+existing = servers.get("secure-mcp") if isinstance(servers, dict) else None
+if existing is not None and not owned(data) and not points_to_checkout(existing):
+    sys.exit(f"refusing to overwrite non-owned secure-mcp entry in {path}; move it aside and re-run")
+PY
+}
+
+# json_remove_preflight <file> — read-only mirror of the json_remove refusal
+# check, for the legacy Claude cleanup the install path performs last.
+json_remove_preflight() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_INSTALL_REPO="$INSTALL_REPO" \
+  SECURE_MCP_MARKER_KEY="$MARKER_KEY" python3 - "$file" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+marker_key = os.environ["SECURE_MCP_MARKER_KEY"]
+expected_owner = os.environ["SECURE_MCP_INSTALL_REPO"]
+
+def points_to_checkout(existing):
+    env = existing.get("env") if isinstance(existing, dict) else None
+    roots = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+    return (
+        existing.get("command") == "node"
+        and existing.get("args") == [os.environ["SECURE_MCP_ENTRY"]]
+        and isinstance(roots, str)
+        and roots.strip() != ""
+    )
+
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except json.JSONDecodeError as exc:
+    sys.exit(f"cannot parse {path}: {exc}")
+if not isinstance(data, dict):
+    sys.exit(f"cannot update {path}: top-level JSON value must be an object")
+servers = data.get("mcpServers")
+existing = servers.get("secure-mcp") if isinstance(servers, dict) else None
+marker = data.get(marker_key)
+owned = isinstance(marker, dict) and marker.get("owner") == expected_owner
+if existing is not None and not owned and not points_to_checkout(existing):
+    sys.exit(f"refusing to remove non-owned secure-mcp entry in {path}")
+PY
+}
+
 # --- Codex TOML helpers -----------------------------------------------------
 
 codex_section_present() {
@@ -242,6 +376,36 @@ codex_section_present() {
 
 codex_has_marker() {
   grep -qE "^# secure-mcp install owner: $INSTALL_REPO" "$CODEX_CONFIG" 2>/dev/null
+}
+
+codex_read_roots() {
+  [ -f "$CODEX_CONFIG" ] || return 1
+  if ! codex_has_marker && ! codex_entry_points_to_checkout; then
+    return 1
+  fi
+  python3 - "$CODEX_CONFIG" <<'PY'
+import json, re, sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+
+# Read only the installer-written [mcp_servers.secure-mcp.env] sub-table; a
+# SECURE_MCP_ALLOWED_ROOTS assignment in any other table is not this install's
+# allowlist. TOML is never executed, only this sub-table is text-matched.
+def section(name):
+    match = re.search(r"^\s*\[\s*" + re.escape(name) + r"\s*\](.*?)(?=^\s*\[|\Z)", text, re.M | re.S)
+    return match.group(1) if match else None
+
+env = section("mcp_servers.secure-mcp.env")
+if env is None:
+    sys.exit(1)
+match = re.search(r'^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*("(?:\\.|[^"\\])*")', env, re.M)
+if not match:
+    sys.exit(1)
+roots = json.loads(match.group(1))
+if not roots.strip():
+    sys.exit(1)
+print(roots)
+PY
 }
 
 codex_has_authorized_entry() {
@@ -463,6 +627,87 @@ probe_server() {
 
 # --- Modes ------------------------------------------------------------------
 
+# read_installed_roots — print the union of every owned client's allowlist,
+# in first-seen order with exact duplicates skipped. add-root merges this
+# union with the requested roots, so a root installed in only one client is
+# preserved instead of being dropped for the first client's allowlist.
+read_installed_roots() {
+  local cfg merged="" one found=0
+  for cfg in "${JSON_CONFIGS[@]}"; do
+    if one="$(json_read_roots "$cfg")"; then
+      merged="$(merge_roots_string "$merged" "$one")"
+      found=1
+    fi
+  done
+  if one="$(codex_read_roots)"; then
+    merged="$(merge_roots_string "$merged" "$one")"
+    found=1
+  fi
+  [ "$found" -eq 1 ] || return 1
+  printf '%s\n' "$merged"
+}
+
+merge_roots_string() {
+  EXISTING_ROOTS="$1" EXTRA_ROOTS="$2" python3 - <<'PY'
+import os
+
+seen: list[str] = []
+for raw in (os.environ.get("EXISTING_ROOTS", ""), os.environ.get("EXTRA_ROOTS", "")):
+    for part in raw.split(os.pathsep):
+        root = part.strip()
+        if root and root not in seen:
+            seen.append(root)
+print(os.pathsep.join(seen))
+PY
+}
+
+# preflight_install_targets — before add-root mutates anything, verify every
+# target the install rewrite would write, using the same ownership and
+# points-to-this-checkout predicates as the writers. A refused add-root must
+# leave every client's allowlist unchanged.
+preflight_install_targets() {
+  local target cfg
+  for target in "${SKILL_LINKS[@]}"; do
+    if [ -L "$target" ] && [ "$(readlink "$target")" = "$SKILL_SRC" ]; then
+      continue
+    fi
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      die "refusing to replace non-owned path at $target; move it aside and re-run"
+    fi
+  done
+  for cfg in "${JSON_CONFIGS[@]}"; do
+    json_set_preflight "$cfg" || die "add-root aborted: it would refuse to update $cfg; move it aside and re-run"
+  done
+  if codex_section_present && ! codex_has_marker && ! codex_entry_points_to_checkout; then
+    die "refusing to overwrite non-owned [mcp_servers.secure-mcp] in $CODEX_CONFIG; move it aside and re-run"
+  fi
+  if [ -f "$CODEX_AGENT_DST" ] && ! cmp -s "$CODEX_AGENT_SRC" "$CODEX_AGENT_DST"; then
+    die "refusing to overwrite non-owned Codex agent manifest $CODEX_AGENT_DST; move it aside and re-run"
+  fi
+  if json_has_entry "$LEGACY_CLAUDE_CONFIG"; then
+    json_remove_preflight "$LEGACY_CLAUDE_CONFIG" ||
+      die "add-root aborted: it would refuse to remove the legacy Claude entry in $LEGACY_CLAUDE_CONFIG; move it aside and re-run"
+  fi
+}
+
+cmd_add_root() {
+  [ "$#" -ge 1 ] || die "usage: $0 add-root /absolute/path [...]"
+  local existing extra path
+  existing="$(read_installed_roots)" || die "no existing install found; run install first"
+  for path in "$@"; do
+    validate_roots_string "$path" || die "invalid root: $path"
+  done
+  preflight_install_targets
+  extra="$(python3 - "$@" <<'PY'
+import os, sys
+print(os.pathsep.join(sys.argv[1:]))
+PY
+)"
+  CONFIGURED_ROOTS="$(merge_roots_string "$existing" "$extra")"
+  log "allowlist is now: $CONFIGURED_ROOTS"
+  cmd_install
+}
+
 cmd_install() {
   [ -n "$CONFIGURED_ROOTS" ] || die "set SECURE_MCP_ALLOWED_ROOTS to the repositories this server may inspect"
   validate_configured_roots || die "invalid SECURE_MCP_ALLOWED_ROOTS"
@@ -554,5 +799,6 @@ case "${1:-install}" in
   install)   cmd_install ;;
   uninstall) cmd_uninstall ;;
   check)     cmd_check ;;
-  *) die "usage: $0 [install|uninstall|check]" ;;
+  add-root)  shift; cmd_add_root "$@" ;;
+  *) die "usage: $0 [install|uninstall|check|add-root]" ;;
 esac

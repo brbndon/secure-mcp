@@ -79,7 +79,7 @@ cd secure-mcp
 
 `setup.sh` does everything for you: installs dependencies, builds the server, prompts for the filesystem allowlist (`SECURE_MCP_ALLOWED_ROOTS`) when it is unset, then installs the skill and MCP server wiring for pi, Cursor, and OpenAI Codex and verifies the result. On Windows, use the equivalent `.\scripts\setup.ps1` in PowerShell.
 
-The allowlist is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Keep it narrow — one checkout is better than your entire home directory. To skip the prompt, pass it explicitly, or export it in your shell profile so future runs stay non-interactive:
+The allowlist is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Prefer the parent directory that contains the Swift, web, and Expo checkouts you review (for example `/Users/you/Code`). That is narrower than your home directory and does not lock you to a single app. To skip the prompt, pass it explicitly, or export it in your shell profile so future runs stay non-interactive:
 
 ```bash
 SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories ./scripts/setup.sh
@@ -108,8 +108,11 @@ The installer:
 `check` verifies skill links, client configuration, allowlist scope, the Codex agent manifest, and server startup. **Restart agent sessions after installation** so clients reload skills and MCP configuration.
 
 ```bash
+./scripts/install-agents.sh add-root /absolute/path/to/another/parent
 ./scripts/install-agents.sh uninstall   # remove only what install added
 ```
+
+`add-root` appends one or more existing absolute directories to an existing install and rewrites the client configs. Restart agent sessions afterward.
 
 On Windows, use the equivalent PowerShell installer:
 
@@ -117,6 +120,7 @@ On Windows, use the equivalent PowerShell installer:
 $env:SECURE_MCP_ALLOWED_ROOTS = "C:\absolute\path\to\repositories"
 .\scripts\install-agents.ps1 install
 .\scripts\install-agents.ps1 check
+.\scripts\install-agents.ps1 -Action add-root C:\absolute\path\to\another\parent
 .\scripts\install-agents.ps1 uninstall
 ```
 
@@ -140,6 +144,7 @@ The server strictly requires MCP protocol revision `2026-07-28` and rejects lega
 | Claude Code | Manual | `.mcp.json` or `claude mcp add --transport stdio` | Config shape verified; client must support `2026-07-28` |
 | VS Code / GitHub Copilot | Manual | `.vscode/mcp.json` or VS Code `settings.json` (top-level `servers`) | Config shape verified; client must support `2026-07-28` |
 | pi | Automated | `~/.pi/agent/mcp.json` (`mcpServers`) | Installer convention; client must support `2026-07-28` |
+| Grok Build TUI | Unsupported | `~/.grok/config.toml` | Currently opens with MCP `2025-11-25` (`initialize`). This server only speaks `2026-07-28` (`server/discover`) and rejects that handshake. Do not configure Grok until it negotiates v2. |
 | Generic stdio MCP client | Manual | Client-specific | Must send `server/discover` and support `2026-07-28` |
 
 ### Manual client configuration (checkout)
@@ -202,10 +207,14 @@ For a zero-setup, deterministic demo, run `pnpm smoke` after a checkout build. I
 
 ## Filesystem authorization
 
-`SECURE_MCP_ALLOWED_ROOTS` is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected.
+`SECURE_MCP_ALLOWED_ROOTS` is an OS-path-delimited list of canonical roots under which `project_root` values may resolve. Missing or stale entries fail closed; symlink and path-traversal escapes are rejected. Tools then take a per-call `project_root` for the specific Swift or web checkout.
 
 ```bash
-export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code/example-app
+# Preferred: the parent that contains the repositories you review
+export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code
+
+# Later, add another parent without repeating the full bootstrap
+./scripts/install-agents.sh add-root /Users/alice/Work
 ```
 
 ## Server-only via npm (last resort)

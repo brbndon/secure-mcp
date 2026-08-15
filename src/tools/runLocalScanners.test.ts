@@ -85,6 +85,22 @@ describe("runBinary", () => {
       assert.match(result.stdout, /rule\.one/);
     }
   });
+
+  it("classifies a hard failure with JSON stdout as an error, not a clean scan", async () => {
+    const execFile: ExecFileFn = async () => {
+      const err = new Error("Command failed: semgrep") as NodeJS.ErrnoException & {
+        code?: number;
+        stdout?: string;
+        stderr?: string;
+      };
+      err.code = 2;
+      err.stdout = JSON.stringify({ errors: [{ message: "invalid config" }], results: [] });
+      err.stderr = "semgrep: config error: missing rules\n";
+      throw err;
+    };
+    const result = await runBinary(execFile, "semgrep", ["scan"], "/tmp", 1000);
+    assert.equal(result.status, "error");
+  });
 });
 
 describe("scanner output mapping", () => {

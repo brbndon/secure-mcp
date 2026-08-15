@@ -34,14 +34,27 @@ function ensureBuilt(): void {
   assert.equal(result.status, 0, "pnpm build failed before installer integration tests");
 }
 
-function installerCommand(action: string, shell: "bash" | "pwsh"): { command: string; args: string[] } {
+function installerCommand(
+  action: string,
+  shell: "bash" | "pwsh",
+  extraArgs: string[] = [],
+): { command: string; args: string[] } {
   if (shell === "pwsh") {
     return {
       command: "pwsh",
-      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/install-agents.ps1", "-Action", action],
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/install-agents.ps1",
+        "-Action",
+        action,
+        ...extraArgs,
+      ],
     };
   }
-  return { command: "bash", args: ["scripts/install-agents.sh", action] };
+  return { command: "bash", args: ["scripts/install-agents.sh", action, ...extraArgs] };
 }
 
 function runInstaller(
@@ -49,8 +62,9 @@ function runInstaller(
   roots: string,
   action: string,
   shell: "bash" | "pwsh" = isWindows ? "pwsh" : "bash",
+  extraArgs: string[] = [],
 ): SpawnSyncReturns<string> {
-  const { command, args } = installerCommand(action, shell);
+  const { command, args } = installerCommand(action, shell, extraArgs);
   return spawnSync(command, args, {
     cwd: root,
     env: {
@@ -109,6 +123,8 @@ function expectInstalled(home: string, roots: string): void {
   assert.match(codexText, /\[mcp_servers\.secure-mcp\]/);
   const tomlServerEntry = serverEntry.replace(/\\/g, "\\\\");
   assert.match(codexText, new RegExp(`args = \\["${escapeRegex(tomlServerEntry)}"\\]`));
+  const tomlRoots = roots.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  assert.match(codexText, new RegExp(`SECURE_MCP_ALLOWED_ROOTS = "${escapeRegex(tomlRoots)}"`));
   assert.ok(existsSync(codexAgent));
   assert.equal(
     readFileSync(codexAgent, "utf8"),
@@ -213,6 +229,11 @@ function tempHome(label: string): string {
   return mkdtempSync(path.join(os.tmpdir(), `secure-mcp-${label}-`));
 }
 
+function addRootShells(): Array<"bash" | "pwsh"> {
+  if (isWindows) return ["pwsh"];
+  return hasPwsh ? ["bash", "pwsh"] : ["bash"];
+}
+
 test("installer is idempotent, ownership-safe, and leaves temp homes clean", { timeout: 180_000 }, async () => {
   ensureBuilt();
   const tempDirs: string[] = [];
@@ -299,6 +320,215 @@ test("installer refuses conflicting non-owned entries and skills", { timeout: 12
     result = runInstaller(codexHome, codexRoots, "install");
     assert.notEqual(result.status, 0, "install should refuse a conflicting Codex section");
     assert.equal(readFileSync(codexConfig, "utf8"), conflictingCodex);
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("add-root appends a directory to an existing install without dropping roots", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    const home = tempHome("add-root");
+    const first = tempHome("roots-first");
+    const second = tempHome("roots-second");
+    const third = tempHome("roots-third");
+    tempDirs.push(home, first, second, third);
+
+    let result = runInstaller(home, first, "install");
+    assert.equal(result.status, 0, result.stderr);
+    expectInstalled(home, first);
+
+    result = runInstaller(home, first, "add-root", isWindows ? "pwsh" : "bash", [second]);
+    assert.equal(result.status, 0, result.stderr);
+    const merged = [first, second].join(path.delimiter);
+    expectInstalled(home, merged);
+
+    result = runInstaller(home, first, "add-root", isWindows ? "pwsh" : "bash", [second]);
+    assert.equal(result.status, 0, result.stderr);
+    expectInstalled(home, merged);
+
+    // The environment still names only the original root: the installed
+    // allowlist (config merge) must win over an env merge.
+    result = runInstaller(home, first, "add-root", isWindows ? "pwsh" : "bash", [third]);
+    assert.equal(result.status, 0, result.stderr);
+    expectInstalled(home, [first, second, third].join(path.delimiter));
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("add-root fails without an existing install or a path", { timeout: 60_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    const home = tempHome("add-root-missing");
+    const extra = tempHome("roots-missing");
+    tempDirs.push(home, extra);
+
+    let result = runInstaller(home, extra, "add-root", isWindows ? "pwsh" : "bash", [extra]);
+    assert.notEqual(result.status, 0, "add-root should require an existing install");
+
+    const installedHome = tempHome("add-root-no-path");
+    const first = tempHome("roots-no-path");
+    tempDirs.push(installedHome, first);
+    result = runInstaller(installedHome, first, "install");
+    assert.equal(result.status, 0, result.stderr);
+    result = runInstaller(installedHome, first, "add-root");
+    assert.notEqual(result.status, 0, "add-root should require at least one path");
+    expectInstalled(installedHome, first);
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("add-root ignores an environment allowlist naming a never-installed directory", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const shell of addRootShells()) {
+      const home = tempHome(`add-root-env-${shell}`);
+      const first = tempHome(`roots-env-first-${shell}`);
+      const second = tempHome(`roots-env-second-${shell}`);
+      const third = tempHome(`roots-env-third-${shell}`);
+      const neverInstalled = tempHome(`roots-env-never-${shell}`);
+      tempDirs.push(home, first, second, third, neverInstalled);
+
+      let result = runInstaller(home, first, "install", shell);
+      assert.equal(result.status, 0, result.stderr);
+      result = runInstaller(home, first, "add-root", shell, [second]);
+      assert.equal(result.status, 0, result.stderr);
+      expectInstalled(home, [first, second].join(path.delimiter));
+
+      result = runInstaller(home, neverInstalled, "add-root", shell, [third]);
+      assert.equal(result.status, 0, result.stderr);
+      const merged = [first, second, third].join(path.delimiter);
+      expectInstalled(home, merged);
+      const piEntry = jsonServers(path.join(home, ".pi", "agent", "mcp.json"))["secure-mcp"] as {
+        env: { SECURE_MCP_ALLOWED_ROOTS: string };
+      };
+      assert.equal(
+        piEntry.env.SECURE_MCP_ALLOWED_ROOTS.includes(neverInstalled),
+        false,
+        "an env-only root must not be added to the allowlist",
+      );
+    }
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("add-root unions allowlists across owned clients instead of taking the first", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const shell of addRootShells()) {
+      const home = tempHome(`add-root-union-${shell}`);
+      const first = tempHome(`roots-union-first-${shell}`);
+      const cursorOnly = tempHome(`roots-union-cursor-${shell}`);
+      const second = tempHome(`roots-union-second-${shell}`);
+      tempDirs.push(home, first, cursorOnly, second);
+
+      let result = runInstaller(home, first, "install", shell);
+      assert.equal(result.status, 0, result.stderr);
+
+      // Operator drift: a root added only in Cursor's owned entry.
+      const cursorJson = path.join(home, ".cursor", "mcp.json");
+      const data = readJson(cursorJson);
+      const servers = data.mcpServers as Record<string, { env: { SECURE_MCP_ALLOWED_ROOTS: string } }>;
+      servers["secure-mcp"].env.SECURE_MCP_ALLOWED_ROOTS = [first, cursorOnly].join(path.delimiter);
+      writeFileSync(cursorJson, JSON.stringify(data, null, 2));
+
+      result = runInstaller(home, first, "add-root", shell, [second]);
+      assert.equal(result.status, 0, result.stderr);
+      // First-seen order: pi (first), cursor (first, cursorOnly), codex (first),
+      // then the requested root.
+      expectInstalled(home, [first, cursorOnly, second].join(path.delimiter));
+    }
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("add-root refuses a non-owned later client before mutating the owned first client", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const shell of addRootShells()) {
+      const home = tempHome(`add-root-preflight-${shell}`);
+      const first = tempHome(`roots-preflight-first-${shell}`);
+      const second = tempHome(`roots-preflight-second-${shell}`);
+      tempDirs.push(home, first, second);
+
+      let result = runInstaller(home, first, "install", shell);
+      assert.equal(result.status, 0, result.stderr);
+
+      // Cursor becomes a conflicting non-owned entry: the install rewrite
+      // would refuse it, so add-root must fail before touching pi or Codex.
+      const cursorJson = path.join(home, ".cursor", "mcp.json");
+      const conflicting = { mcpServers: { "secure-mcp": { command: "python", args: ["other.py"] } } };
+      writeFileSync(cursorJson, JSON.stringify(conflicting, null, 2));
+
+      result = runInstaller(home, first, "add-root", shell, [second]);
+      assert.notEqual(result.status, 0, "add-root should refuse before touching any client");
+
+      const piEntry = jsonServers(path.join(home, ".pi", "agent", "mcp.json"))["secure-mcp"] as {
+        env: { SECURE_MCP_ALLOWED_ROOTS: string };
+      };
+      assert.equal(piEntry.env.SECURE_MCP_ALLOWED_ROOTS, first);
+      assert.deepEqual(readJson(cursorJson), conflicting);
+      const codexText = readFileSync(path.join(home, ".codex", "config.toml"), "utf8");
+      assert.match(codexText, new RegExp(`SECURE_MCP_ALLOWED_ROOTS = "${escapeRegex(first)}"`));
+      assert.equal(codexText.includes(second), false);
+      for (const skill of [
+        path.join(home, ".agents", "skills", "secure-mcp"),
+        path.join(home, ".cursor", "skills", "secure-mcp"),
+      ]) {
+        assert.equal(linkTarget(skill), realpathSync(path.join(root, ".agents", "skills", "secure-mcp")));
+      }
+    }
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("codex-only add-root reads the owned secure-mcp env table and ignores foreign TOML assignments", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const shell of addRootShells()) {
+      const home = tempHome(`codex-scope-${shell}`);
+      const first = tempHome(`roots-codex-scope-first-${shell}`);
+      const second = tempHome(`roots-codex-scope-second-${shell}`);
+      const decoy = tempHome(`roots-codex-scope-decoy-${shell}`);
+      tempDirs.push(home, first, second, decoy);
+
+      let result = runInstaller(home, first, "install", shell);
+      assert.equal(result.status, 0, result.stderr);
+
+      // Codex-only install: drop both JSON configs so the TOML env table is
+      // the only allowlist source, then prepend a decoy assignment in a
+      // foreign table that must not be treated as the installed allowlist.
+      rmSync(path.join(home, ".pi", "agent", "mcp.json"));
+      rmSync(path.join(home, ".cursor", "mcp.json"));
+      const codexConfig = path.join(home, ".codex", "config.toml");
+      const decoyToml = decoy.replace(/\\/g, "\\\\");
+      const foreign = `[mcp_servers.other]\ncommand = "node"\n\n[mcp_servers.other.env]\nSECURE_MCP_ALLOWED_ROOTS = "${decoyToml}"\n\n`;
+      writeFileSync(codexConfig, foreign + readFileSync(codexConfig, "utf8"));
+
+      result = runInstaller(home, first, "add-root", shell, [second]);
+      assert.equal(result.status, 0, result.stderr);
+      expectInstalled(home, [first, second].join(path.delimiter));
+
+      const text = readFileSync(codexConfig, "utf8");
+      assert.equal((text.match(/SECURE_MCP_ALLOWED_ROOTS = /g) ?? []).length, 2, text);
+      const mergedToml = [first, second].join(path.delimiter).replace(/\\/g, "\\\\");
+      assert.ok(
+        text.indexOf(`SECURE_MCP_ALLOWED_ROOTS = "${decoyToml}"`) <
+          text.indexOf(`SECURE_MCP_ALLOWED_ROOTS = "${mergedToml}"`),
+        "the foreign assignment must precede and not feed the owned allowlist",
+      );
+    }
   } finally {
     for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   }

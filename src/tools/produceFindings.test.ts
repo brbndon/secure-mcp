@@ -643,4 +643,35 @@ describe("produceFindings SARIF export", () => {
     const rule = result.structured.runs[0].tool.driver.rules[0];
     assert.ok(rule.help.text.length > 0);
   });
+
+  it("keeps oversized SARIF parseable by dropping the lowest-priority findings with a truncation marker", async () => {
+    const findings = Array.from({ length: 150 }, (_, i) =>
+      makeFinding({
+        id: `BIG-${i}`,
+        title: `Candidate finding ${i}`,
+        description: "A long description used to push the export past the response budget.",
+        evidence: "evidence text padded to keep each entry large",
+        file: `src/app/page-${i}.ts`,
+        line: i + 1,
+        severity: "low",
+        confidence: "low",
+        disposition: "needs_review",
+      }),
+    );
+    const result = await callProduceResult(findings, "Oversized SARIF", "sarif");
+    const sarif = result.structured;
+    assert.equal(sarif.version, "2.1.0");
+    assert.equal(sarif.runs.length, 1);
+    const run = sarif.runs[0];
+    assert.ok(JSON.stringify(sarif).length < 25_000, "export must fit the response budget");
+    assert.equal(run.properties.secure_mcp_truncated, "true");
+    assert.ok(run.results.length > 0 && run.results.length < 150, "findings were dropped, not wiped");
+    // Rules stay consistent with retained results so ruleIndex never dangles.
+    const rules = run.tool.driver.rules as Array<{ id: string }>;
+    const ruleIds = new Set(rules.map((rule) => rule.id));
+    for (const res of run.results) {
+      assert.ok(ruleIds.has(res.ruleId), `missing rule ${res.ruleId}`);
+      assert.equal(rules[res.ruleIndex].id, res.ruleId);
+    }
+  });
 });

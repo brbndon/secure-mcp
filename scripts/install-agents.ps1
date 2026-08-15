@@ -9,6 +9,7 @@ Usage:
   $env:SECURE_MCP_ALLOWED_ROOTS = "C:\path\to\repos"
   .\scripts\install-agents.ps1 install
   .\scripts\install-agents.ps1 check
+  .\scripts\install-agents.ps1 add-root C:\absolute\path
   .\scripts\install-agents.ps1 uninstall
 
 Idempotent and ownership-safe: the installer modifies only the secure-mcp keys
@@ -17,8 +18,11 @@ harnesses may redirect all user-level writes with SECURE_MCP_INSTALL_HOME.
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet("install", "check", "uninstall")]
-  [string]$Action = "install"
+  [ValidateSet("install", "check", "uninstall", "add-root")]
+  [string]$Action = "install",
+
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$RootPaths = @()
 )
 
 Set-StrictMode -Version Latest
@@ -216,6 +220,24 @@ function Remove-SecureMcpJson {
   Write-Log "json: removed secure-mcp from $Path"
 }
 
+function Get-JsonRoots {
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+  $data = Read-JsonFile $Path
+  $servers = if ($data.ContainsKey("mcpServers")) { $data["mcpServers"] } else { @{} }
+  $entry = if ($servers -is [hashtable] -and $servers.ContainsKey("secure-mcp")) { $servers["secure-mcp"] } else { $null }
+  if ($null -eq $entry -or $entry -isnot [hashtable]) { return $null }
+  # Read only owned or installer-equivalent entries; a conflicting non-owned
+  # entry must never feed add-root.
+  $owned = Test-EntryOwned $data
+  $pointsToCheckout = Test-EntryPointsToCheckout $entry
+  if (-not $owned -and -not $pointsToCheckout) { return $null }
+  $envMap = if ($entry.ContainsKey("env")) { $entry["env"] } else { $null }
+  $raw = if ($envMap -is [hashtable] -and $envMap.ContainsKey("SECURE_MCP_ALLOWED_ROOTS")) { [string]$envMap["SECURE_MCP_ALLOWED_ROOTS"] } else { "" }
+  if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+  return $raw
+}
+
 function Test-JsonHasEntry {
   param([Parameter(Mandatory)][string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) { return $false }
@@ -293,6 +315,22 @@ function Test-CodexEntryPointsToCheckout {
   return ($server -match "(?m)^\s*command\s*=\s*`"node`"") -and
     ($server -match "(?m)^\s*args\s*=\s*\[$entry\]") -and
     ($envSection -match '(?m)^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*".+"')
+}
+
+function Get-CodexRoots {
+  if (-not (Test-Path -LiteralPath $CodexConfig)) { return $null }
+  # Read only owned or installer-equivalent sections; a conflicting non-owned
+  # section must never feed add-root.
+  if (-not (Test-CodexMarker) -and -not (Test-CodexEntryPointsToCheckout)) { return $null }
+  $text = Get-Content -LiteralPath $CodexConfig -Raw -Encoding UTF8
+  $envSection = Get-CodexSection $text "mcp_servers.secure-mcp.env"
+  if ($null -eq $envSection) { return $null }
+  $match = [regex]::Match($envSection, '(?m)^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*"((?:\\.|[^"\\])*)"\s*$')
+  if (-not $match.Success) { return $null }
+  # Values are written with backslashes escaped (`C:\\abs\\path`).
+  $raw = $match.Groups[1].Value -replace '\\(.)', '$1'
+  if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+  return $raw
 }
 
 function Test-CodexAuthorizedEntry {
@@ -475,6 +513,132 @@ function Cleanup-LegacyClaude {
   }
 }
 
+function Get-InstalledRoots {
+  # Union of every owned client's allowlist, first-seen order, exact
+  # duplicates skipped; a root installed in only one client is preserved
+  # instead of being dropped for the first client's allowlist.
+  $merged = [System.Collections.Generic.List[string]]::new()
+  foreach ($cfg in $JsonConfigs) {
+    $found = Get-JsonRoots $cfg
+    if (-not [string]::IsNullOrWhiteSpace($found)) {
+      foreach ($part in ($found -split [IO.Path]::PathSeparator)) {
+        $trimmed = $part.Trim()
+        if ($trimmed -and -not $merged.Contains($trimmed)) { $merged.Add($trimmed) }
+      }
+    }
+  }
+  $codexRoots = Get-CodexRoots
+  if (-not [string]::IsNullOrWhiteSpace($codexRoots)) {
+    foreach ($part in ($codexRoots -split [IO.Path]::PathSeparator)) {
+      $trimmed = $part.Trim()
+      if ($trimmed -and -not $merged.Contains($trimmed)) { $merged.Add($trimmed) }
+    }
+  }
+  if ($merged.Count -eq 0) { return $null }
+  return ($merged -join [IO.Path]::PathSeparator)
+}
+
+function Assert-SecureMcpJsonWritable {
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  $data = Read-JsonFile $Path
+  if (-not $data.ContainsKey("mcpServers")) { return }
+  $servers = $data["mcpServers"]
+  if ($servers -isnot [hashtable]) { throw "cannot update $Path : mcpServers must be an object" }
+  if ($servers.ContainsKey("secure-mcp")) {
+    $existing = $servers["secure-mcp"]
+    $owned = Test-EntryOwned $data
+    $pointsToCheckout = ($existing -is [hashtable]) -and (Test-EntryPointsToCheckout $existing)
+    if (-not $owned -and -not $pointsToCheckout) {
+      throw "refusing to overwrite non-owned secure-mcp entry in $Path; move it aside and re-run"
+    }
+  }
+}
+
+function Assert-SecureMcpJsonRemovable {
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  $data = Read-JsonFile $Path
+  $servers = if ($data.ContainsKey("mcpServers")) { $data["mcpServers"] } else { @{} }
+  $existing = if ($servers -is [hashtable] -and $servers.ContainsKey("secure-mcp")) { $servers["secure-mcp"] } else { $null }
+  if ($null -ne $existing) {
+    $owned = Test-EntryOwned $data
+    $pointsToCheckout = ($existing -is [hashtable]) -and (Test-EntryPointsToCheckout $existing)
+    if (-not $owned -and -not $pointsToCheckout) {
+      throw "refusing to remove non-owned secure-mcp entry in $Path"
+    }
+  }
+}
+
+function Assert-InstallTargetsWritable {
+  # Before add-root mutates anything, verify every target the install rewrite
+  # would write, using the same ownership predicates as the writers. A refused
+  # add-root must leave every client's allowlist unchanged.
+  foreach ($target in $SkillLinks) {
+    $item = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) { continue }
+    if ($item.LinkType -eq "SymbolicLink" -or $item.LinkType -eq "Junction") {
+      $current = [IO.Path]::GetFullPath(($item.Target | Select-Object -First 1))
+      if ($current -ne [IO.Path]::GetFullPath($SkillSrc)) {
+        throw "refusing to replace non-owned link at $target (points to $current); move it aside and re-run"
+      }
+    } else {
+      throw "refusing to replace non-symlink at $target; move it aside and re-run"
+    }
+  }
+  foreach ($config in $JsonConfigs) { Assert-SecureMcpJsonWritable $config }
+  if (Test-CodexSectionPresent) {
+    if (-not (Test-CodexMarker) -and -not (Test-CodexEntryPointsToCheckout)) {
+      throw "refusing to overwrite non-owned [mcp_servers.secure-mcp] in $CodexConfig; move it aside and re-run"
+    }
+  }
+  if ((Test-Path -LiteralPath $CodexAgentDst) -and -not (Test-FileEquals $CodexAgentSrc $CodexAgentDst)) {
+    throw "refusing to overwrite non-owned Codex agent manifest $CodexAgentDst; move it aside and re-run"
+  }
+  if ((Test-Path -LiteralPath $LegacyClaudeConfig) -and (Test-JsonHasEntry $LegacyClaudeConfig)) {
+    Assert-SecureMcpJsonRemovable $LegacyClaudeConfig
+  }
+}
+
+function Invoke-AddRoot {
+  param([string[]]$Paths)
+  if ($null -eq $Paths -or @($Paths).Count -eq 0) {
+    throw "usage: $($MyInvocation.ScriptName) add-root <absolute-path> [...]"
+  }
+  $existing = Get-InstalledRoots
+  if ([string]::IsNullOrWhiteSpace($existing)) {
+    throw "no existing install found; run install first"
+  }
+  foreach ($candidate in $Paths) {
+    $path = [string]$candidate
+    if (-not [IO.Path]::IsPathRooted($path)) {
+      throw "every add-root path must be absolute"
+    }
+    if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+      throw "every add-root path must be an existing directory: $path"
+    }
+  }
+  Assert-InstallTargetsWritable
+  $merged = [System.Collections.Generic.List[string]]::new()
+  foreach ($part in ($existing -split [IO.Path]::PathSeparator)) {
+    $trimmed = $part.Trim()
+    if ($trimmed -and -not $merged.Contains($trimmed)) { $merged.Add($trimmed) }
+  }
+  foreach ($candidate in $Paths) {
+    $path = [string]$candidate
+    if (-not [IO.Path]::IsPathRooted($path)) {
+      throw "every add-root path must be absolute"
+    }
+    if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+      throw "every add-root path must be an existing directory: $path"
+    }
+    if (-not $merged.Contains($path)) { $merged.Add($path) }
+  }
+  $script:Roots = ($merged -join [IO.Path]::PathSeparator)
+  Write-Log "allowlist is now: $script:Roots"
+  Invoke-Install
+}
+
 function Invoke-Install {
   Assert-ConfiguredRoots
   if (-not (Test-Path -LiteralPath $ServerEntry)) {
@@ -570,4 +734,5 @@ switch ($Action) {
   "install" { Invoke-Install }
   "uninstall" { Invoke-Uninstall }
   "check" { Invoke-Check }
+  "add-root" { Invoke-AddRoot $RootPaths }
 }

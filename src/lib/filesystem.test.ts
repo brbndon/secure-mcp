@@ -204,6 +204,24 @@ describe("profileProject fixtures", () => {
     }
   });
 
+  it("claims the TypeScript stack for a plain-JS service (package.json + .js files)", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-js-service-"));
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "js-service", dependencies: { express: "4.19.2" } }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "server.js"), "const express = require('express');\n", "utf8");
+      const profile = await profileProject(root);
+      assert.equal(profile.hasTypeScriptFiles, true);
+      assert.ok(profile.likelyStacks.includes("typescript"));
+      assert.ok(!profile.likelyStacks.includes("nextjs"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("honors focus_paths during language sampling", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-focus-"));
     try {

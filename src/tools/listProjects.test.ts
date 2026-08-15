@@ -192,6 +192,56 @@ describe("secure_mcp_list_projects", () => {
     }
   });
 
+  it("treats Xcode project and workspace bundles as the parent project root", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-projects-xcode-"));
+    const iosApp = path.join(parent, "ios-app");
+    const macApp = path.join(parent, "mac-app");
+    const spm = path.join(parent, "spm");
+    await fs.mkdir(path.join(iosApp, "App.xcodeproj"), { recursive: true });
+    await fs.writeFile(path.join(iosApp, "App.xcodeproj", "project.pbxproj"), "// pbx\n", "utf8");
+    await fs.mkdir(path.join(macApp, "App.xcworkspace"), { recursive: true });
+    await fs.writeFile(
+      path.join(macApp, "App.xcworkspace", "contents.xcworkspacedata"),
+      "<?xml version=\"1.0\"?>\n",
+      "utf8",
+    );
+    await fs.mkdir(spm, { recursive: true });
+    await fs.writeFile(path.join(spm, "Package.swift"), "// swift-tools-version: 5.9\n", "utf8");
+
+    const { server, client, clientTransport, serverTransport } = makeServer([parent]);
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_list_projects",
+        arguments: { parent_root: parent, max_depth: 4, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        parent_root: string;
+        projects: Array<{ path: string; project_root: string; markers: string[] }>;
+      };
+      const byPath = Object.fromEntries(data.projects.map((p) => [p.path, p]));
+      assert.ok(byPath["ios-app"], "typical Xcode iOS app should be discovered");
+      assert.deepEqual(byPath["ios-app"].markers, ["App.xcodeproj"]);
+      assert.equal(byPath["ios-app"].project_root, path.join(data.parent_root, "ios-app"));
+      assert.ok(byPath["mac-app"]);
+      assert.deepEqual(byPath["mac-app"].markers, ["App.xcworkspace"]);
+      assert.ok(byPath.spm);
+      assert.deepEqual(byPath.spm.markers, ["Package.swift"]);
+      assert.equal(
+        data.projects.some((p) => p.path.endsWith(".xcodeproj") || p.path.endsWith(".xcworkspace")),
+        false,
+        "the Xcode bundle directory itself is not the project root",
+      );
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("caps discovered projects at max_projects", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-projects-cap-"));
     for (let i = 0; i < 12; i += 1) {

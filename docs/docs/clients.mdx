@@ -20,6 +20,7 @@ The config shapes below follow each client's current official documentation and 
 | Claude Code | Manual | `.mcp.json` or `claude mcp add --transport stdio` | `mcpServers` object; project trust approval applies |
 | VS Code / GitHub Copilot | Manual | `.vscode/mcp.json` or VS Code user `settings.json` | Top-level `servers` shape, not `mcpServers` |
 | pi | Automated | `~/.pi/agent/mcp.json` | `mcpServers` object with pi lifecycle fields |
+| Grok Build TUI | Unsupported | `~/.grok/config.toml` | Requests MCP `2025-11-25` (`initialize`); this server only speaks `2026-07-28` |
 | Generic stdio MCP client | Manual | Client-specific | Must send `server/discover` and support `2026-07-28` |
 
 ## OpenAI Codex
@@ -128,6 +129,10 @@ pi reads `~/.pi/agent/mcp.json`. The installer writes the `mcpServers` entry plu
   }
 }
 ```
+
+## Grok Build TUI (unsupported)
+
+Grok is **not supported** until it speaks MCP protocol revision `2026-07-28`. Current Grok Build TUI sessions request `2025-11-25` and open with `initialize`. This server answers that opening with the SDK unsupported-protocol-version error (`-32022`) and does not fall back. The installer does not write `~/.grok/config.toml`. Do not add a Grok MCP entry until the client negotiates `2026-07-28` via `server/discover`.
 
 ## Generic stdio clients
 
