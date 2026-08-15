@@ -93,7 +93,8 @@ export async function runBinary(
     });
     return { status: "ok", stdout, stderr };
   } catch (error) {
-    const err = error as NodeJS.ErrnoException & {
+    const err = error as {
+      code?: string | number;
       killed?: boolean;
       signal?: string;
       stdout?: string;
@@ -103,8 +104,11 @@ export async function runBinary(
     if (err.killed || err.signal === "SIGKILL" || err.signal === "SIGTERM" || err.code === "ETIMEDOUT") {
       return { status: "timeout", binary };
     }
-    // semgrep/gitleaks exit 1 when they find issues; stdout is still a completed report.
-    if (typeof err.stdout === "string") {
+    // semgrep/gitleaks exit 1 when they find issues; stdout is still a completed
+    // report. Any other exit code is a hard failure even if stdout carries JSON
+    // (e.g. semgrep config/fatal errors print an errors document), so it must
+    // surface as status "error" rather than a false clean.
+    if (err.code === 1 && typeof err.stdout === "string") {
       return { status: "ok", stdout: err.stdout, stderr: typeof err.stderr === "string" ? err.stderr : "" };
     }
     return {

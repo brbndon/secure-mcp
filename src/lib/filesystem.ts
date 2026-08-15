@@ -1285,7 +1285,8 @@ export async function profileProject(
   });
   const hasSwiftFiles = files.some((f) => f.ext === ".swift") || hasPackageSwift || hasXcodeProject;
   const hasTypeScriptFiles =
-    files.some((f) => f.ext === ".ts" || f.ext === ".tsx") || hasTsConfig;
+    files.some((f) => f.ext === ".ts" || f.ext === ".tsx" || f.ext === ".js" || f.ext === ".jsx") ||
+    hasTsConfig;
 
   let dependencyNames: string[] = [];
   if (hasPackageJson) {

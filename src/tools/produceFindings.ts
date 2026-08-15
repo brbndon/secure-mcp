@@ -175,7 +175,12 @@ interface SarifLog {
       }>;
       properties: Record<string, string | number | undefined>;
     }>;
-    properties: { secure_mcp_report_title: string; secure_mcp_project_root?: string };
+    properties: {
+      secure_mcp_report_title: string;
+      secure_mcp_project_root?: string;
+      /** Present when findings were dropped to fit the response budget. */
+      secure_mcp_truncated?: "true";
+    };
   }>;
 }
 
@@ -274,6 +279,44 @@ export function buildSarifLog(
   };
 }
 
+/**
+ * Fit a SARIF export under the response budget while keeping it parseable.
+ *
+ * The exported findings are already priority-ordered (open work first, then
+ * severity/confidence), so the largest head-prefix that fits is the best
+ * lossy export. Rules are derived from the retained results, so no dangling
+ * ruleIndex remains — unlike generic array-halving, which cannot shrink the
+ * nested results or keep the document valid. When findings were dropped, the
+ * run is stamped `secure_mcp_truncated: "true"` so consumers know the export
+ * is partial instead of reading a clean scan.
+ */
+export function buildSarifWithinBudget(
+  findings: readonly ExportedFinding[],
+  title: string,
+  projectRoot: string | undefined,
+  budget: number,
+): { log: SarifLog; truncated: boolean } {
+  let low = 0;
+  let high = findings.length;
+  let best: SarifLog | null = null;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const log = buildSarifLog(findings.slice(0, mid), title, projectRoot);
+    if (JSON.stringify(log).length <= budget) {
+      best = log;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const log = best ?? buildSarifLog([], title, projectRoot);
+  const truncated = log.runs[0].results.length < findings.length;
+  if (truncated) {
+    log.runs[0].properties.secure_mcp_truncated = "true";
+  }
+  return { log, truncated };
+}
+
 /** Exported for tests: markdown includes additive proof/traceability fields. */
 export function findingsToMarkdown(
   title: string,
@@ -297,7 +340,7 @@ export function findingsToMarkdown(
   });
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format (json | markdown | sarif).\nReturns: findings[] (each with a derived validation_status: static_only | needs_runtime), executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk), validation_counts.\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.\n\nValidation: a finding is needs_runtime when it is an unconfirmed candidate or carries an unresolved proof_gap/counterevidence that only runtime or configuration observation can close; static_only otherwise. needs_runtime is a handoff signal to schedule owner-authorized retest, never an exploit step.\n\nSARIF: response_format: "sarif" returns a redacted SARIF 2.1.0 subset (severity→level, rule ids, file/line locations, remediation help text) for CI annotation adjacency.`;
+const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format (json | markdown | sarif).\nReturns: findings[] (each with a derived validation_status: static_only | needs_runtime), executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk), validation_counts.\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.\n\nValidation: a finding is needs_runtime when it is an unconfirmed candidate or carries an unresolved proof_gap/counterevidence that only runtime or configuration observation can close; static_only otherwise. needs_runtime is a handoff signal to schedule owner-authorized retest, never an exploit step.\n\nSARIF: response_format: "sarif" returns a redacted SARIF 2.1.0 subset (severity→level, rule ids, file/line locations, remediation help text) for CI annotation adjacency. If the export would exceed the response budget, the lowest-priority findings are dropped first and the run is marked secure_mcp_truncated: "true" so the document stays valid SARIF.`;
 
 export function registerProduceFindings(server: McpServer): void {
   server.registerTool(
@@ -448,9 +491,10 @@ export function registerProduceFindings(server: McpServer): void {
           // Build from already-redacted findings/title/root, then run the whole
           // document through the structural redaction policy once more so no
           // rule id, tag, or property can carry a secret into the export.
-          const sarifLog = redactValue(buildSarifLog(exported, title, projectRoot)) as SarifLog;
           const noticePrefix = `${UNTRUSTED_OUTPUT_NOTICE}\n\n`;
           const contentBudget = Math.max(1, CHARACTER_LIMIT - noticePrefix.length);
+          const fitted = buildSarifWithinBudget(exported, title, projectRoot, contentBudget);
+          const sarifLog = redactValue(fitted.log) as SarifLog;
           const bounded = boundStructuredPayload(sarifLog, contentBudget);
           let body = JSON.stringify(bounded.data, null, 2);
           if (body.length > contentBudget) body = JSON.stringify(bounded.data);

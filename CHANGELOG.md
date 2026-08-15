@@ -8,11 +8,12 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 
 - `secure_mcp_list_projects` now returns an absolute `project_root` alongside the parent-relative `path`, so discovered packages can be passed to other tools without resolving against the MCP process cwd.
 - Relocated the eval-harness notes into the public docs tree and removed local planning, vendored `mcp-builder`, unused icon/screenshot variants, and unused logos.
-- Inventory now reports `hasExpo` and `hasMacOS`. Next.js is claimed only from `next.config.*` or a `next` dependency; a `package.json` or top-level `app/`/`pages/` directory is no longer enough.
+- Inventory now reports `hasExpo` and `hasMacOS`. Next.js is claimed only from `next.config.*` or a `next` dependency; a `package.json` or top-level `app/`/`pages/` directory is no longer enough. The TypeScript/JS stack is claimed from `.ts`/`.tsx`/`.js`/`.jsx` files or a tsconfig — a `package.json` alone is not enough, but a plain-JS service still routes to the TS/JS packs.
+- `secure_mcp_produce_findings` SARIF exports that exceed the response budget now drop the lowest-priority findings first and mark the run `secure_mcp_truncated: "true"`, so the document stays valid SARIF instead of collapsing to a generic envelope.
 
 ### Fixed
 
-- `secure_mcp_run_local_scanners` now treats scanner exit code 1 with JSON stdout as a completed report (semgrep/gitleaks exit 1 when they find issues). Findings are no longer discarded as a scanner error.
+- `secure_mcp_run_local_scanners` now treats scanner exit code 1 with JSON stdout as a completed report (semgrep/gitleaks exit 1 when they find issues). Findings are no longer discarded as a scanner error. Any other non-zero exit (e.g. a config/fatal error that also prints JSON) still surfaces as a scanner error — never as a clean scan.
 
 ### Added
 
