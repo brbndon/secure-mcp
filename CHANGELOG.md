@@ -2,7 +2,7 @@
 
 Notable changes to secure-mcp are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
-## 2.0.0 — 2026-08-12
+## 2.0.0 — 2026-08-14
 
 ### Changed
 
@@ -23,6 +23,9 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 
 - Removed claims that legacy SDK v1 clients continue to work and stale `1.0.0` server identity outside the historical changelog.
 - Replaced shell-only cleanup in package scripts with cross-platform Node cleanup.
+- Accepted explicit `null` values in pre-existing client JSON configs (`.pi/agent/mcp.json`, `.cursor/mcp.json`) during PowerShell install, check, and uninstall; the mandatory-parameter binding previously rejected null fields and aborted every action. Single-element arrays and nested entries are preserved byte-for-byte through the round-trip.
+- Surfaced malformed `semgrep`/`gitleaks` output as a scanner `error` status with an explanatory note instead of a false `completed` with zero findings, so a misbehaving local scanner can never read as a clean scan.
+- Documented the default-off `SECURE_MCP_LOCAL_SCANNERS` environment gate in `.env.example` alongside the required allowlist variable.
 
 ## 1.0.0 — 2026-08-09
 
