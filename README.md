@@ -306,10 +306,12 @@ The server clamps configurable values to fixed hard limits.
 - [Architecture](docs/docs/architecture.md)
 - [Tool design](docs/docs/tool-design.md)
 - [Agent workflow](docs/docs/agent-workflow.md)
+- [Eval harness](docs/docs/eval-harness.md)
 - [Security auditor skill](skills/security-auditor.md)
 - [Development guide](skills/development.md)
 - [Sample audit session](examples/sample-audit-session.md)
 - [Contributing guide](CONTRIBUTING.md)
+- [Agent contributor instructions](AGENTS.md)
 - [Changelog](CHANGELOG.md)
 - [Release process](RELEASING.md)
 

@@ -27,15 +27,18 @@ the live MCP tool inventory and input schemas win over any committed doc.
 ## Sequence at a glance
 
 ```text
-Phase 1  list_project_structure          → inventory artifact (no packs yet)
-Phase 2  analyze_architecture            → stacks + typed surfaces/gaps + recommended_packs + pack_batches
-         get_knowledge_pack              → pack_batches[0] first (summary); later batches only if needed
-         build_remediation_threat_model  → evidence-backed assets/boundaries + controls (optional)
+Phase 0  list_authorized_roots / list_projects
+                                     → choose an allowlisted absolute project_root
+Phase 1  list_project_structure      → inventory artifact (no packs yet)
+Phase 2  analyze_architecture        → stacks + typed surfaces/gaps + recommended_packs + pack_batches
+         get_knowledge_pack          → pack_batches[0] first (summary); later batches only if needed
+         build_remediation_threat_model → evidence-backed assets/boundaries + controls (optional)
 Phase 3  check_authentication
          analyze_injection_risks
-         review_secrets                  → category candidate artifacts
-Phase 4  Manual / sub-agent data-flow    → confirm candidates, assign dispositions
-Phase 5  produce_findings                → prioritized remediation report
+         review_secrets              → category candidate artifacts
+         run_local_scanners          → optional, default off
+Phase 4  Manual / sub-agent data-flow → confirm candidates, assign dispositions
+Phase 5  produce_findings            → prioritized remediation report
 ```
 
 **Progressive load rule:** do not load knowledge packs until after architecture.

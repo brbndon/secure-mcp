@@ -8,7 +8,7 @@ Guidance for coding agents that modify this repository.
 - TypeScript + official MCP SDK v2 (`@modelcontextprotocol/server`, `@modelcontextprotocol/client`)
 - Open source under Apache-2.0
 - **Defensive secure-code-review framing only** — identify weaknesses, classify, remediate
-- Keep code clear and commented—the owner is learning and multiple agents collaborate
+- Keep comments for non-obvious security or MCP decisions, not basic syntax
 - **Progressive knowledge packs** — thin always-on skill; stack checklists load on demand via `secure_mcp_get_knowledge_pack`
 
 ## Language & safety rules (user-facing surfaces)
@@ -46,7 +46,7 @@ overwrites conflicting non-owned entries or skills.
 | `src/server.ts` | Server factory |
 | `src/tools/` | One tool per file + `index.ts` registration |
 | `src/knowledge/packs/` | Named packs + registry / stack routing |
-| `src/knowledge/common.ts` etc. | Scan patterns + re-exports of pack checklists |
+| `src/knowledge/common.ts` etc. | Scan patterns used by category detectors |
 | `scripts/install-agents.sh` / `install-agents.ps1` | Idempotent install/check/uninstall of the master skill links + MCP client configs (pi, Cursor, Codex) |
 | `agents/codex.toml` | OpenAI Codex agent manifest copied to `~/.codex/agents/secure-mcp.toml` by the install script |
 | `src/lib/filesystem.ts` | Safe FS walk/read/helpers + stack profiling |
@@ -90,7 +90,7 @@ Aim ~10–13 checklist items per pack (a full five-pack recommendation must fit 
 5. Return `toolSuccess` / `toolError` helpers; use `buildFinding` for full schema.
 6. Register in `src/tools/index.ts` and `TOOL_NAMES`.
 7. Add a smoke-test invocation if practical.
-8. Document in README + `docs/tool-design.md`.
+8. Document in README + `docs/docs/tool-design.md`.
 
 ## Adding / editing a pack
 

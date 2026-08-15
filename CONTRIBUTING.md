@@ -40,7 +40,7 @@ Changes must preserve these invariants:
 5. Secret-like and untrusted evidence is redacted or neutralized before return.
 6. Findings distinguish evidence from assumptions and always lead to remediation and verification.
 
-Review [the architecture notes](docs/docs/architecture.md) and [the development guide](skills/development.md) before changing filesystem, redaction, finding-schema, or tool-boundary code.
+Review [AGENTS.md](AGENTS.md), [the architecture notes](docs/docs/architecture.md), and [the development guide](skills/development.md) before changing filesystem, redaction, finding-schema, or tool-boundary code.
 
 ## Making changes
 

@@ -1,6 +1,6 @@
 /**
  * Tests for analyze_architecture unsupported-stack honesty and authz path
- * prioritization (Tier 2 units B1 and B3).
+ * prioritization.
  */
 
 import assert from "node:assert/strict";

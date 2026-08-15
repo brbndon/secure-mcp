@@ -1,10 +1,9 @@
 /**
- * Durable stack-isolation regression suite (plan §6).
+ * Stack-isolation regression suite.
  *
- * These named tests (`iso-*`, `prog-packs`) are the cross-tier guardrails for
- * the "works for RN *and* Next" contract. Tier 2 and Tier 3 must not delete
- * them. They import only the public registry API so a later pack expansion or
- * registry refactor cannot silently widen routing without breaking a test here.
+ * Named tests (`iso-*`, `prog-packs`) guard the "works for RN and Next"
+ * contract. They import only the public registry API so a later pack
+ * expansion or registry refactor cannot silently widen routing.
  *
  * Run: pnpm exec tsx --test src/knowledge/packs/stack-isolation.test.ts
  */
