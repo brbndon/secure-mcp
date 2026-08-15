@@ -15,32 +15,29 @@ secure-mcp is a local, read-only MCP server plus an installable agent workflow f
 - Teams reviewing code they own or are explicitly authorized to assess.
 - Current stack focus: TypeScript/Next.js, Swift/SwiftUI, and Expo/React Native, with cross-cutting authentication, injection, secrets, architecture, and remediation guidance.
 
-## Recommended install: clone, build, install the agent workflow
+## Recommended install: clone, then one setup command
 
-Requirements: Git, Node.js 20 or newer, pnpm 10, Bash and Python 3 for `install-agents.sh` (or PowerShell 7 for `install-agents.ps1` on Windows), and one or more existing absolute directories containing repositories the server may inspect.
+Requirements: Git, Node.js 20 or newer, pnpm 10, Bash and Python 3 for `setup.sh`/`install-agents.sh` (or PowerShell 7 for `setup.ps1`/`install-agents.ps1` on Windows), and one or more existing absolute directories containing repositories the server may inspect.
 
 ```bash
 git clone https://github.com/brbndon/secure-mcp.git
 cd secure-mcp
+./scripts/setup.sh
+```
+
+On Windows, run `.\scripts\setup.ps1`. The bootstrap installs dependencies, builds the server, prompts for `SECURE_MCP_ALLOWED_ROOTS` when it is unset, then wires the skill and MCP server for pi, Cursor, and OpenAI Codex and verifies the result. Equivalent manual steps:
+
+```bash
 pnpm install --frozen-lockfile
 pnpm build
-
 SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories \
   ./scripts/install-agents.sh install
 ./scripts/install-agents.sh check
 ```
 
-Windows:
-
-```powershell
-$env:SECURE_MCP_ALLOWED_ROOTS = "C:\absolute\path\to\repositories"
-.\scripts\install-agents.ps1 install
-.\scripts\install-agents.ps1 check
-```
-
 The installer points clients at this checkout's `dist/index.js`, installs the committed agent workflow, and configures pi, Cursor, and OpenAI Codex. Restart agent sessions after installation. `check` verifies installation; `uninstall` removes only entries owned by secure-mcp.
 
-The npm package `@brdndon/secure-mcp` is secondary and server-only. It does not contain or install `.agents/skills/secure-mcp/SKILL.md` or `scripts/install-agents.sh`. Prefer the checkout path for the complete agent workflow. npm users should target the v2 artifact explicitly after publication, for example `npx -y @brdndon/secure-mcp@2`.
+The npm package `@brdndon/secure-mcp` is a last-resort, server-only fallback. It does not contain or install `.agents/skills/secure-mcp/SKILL.md` or `scripts/install-agents.sh`. Prefer the checkout path for the complete agent workflow. npm users should target the v2 artifact explicitly after publication, for example `npx -y @brdndon/secure-mcp@2`.
 
 ## Filesystem allowlist
 

@@ -1,8 +1,8 @@
 /**
- * Tests for secure_mcp_run_local_scanners (Tier 2 unit B4):
- * default-off behavior, env gate, timeout/allowlist classification, and
- * finding-shape mapping. Scanners are never executed in tests — a mock execFile
- * is injected and real binaries are expected to be absent in CI.
+ * Tests for secure_mcp_run_local_scanners: default-off behavior, env gate,
+ * timeout/allowlist classification, and finding-shape mapping. Scanners are
+ * never executed in tests — a mock execFile is injected and real binaries are
+ * expected to be absent in CI.
  */
 
 import assert from "node:assert/strict";
@@ -65,6 +65,25 @@ describe("runBinary", () => {
     const result = await runBinary(execFile, "gitleaks", ["detect"], "/tmp", 1000);
     assert.equal(result.status, "ok");
     if (result.status === "ok") assert.equal(result.stdout, "{}");
+  });
+
+  it("treats non-zero exit with stdout as a completed report", async () => {
+    const execFile: ExecFileFn = async () => {
+      const err = new Error("Command failed: semgrep") as NodeJS.ErrnoException & {
+        code?: number;
+        stdout?: string;
+        stderr?: string;
+      };
+      err.code = 1;
+      err.stdout = JSON.stringify({ results: [{ check_id: "rule.one" }] });
+      err.stderr = "";
+      throw err;
+    };
+    const result = await runBinary(execFile, "semgrep", ["scan"], "/tmp", 1000);
+    assert.equal(result.status, "ok");
+    if (result.status === "ok") {
+      assert.match(result.stdout, /rule\.one/);
+    }
   });
 });
 

@@ -7,7 +7,7 @@
  * surfaces as a candidate; a precision smoke asserts that a clean or
  * differently-stacked fixture does not spam cross-stack or false positives.
  *
- * Interpretation (see docs/plans/eval-harness.md):
+ * Interpretation (see docs/docs/eval-harness.md):
  * - `required_rule_families` / `required_categories` must all be observed in
  *   at least one candidate finding across the category tools for the fixture.
  *   A miss is a recall regression (a known weakness stopped surfacing).

@@ -2,11 +2,9 @@
  * Stack-agnostic secure-coding knowledge for defensive code review.
  *
  * Checklist items live in knowledge packs (`packs/core`, `packs/secrets`, …).
- * This module keeps scanning patterns and re-exports for backwards compatibility.
+ * This module keeps scanning patterns used by category detectors.
  */
 
-import { corePack } from "./packs/core.js";
-import type { PackItem } from "./packs/types.js";
 import {
   AWS_ACCESS_KEY_ID_SHAPE,
   GITHUB_TOKEN_SHAPE,
@@ -14,12 +12,6 @@ import {
   SLACK_TOKEN_SHAPE,
   STRIPE_SECRET_KEY_SHAPE,
 } from "../lib/secret-tokens.js";
-
-/** @deprecated Prefer PackItem from packs/types — kept for existing imports. */
-export type ChecklistItem = PackItem;
-
-/** Cross-cutting security checklist (from core pack). */
-export const COMMON_CHECKLIST: PackItem[] = corePack.items;
 
 /** Patterns that often indicate secret material (heuristic; expect false positives). */
 export const SECRET_PATTERNS: {
@@ -140,9 +132,3 @@ export const INJECTION_PATTERNS: {
       "Path confusion can expose or overwrite files outside the intended directory.",
   },
 ];
-
-export function commonChecklistForCategories(categories?: string[]): PackItem[] {
-  if (!categories || categories.length === 0) return COMMON_CHECKLIST;
-  const set = new Set(categories.map((c) => c.toLowerCase()));
-  return COMMON_CHECKLIST.filter((item) => set.has(item.category.toLowerCase()));
-}

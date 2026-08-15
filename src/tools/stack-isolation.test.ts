@@ -1,8 +1,7 @@
 /**
- * Durable stack-isolation tests that exercise the tool/architecture surface
- * layer (plan §6). These named tests (`iso-*`, `redact-envelope`,
- * `skill-pointer`) are cross-tier guardrails: Tier 2 and Tier 3 must not
- * delete them.
+ * Stack-isolation tests for the tool and architecture surface.
+ * Named tests (`iso-*`, `redact-envelope`, `skill-pointer`) guard
+ * stack routing, redaction, and the thin security-auditor pointer.
  *
  * Run: pnpm exec tsx --test src/tools/stack-isolation.test.ts
  */

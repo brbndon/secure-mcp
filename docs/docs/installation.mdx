@@ -19,46 +19,29 @@ sidebar:
 - One or more existing absolute directories containing repositories you may review
 - An MCP client that supports protocol revision `2026-07-28`
 
-## Clone and build
+## Clone, build, and install in one command
+
+The checkout is the primary distribution channel: it contains the server, installer, master agent skill, fixtures, source, and documentation. The one-command bootstrap installs dependencies, builds the server, prompts for the filesystem allowlist when it is unset, then wires the skill and MCP server into pi, Cursor, and OpenAI Codex and verifies the result:
 
 ```bash
 git clone https://github.com/brbndon/secure-mcp.git
 cd secure-mcp
+./scripts/setup.sh
+```
+
+On Windows, run `.\scripts\setup.ps1` in PowerShell. To skip the prompt, pass the allowlist explicitly: `SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories ./scripts/setup.sh`.
+
+### What the bootstrap runs (the manual path)
+
+```bash
 pnpm install --frozen-lockfile
 pnpm build
-```
-
-The checkout contains the server, installer, master agent skill, fixtures, source, and documentation. The compiled stdio entrypoint is `dist/index.js`.
-
-## Authorize repository roots
-
-Filesystem tools fail closed unless `SECURE_MCP_ALLOWED_ROOTS` names one or more roots that may contain a requested `project_root`:
-
-```bash
 export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
-```
-
-Use `:` between multiple roots on macOS/Linux and `;` on Windows. Keep the scope as narrow as practical; canonical-path and symlink checks still apply within each authorized root.
-
-## Install the server and agent workflow
-
-The recommended installer wires this checkout's server and committed skill into pi, Cursor, and OpenAI Codex:
-
-```bash
-SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories \
-  ./scripts/install-agents.sh install
+./scripts/install-agents.sh install
 ./scripts/install-agents.sh check
 ```
 
-The installer records the allowlist in each client configuration, points clients at this checkout's `dist/index.js`, and modifies only the secure-mcp entries it owns. Restart agent sessions after installation so they reload the MCP configuration and skill. Re-run the installer when the authorized roots change.
-
-Windows users use the equivalent PowerShell installer:
-
-```powershell
-$env:SECURE_MCP_ALLOWED_ROOTS = "C:\absolute\path\to\repositories"
-.\scripts\install-agents.ps1 install
-.\scripts\install-agents.ps1 check
-```
+Filesystem tools fail closed unless `SECURE_MCP_ALLOWED_ROOTS` names one or more roots that may contain a requested `project_root`. Use `:` between multiple roots on macOS/Linux and `;` on Windows. Keep the scope as narrow as practical; canonical-path and symlink checks still apply within each authorized root.
 
 `check` verifies installation; `uninstall` removes only entries owned by secure-mcp.
 

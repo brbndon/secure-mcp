@@ -1,7 +1,13 @@
-# Eval harness (offline fixture recall + precision)
+---
+title: Eval harness
+description: Offline fixture recall and precision checks that keep stack isolation and planted-weakness detectors honest.
+sidebar:
+  label: Eval harness
+  order: 10
+---
 
-`scripts/eval-audit.test.ts` is a local, offline smoke harness that drives the
-real secure-mcp server in-memory against the committed fixtures and checks two
+`scripts/eval-audit.test.ts` is an offline smoke harness. It drives the real
+secure-mcp server in memory against the committed fixtures and checks two
 properties that keep the product honest:
 
 - **Recall floor** — a planted weakness in a fixture must surface as a candidate
@@ -16,8 +22,9 @@ properties that keep the product honest:
 pnpm exec tsx --test scripts/eval-audit.test.ts
 ```
 
-No network and no spawned process are required; the harness uses an in-memory
-MCP transport with `SECURE_MCP_ALLOWED_ROOTS` scoped to `fixtures/`.
+The full `pnpm test` suite includes this harness. No network and no spawned
+process are required; it uses an in-memory MCP transport with
+`SECURE_MCP_ALLOWED_ROOTS` scoped to `fixtures/`.
 
 ## The label contract
 
@@ -29,8 +36,8 @@ fixture declares:
 | `stacks_include` | Detected stack labels that must be present |
 | `required_rule_families` | Detector families that must appear (recall floor) |
 | `required_categories` | Finding categories that must appear (recall floor) |
-| `forbidden_rule_families` | Detector families that must NOT appear |
-| `forbidden_packs` | Recommended pack ids that must NOT appear |
+| `forbidden_rule_families` | Detector families that must not appear |
+| `forbidden_packs` | Recommended pack ids that must not appear |
 | `clean_files` | Fixture-relative paths that must not be cited |
 | `expect_zero_findings` | The fixture must produce no candidates at all |
 
@@ -45,6 +52,6 @@ fixture declares:
   Swift families may legitimately appear. Its forbidden set only excludes the
   Expo detector families and the `expo-rn` pack.
 
-These are smoke numbers, not a benchmark badge. Do not put recall/precision
+These are smoke numbers, not a benchmark badge. Do not put recall or precision
 figures into README marketing until the harness runs on real repositories and
 the numbers are reproducible across stacks.

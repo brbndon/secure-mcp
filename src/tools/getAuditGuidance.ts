@@ -45,6 +45,8 @@ evidence → classification → impact_if_unremediated → remediation → resid
 Call secure_mcp_get_audit_guidance with other sections for details. Prefer multi-phase: list → architecture → packs → category tools → produce_findings.`,
 
   workflow: `MANDATORY MULTI-PHASE AGENT WORKFLOW (defensive only)
+Phase 0: Confirm live secure_mcp_* tools and that project_root is under the allowlist.
+         If the root is unknown: secure_mcp_list_authorized_roots, then secure_mcp_list_projects (use each project's absolute project_root).
 Phase 1: secure_mcp_list_project_structure (inventory)
 Phase 2: secure_mcp_analyze_architecture (stacks, typed surfaces, coverage_gaps, priority_paths, security_brief, threat_highlights, recommended_packs, pack_batches, trust boundaries)
          secure_mcp_get_knowledge_pack (start with pack_batches[0], detail=summary; max 6 ids/call; fair sample)
@@ -53,6 +55,7 @@ Phase 3: secure_mcp_check_authentication
          secure_mcp_analyze_injection_risks
          secure_mcp_review_secrets   (parallel ok)
          then sample zero-hit high-value surfaces from architecture priority_paths/coverage_gaps
+         (optional) secure_mcp_run_local_scanners only when enable=true AND SECURE_MCP_LOCAL_SCANNERS=1
 Phase 4: Open files for evidence, trace data flows (read-only); disposition = reportable|needs_review|suppressed|accepted_risk|not_applicable|deferred|fixed with reason/evidence.
 Phase 5: secure_mcp_produce_findings (reportable + deferred are open work; needs_review follows; fixed/suppressed/accepted_risk/not_applicable are ledger-only and excluded from open risk/remediation_priority)
 Phase 6: Human narrative from the report.

@@ -10,7 +10,7 @@
  * Run:
  *   pnpm exec tsx --test scripts/eval-audit.test.ts
  *
- * Interpreting failures: see docs/plans/eval-harness.md. A recall miss means a
+ * Interpreting failures: see docs/docs/eval-harness.md. A recall miss means a
  * detector stopped surfacing a planted weakness; a precision hit means a
  * stack-isolation or false-positive regression.
  */

@@ -2,6 +2,22 @@
 
 Notable changes to secure-mcp are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- `secure_mcp_list_projects` now returns an absolute `project_root` alongside the parent-relative `path`, so discovered packages can be passed to other tools without resolving against the MCP process cwd.
+- Relocated the eval-harness notes into the public docs tree and removed local planning, vendored `mcp-builder`, unused icon/screenshot variants, and unused logos.
+- Inventory now reports `hasExpo` and `hasMacOS`. Next.js is claimed only from `next.config.*` or a `next` dependency; a `package.json` or top-level `app/`/`pages/` directory is no longer enough.
+
+### Fixed
+
+- `secure_mcp_run_local_scanners` now treats scanner exit code 1 with JSON stdout as a completed report (semgrep/gitleaks exit 1 when they find issues). Findings are no longer discarded as a scanner error.
+
+### Added
+
+- Apache `NOTICE` identifying the project authors; included in the published npm tarball.
+
 ## 2.0.0 — 2026-08-14
 
 ### Changed
@@ -12,6 +28,7 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 - Documented npm as a server-only fallback that targets `@brdndon/secure-mcp@2` explicitly and intentionally excludes the skill, installer, fixtures, and source.
 - Hardened `scripts/install-agents.sh` with an ownership marker, refusal to overwrite conflicting non-owned entries or skills, and verified temp-home install/check/uninstall behavior.
 - Added `scripts/install-agents.ps1`, a Windows installer with equivalent ownership and safety behavior, plus cross-platform installer integration coverage.
+- Added a one-command bootstrap — `scripts/setup.sh` and `scripts/setup.ps1` — that installs dependencies, builds the server, prompts for the filesystem allowlist when unset, then wires the skill and MCP server for pi, Cursor, and Codex and verifies the result. The checkout path is the primary distribution channel; npm is a server-only last resort.
 - Added a nonpublishing npm tarball E2E test that installs the packed artifact in a temporary consumer directory, checks the `secure-mcp` bin, and connects with the MCP v2 client pinned to `2026-07-28`.
 - Added a documented client compatibility and configuration matrix for Codex, Cursor, Claude Desktop, Claude Code, VS Code / GitHub Copilot, pi, and generic stdio clients. The server does not claim compatibility with clients that have not adopted `2026-07-28`.
 - Added MCP Registry metadata (`server.json` with `io.github.brbndon/secure-mcp`, matching `mcpName` in `package.json`) and deterministic consistency validation in the test and release gates.

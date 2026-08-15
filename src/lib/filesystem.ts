@@ -1184,11 +1184,6 @@ async function inspectTopLevel(
   }
 }
 
-/** List top-level directory names/files for architecture overview. */
-export async function listTopLevel(projectRoot: string): Promise<string[]> {
-  return (await inspectTopLevel(projectRoot, 1_000)).entries;
-}
-
 /** Signals used to decide whether a project really is an Expo / React Native app. */
 export interface ExpoSignalInput {
   /** Merged dependency + devDependency names from package.json. */
@@ -1290,7 +1285,7 @@ export async function profileProject(
   });
   const hasSwiftFiles = files.some((f) => f.ext === ".swift") || hasPackageSwift || hasXcodeProject;
   const hasTypeScriptFiles =
-    files.some((f) => f.ext === ".ts" || f.ext === ".tsx") || hasTsConfig || hasPackageJson;
+    files.some((f) => f.ext === ".ts" || f.ext === ".tsx") || hasTsConfig;
 
   let dependencyNames: string[] = [];
   if (hasPackageJson) {
@@ -1390,13 +1385,9 @@ export async function profileProject(
 
   const likelyStacks: StackFocus[] = ["common"];
   if (hasTypeScriptFiles) likelyStacks.push("typescript");
-  // Prefer explicit Next config; avoid labeling pure Expo app/ as nextjs
-  if (hasNextConfig) {
-    likelyStacks.push("nextjs");
-  } else if (
-    !hasExpo &&
-    (topLevel.hasAppDirectory || topLevel.hasPagesDirectory)
-  ) {
+  // Next.js only from explicit config or a `next` dependency — a top-level
+  // app/ or pages/ directory is not enough (Rails, Expo, generic Node).
+  if (hasNextConfig || dependencyNames.includes("next")) {
     likelyStacks.push("nextjs");
   }
   if (hasExpo) likelyStacks.push("expo");
