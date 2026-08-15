@@ -97,7 +97,7 @@ function ConvertTo-Hashtable {
   if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
     $items = @()
     foreach ($item in $InputObject) { $items += ConvertTo-Hashtable $item }
-    return $items
+    return ,$items
   }
   return $InputObject
 }
