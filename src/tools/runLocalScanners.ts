@@ -118,16 +118,20 @@ function severityFromSemgrep(value: string | undefined): Severity {
   }
 }
 
-/** Map semgrep --json output to a bounded subset of candidate findings. */
-export function parseSemgrepJson(stdout: string): MappedFinding[] {
+/**
+ * Map semgrep --json output to a bounded subset of candidate findings.
+ * Returns null when the output is not JSON or not the expected shape, so a
+ * misbehaving scanner is surfaced as an error instead of a false clean.
+ */
+export function parseSemgrepJson(stdout: string): MappedFinding[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
-    return [];
+    return null;
   }
   const results = (parsed as { results?: unknown[] })?.results;
-  if (!Array.isArray(results)) return [];
+  if (!Array.isArray(results)) return null;
   const out: MappedFinding[] = [];
   for (const raw of results.slice(0, 200)) {
     const r = raw as {
@@ -151,15 +155,19 @@ export function parseSemgrepJson(stdout: string): MappedFinding[] {
   return out;
 }
 
-/** Map gitleaks JSON output to candidate findings (secret content never included). */
-export function parseGitleaksJson(stdout: string): MappedFinding[] {
+/**
+ * Map gitleaks JSON output to candidate findings (secret content never included).
+ * Returns null when the output is not JSON or not an array, so a misbehaving
+ * scanner is surfaced as an error instead of a false clean.
+ */
+export function parseGitleaksJson(stdout: string): MappedFinding[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
-    return [];
+    return null;
   }
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) return null;
   const out: MappedFinding[] = [];
   for (const raw of parsed.slice(0, 200)) {
     const r = raw as {
@@ -255,6 +263,7 @@ function scannerFinding(factory: () => string, scannerId: ScannerId, mapped: Map
 export function registerRunLocalScanners(
   server: McpServer,
   config: ServerConfig = loadConfig(),
+  execFile: ExecFileFn = defaultExecFile,
 ): void {
   server.registerTool(
     "secure_mcp_run_local_scanners",
@@ -341,7 +350,7 @@ Returns:
             note: "No local semgrep config found; set allow_remote_rules=true to fetch rules (offline-safe default is to skip).",
           });
         } else {
-          const run = await runBinary(defaultExecFile, "semgrep", semgrepArgs, root, timeoutMs);
+          const run = await runBinary(execFile, "semgrep", semgrepArgs, root, timeoutMs);
           if (run.status === "missing") {
             scanners.push({ id: "semgrep", status: "missing", findings: 0 });
           } else if (run.status === "timeout") {
@@ -350,15 +359,24 @@ Returns:
             scanners.push({ id: "semgrep", status: "error", findings: 0, note: run.message });
           } else {
             const mapped = parseSemgrepJson(run.stdout);
-            const idFactory = createFindingIdFactory("SEMGREP");
-            for (const m of mapped) findings.push(scannerFinding(idFactory, "semgrep", m));
-            scanners.push({ id: "semgrep", status: "completed", findings: mapped.length });
+            if (mapped === null) {
+              scanners.push({
+                id: "semgrep",
+                status: "error",
+                findings: 0,
+                note: "semgrep output was not valid JSON; treating the run as failed rather than clean.",
+              });
+            } else {
+              const idFactory = createFindingIdFactory("SEMGREP");
+              for (const m of mapped) findings.push(scannerFinding(idFactory, "semgrep", m));
+              scanners.push({ id: "semgrep", status: "completed", findings: mapped.length });
+            }
           }
         }
 
         // gitleaks — always offline (local repo scan only).
         const gitleaksRun = await runBinary(
-          execFileAsync,
+          execFile,
           "gitleaks",
           ["detect", "--no-git", "--no-banner", "--report-format=json"],
           root,
@@ -372,9 +390,18 @@ Returns:
           scanners.push({ id: "gitleaks", status: "error", findings: 0, note: gitleaksRun.message });
         } else {
           const mapped = parseGitleaksJson(gitleaksRun.stdout);
-          const idFactory = createFindingIdFactory("GITLEAKS");
-          for (const m of mapped) findings.push(scannerFinding(idFactory, "gitleaks", m));
-          scanners.push({ id: "gitleaks", status: "completed", findings: mapped.length });
+          if (mapped === null) {
+            scanners.push({
+              id: "gitleaks",
+              status: "error",
+              findings: 0,
+              note: "gitleaks output was not valid JSON; treating the run as failed rather than clean.",
+            });
+          } else {
+            const idFactory = createFindingIdFactory("GITLEAKS");
+            for (const m of mapped) findings.push(scannerFinding(idFactory, "gitleaks", m));
+            scanners.push({ id: "gitleaks", status: "completed", findings: mapped.length });
+          }
         }
 
         const data = {
