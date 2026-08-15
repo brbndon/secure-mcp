@@ -319,8 +319,10 @@ test("installed server starts and negotiates strict MCP v2", { timeout: 60_000 }
   }
 });
 
-test("setup.sh bootstraps a fresh home end-to-end", { timeout: 300_000, skip: isWindows }, () => {
-  // setup.sh is Unix-only by contract; Windows uses setup.ps1 (next test).
+test("setup.sh bootstraps a fresh home end-to-end", {
+  timeout: 300_000,
+  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks, and Windows uses setup.ps1 instead" : false,
+}, () => {
   ensureBuilt();
   const tempDirs: string[] = [];
   try {
@@ -344,8 +346,10 @@ test("setup.sh bootstraps a fresh home end-to-end", { timeout: 300_000, skip: is
   }
 });
 
-test("setup.ps1 bootstraps a fresh home end-to-end", { timeout: 300_000, skip: !hasPwsh }, () => {
-  if (!hasPwsh) return;
+test("setup.ps1 bootstraps a fresh home end-to-end", {
+  timeout: 300_000,
+  skip: !hasPwsh ? "PowerShell 7 (pwsh) is not installed" : false,
+}, () => {
   ensureBuilt();
   const tempDirs: string[] = [];
   try {
@@ -369,8 +373,118 @@ test("setup.ps1 bootstraps a fresh home end-to-end", { timeout: 300_000, skip: !
   }
 });
 
-test("PowerShell installer parity", { timeout: 120_000, skip: isWindows ? false : !hasPwsh }, async () => {
-  if (!hasPwsh) return;
+test("setup.sh prompts for the allowlist when unset and records piped input", {
+  timeout: 300_000,
+  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks, and Windows uses setup.ps1 instead" : false,
+}, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    const home = tempHome("setup-prompt");
+    const roots = tempHome("roots-setup-prompt");
+    tempDirs.push(home, roots);
+    const result = spawnSync("bash", ["scripts/setup.sh"], {
+      cwd: root,
+      input: `${roots}\n`,
+      env: {
+        ...process.env,
+        SECURE_MCP_INSTALL_HOME: home,
+      },
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    expectInstalled(home, roots);
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("setup.sh fails closed on empty or whitespace-only prompt input", {
+  timeout: 300_000,
+  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks, and Windows uses setup.ps1 instead" : false,
+}, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const input of ["\n", "   \n"]) {
+      const home = tempHome("setup-prompt-reject");
+      tempDirs.push(home);
+      const result = spawnSync("bash", ["scripts/setup.sh"], {
+        cwd: root,
+        input,
+        env: {
+          ...process.env,
+          SECURE_MCP_INSTALL_HOME: home,
+        },
+        encoding: "utf8",
+        maxBuffer: 20 * 1024 * 1024,
+      });
+      assert.notEqual(result.status, 0, `expected non-zero exit for prompt input ${JSON.stringify(input)}: ${result.stderr}`);
+    }
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("setup.ps1 prompts for the allowlist when unset and records piped input", {
+  timeout: 300_000,
+  skip: !hasPwsh ? "PowerShell 7 (pwsh) is not installed" : false,
+}, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    const home = tempHome("setup-pwsh-prompt");
+    const roots = tempHome("roots-setup-pwsh-prompt");
+    tempDirs.push(home, roots);
+    const result = spawnSync("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/setup.ps1"], {
+      cwd: root,
+      input: `${roots}\r\n`,
+      env: {
+        ...process.env,
+        SECURE_MCP_INSTALL_HOME: home,
+      },
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    expectInstalled(home, roots);
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("setup.ps1 fails closed on empty or whitespace-only prompt input", {
+  timeout: 300_000,
+  skip: !hasPwsh ? "PowerShell 7 (pwsh) is not installed" : false,
+}, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const input of ["\r\n", "   \r\n"]) {
+      const home = tempHome("setup-pwsh-prompt-reject");
+      tempDirs.push(home);
+      const result = spawnSync("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/setup.ps1"], {
+        cwd: root,
+        input,
+        env: {
+          ...process.env,
+          SECURE_MCP_INSTALL_HOME: home,
+        },
+        encoding: "utf8",
+        maxBuffer: 20 * 1024 * 1024,
+      });
+      assert.notEqual(result.status, 0, `expected non-zero exit for prompt input ${JSON.stringify(input)}: ${result.stderr}`);
+    }
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PowerShell installer parity", {
+  timeout: 120_000,
+  skip: !hasPwsh ? "PowerShell 7 (pwsh) is not installed" : false,
+}, async () => {
   ensureBuilt();
   const tempDirs: string[] = [];
   try {

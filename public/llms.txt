@@ -25,7 +25,7 @@ cd secure-mcp
 ./scripts/setup.sh
 ```
 
-On Windows, run `.\scripts\setup.ps1`. The bootstrap installs dependencies, builds the server, prompts for `SECURE_MCP_ALLOWED_ROOTS` the first time, then wires the skill and MCP server for pi, Cursor, and OpenAI Codex and verifies the result. Equivalent manual steps:
+On Windows, run `.\scripts\setup.ps1`. The bootstrap installs dependencies, builds the server, prompts for `SECURE_MCP_ALLOWED_ROOTS` when it is unset, then wires the skill and MCP server for pi, Cursor, and OpenAI Codex and verifies the result. Equivalent manual steps:
 
 ```bash
 pnpm install --frozen-lockfile

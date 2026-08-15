@@ -77,9 +77,9 @@ cd secure-mcp
 ./scripts/setup.sh
 ```
 
-`setup.sh` does everything for you: installs dependencies, builds the server, prompts for the filesystem allowlist (`SECURE_MCP_ALLOWED_ROOTS`) the first time, then installs the skill and MCP server wiring for pi, Cursor, and OpenAI Codex and verifies the result. On Windows, use the equivalent `.\scripts\setup.ps1` in PowerShell.
+`setup.sh` does everything for you: installs dependencies, builds the server, prompts for the filesystem allowlist (`SECURE_MCP_ALLOWED_ROOTS`) when it is unset, then installs the skill and MCP server wiring for pi, Cursor, and OpenAI Codex and verifies the result. On Windows, use the equivalent `.\scripts\setup.ps1` in PowerShell.
 
-The allowlist is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Keep it narrow — one checkout is better than your entire home directory. To skip the prompt, pass it explicitly:
+The allowlist is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Keep it narrow — one checkout is better than your entire home directory. To skip the prompt, pass it explicitly, or export it in your shell profile so future runs stay non-interactive:
 
 ```bash
 SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories ./scripts/setup.sh

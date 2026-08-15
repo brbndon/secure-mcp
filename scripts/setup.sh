@@ -30,12 +30,13 @@ log "installing dependencies (pnpm install --frozen-lockfile)"
 log "building the server (pnpm build)"
 (cd "$ROOT" && pnpm build)
 
-if [ -z "${SECURE_MCP_ALLOWED_ROOTS:-}" ]; then
+if [[ ! "${SECURE_MCP_ALLOWED_ROOTS:-}" =~ [^[:space:]] ]]; then
   printf '%s\n' \
     "secure-mcp needs an explicit allowlist: absolute path(s) to the" \
     "repository directories the server may inspect. Separate multiple paths" \
     "with ':' on macOS/Linux. Keep the allowlist narrow."
-  read -r -p "[setup] allowlisted roots: " SECURE_MCP_ALLOWED_ROOTS
+  read -r -p "[setup] allowlisted roots: " SECURE_MCP_ALLOWED_ROOTS \
+    || die "an allowlist is required (SECURE_MCP_ALLOWED_ROOTS)"
   if [ -z "$SECURE_MCP_ALLOWED_ROOTS" ]; then
     die "an allowlist is required (SECURE_MCP_ALLOWED_ROOTS)"
   fi

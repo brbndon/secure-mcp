@@ -21,7 +21,7 @@ sidebar:
 
 ## Clone, build, and install in one command
 
-The checkout is the primary distribution channel: it contains the server, installer, master agent skill, fixtures, source, and documentation. The one-command bootstrap installs dependencies, builds the server, prompts for the filesystem allowlist the first time, then wires the skill and MCP server into pi, Cursor, and OpenAI Codex and verifies the result:
+The checkout is the primary distribution channel: it contains the server, installer, master agent skill, fixtures, source, and documentation. The one-command bootstrap installs dependencies, builds the server, prompts for the filesystem allowlist when it is unset, then wires the skill and MCP server into pi, Cursor, and OpenAI Codex and verifies the result:
 
 ```bash
 git clone https://github.com/brbndon/secure-mcp.git
