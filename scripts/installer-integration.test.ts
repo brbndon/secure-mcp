@@ -107,7 +107,8 @@ function expectInstalled(home: string, roots: string): void {
   const codexText = readFileSync(codexConfig, "utf8");
   assert.match(codexText, /# secure-mcp install owner: https:\/\/github\.com\/brbndon\/secure-mcp/);
   assert.match(codexText, /\[mcp_servers\.secure-mcp\]/);
-  assert.match(codexText, new RegExp(`args = \\["${escapeRegex(serverEntry)}"\\]`));
+  const tomlServerEntry = serverEntry.replace(/\\/g, "\\\\");
+  assert.match(codexText, new RegExp(`args = \\["${escapeRegex(tomlServerEntry)}"\\]`));
   assert.ok(existsSync(codexAgent));
   assert.equal(
     readFileSync(codexAgent, "utf8"),
