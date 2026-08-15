@@ -1,6 +1,6 @@
 ---
 title: secure-mcp
-description: "Defensive, agent-first security audits over MCP: scope repositories, route stack-aware guidance, and produce structured remediation findings."
+description: "Defensive, agent-first security audits over strict MCP v2 (2026-07-28): scope repositories, route stack-aware guidance, and produce structured remediation findings."
 sidebar:
   label: Start here
   order: 1
@@ -10,13 +10,16 @@ sidebar:
 
 ## Security review that agents can carry forward
 
-`secure-mcp` gives coding agents a small, structured toolkit for defensive code review. It inventories a repository, detects its stack, loads only the knowledge packs it needs, and turns likely weaknesses into remediation-ready findings.
+`secure-mcp` gives coding agents a small, structured toolkit for defensive code review. It inventories a repository, detects its stack, loads only the knowledge packs it needs, and turns likely weaknesses into remediation-ready findings. Version 2.x requires MCP protocol revision `2026-07-28`; legacy 2025-era handshakes are rejected.
 
 The server is intentionally local. It reads files under an approved `project_root`, never executes the target project, and keeps stdout reserved for MCP JSON-RPC.
 
 <CardGroup cols={2}>
-  <Card title="Install and connect" href="/docs/installation" icon="rocket">
-    Build the server, authorize local repository roots, and connect it to Claude, Cursor, Codex, or another stdio client.
+  <Card title="Clone and install" href="/docs/installation" icon="rocket">
+    Clone, build, and install the server plus agent workflow for pi, Cursor, and Codex, or connect another strict v2 stdio client.
+  </Card>
+  <Card title="Client compatibility" href="/docs/clients" icon="plug">
+    Verified configuration shapes for Codex, Cursor, Claude Desktop, Claude Code, VS Code / Copilot, pi, and generic stdio clients.
   </Card>
   <Card title="Run the audit workflow" href="/docs/quickstart" icon="workflow">
     Follow the multi-phase sequence from inventory to confirmed findings and a human-facing remediation plan.

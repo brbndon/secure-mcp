@@ -1,12 +1,14 @@
 ---
 title: Quickstart
-description: Run secure-mcp from repository inventory through stack-aware checks, evidence verification, and a structured remediation report for an authorized code review.
+description: Run secure-mcp 2.x from repository inventory through stack-aware checks, evidence verification, and a structured remediation report for an authorized code review.
 sidebar:
   label: Quickstart
   order: 3
 ---
 
 ## Quickstart
+
+Install first: clone, build, and run `scripts/install-agents.sh install` (or `.ps1` on Windows), then restart your agent. The server requires MCP protocol `2026-07-28`.
 
 The safest useful audit is staged. Each phase leaves a small artifact the next phase can use, so agents do not spend context on irrelevant checklists or jump from a regex hit to a confident claim.
 

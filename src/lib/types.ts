@@ -5,30 +5,59 @@
  * identify weaknesses → classify → recommend remediation.
  */
 
+import {
+  CandidateDispositionSchema,
+  ConfidenceSchema,
+  FindingSchema,
+  SeveritySchema,
+  StackFocusSchema,
+} from "../knowledge/findings-schema.js";
+import type { z } from "zod";
+
 /** How confident the review is in the evidence for a weakness. */
-export type Confidence = "high" | "medium" | "low";
+export type Confidence = z.infer<typeof ConfidenceSchema>;
 
 /** Industry-standard severity ladder for prioritized remediation. */
-export type Severity = "critical" | "high" | "medium" | "low" | "info";
+export type Severity = z.infer<typeof SeveritySchema>;
 
 /** Stack / domain a finding is associated with. */
-export type StackFocus = "common" | "typescript" | "nextjs" | "swift" | "expo";
+export type StackFocus = z.infer<typeof StackFocusSchema>;
 
 /** How a heuristic candidate should be handled before it becomes a confirmed finding. */
-export type CandidateDisposition =
-  | "reportable"
-  | "needs_review"
-  | "suppressed"
-  | "not_applicable"
-  | "deferred";
+export type CandidateDisposition = z.infer<typeof CandidateDispositionSchema>;
 
-export const CANDIDATE_DISPOSITIONS: readonly CandidateDisposition[] = [
-  "reportable",
-  "needs_review",
-  "suppressed",
-  "not_applicable",
-  "deferred",
-];
+export const CANDIDATE_DISPOSITIONS: readonly CandidateDisposition[] =
+  CandidateDispositionSchema.options;
+
+export interface CandidateDispositionPolicy {
+  /** Confirmed work that remains unresolved and contributes to open risk. */
+  openWork: boolean;
+  /** Eligible for the high/critical remediation queue (including candidates awaiting proof). */
+  remediationPriority: boolean;
+  /** Sort rank before severity; confirmed open work outranks unconfirmed candidates. */
+  sortRank: number;
+}
+
+/**
+ * Exhaustive disposition semantics shared by report sorting, risk accounting,
+ * and remediation-priority filtering. `deferred` is confirmed open work;
+ * `needs_review` is a candidate queue; fixed/suppressed/accepted_risk/not_applicable are closed.
+ */
+export const CANDIDATE_DISPOSITION_POLICY = {
+  reportable: { openWork: true, remediationPriority: true, sortRank: 2 },
+  deferred: { openWork: true, remediationPriority: true, sortRank: 2 },
+  needs_review: { openWork: false, remediationPriority: true, sortRank: 1 },
+  fixed: { openWork: false, remediationPriority: false, sortRank: 0 },
+  suppressed: { openWork: false, remediationPriority: false, sortRank: 0 },
+  accepted_risk: { openWork: false, remediationPriority: false, sortRank: 0 },
+  not_applicable: { openWork: false, remediationPriority: false, sortRank: 0 },
+} as const satisfies Record<CandidateDisposition, CandidateDispositionPolicy>;
+
+export function candidateDispositionPolicy(
+  disposition: CandidateDisposition | undefined,
+): CandidateDispositionPolicy {
+  return CANDIDATE_DISPOSITION_POLICY[disposition ?? "needs_review"];
+}
 
 export interface CoveragePathDecision {
   path: string;
@@ -90,92 +119,18 @@ export interface CoverageReport {
  * Do not use this shape for exploit instructions or attack playbooks.
  * Keep field names stable — agents and sub-agents depend on them.
  */
-export interface Finding {
-  /** Stable identifier within a single audit session (e.g. "AUTH-001"). */
-  id: string;
-  /** Short human-readable title naming the potential weakness. */
-  title: string;
-  /**
-   * Evidence-oriented description of what was observed and why it may be
-   * a weakness (no exploit steps).
-   */
-  description: string;
-  /** Classification: how urgent remediation is. */
-  severity: Severity;
-  /** Classification: how strong the supporting evidence is. */
-  confidence: Confidence;
-  /** Classification: weakness family (authentication, injection-risk, secrets, …). */
-  category: string;
-  /** Optional stack focus for filtering. */
-  stack?: StackFocus;
-  /** Path relative to the project root when available. */
-  file?: string;
-  /** 1-based line number when available. */
-  line?: number;
-  /** Observable evidence (snippet, config key, path) supporting the finding. */
-  evidence: string;
-  /**
-   * High-level impact if the weakness is left unremediated.
-   * Describe risk to confidentiality/integrity/availability — not how to exploit it.
-   */
-  impact_if_unremediated: string;
-  /** Concrete remediation steps for the development team. */
-  remediation: string;
-  /** Residual risk remaining after the recommended remediation. */
-  residual_risk: string;
-  /** How maintainers can verify the fix (tests, code review checks, config audit). */
-  verification_suggestion: string;
-  /** Optional CWE identifier (e.g. "CWE-89"). */
-  cwe?: string;
-  /** Optional OWASP category label. */
-  owasp?: string;
-  /** Free-form tags for agent filtering. */
-  tags?: string[];
-  /** Stable detector family independent of report ordering. */
-  rule_family?: string;
-  /** Stable control/root rule that produced this candidate. */
-  root_control?: string;
-  /** Stable hash-backed identity for the same source instance across runs. */
-  instance_id?: string;
-  /** Candidate state before human/data-flow confirmation. */
-  disposition?: CandidateDisposition;
-  /** Why the candidate has its current disposition. */
-  disposition_reason?: string;
-  /** Evidence-backed source, expected control, and observed/dangerous sink. */
-  source?: string;
-  control?: string;
-  sink?: string;
-  /** Evidence that argues against the candidate or remains unverified. */
-  counterevidence?: string[];
-  /** Missing proof needed before a candidate is treated as confirmed. */
-  proof_gap?: string[];
-  /** Concrete checks used or still required to validate the candidate. */
-  validation?: string[];
-}
+export type Finding = z.infer<typeof FindingSchema>;
 
 /** Severity ordering for sorting (higher = more urgent to remediate). */
-export const SEVERITY_ORDER: Record<Severity, number> = {
-  critical: 5,
-  high: 4,
-  medium: 3,
-  low: 2,
-  info: 1,
-};
+export const SEVERITY_ORDER = Object.fromEntries(
+  SeveritySchema.options.map((severity, index, severities) => [
+    severity,
+    severities.length - index,
+  ]),
+) as Record<Severity, number>;
 
 /** Response format for tool outputs. */
 export type ResponseFormat = "json" | "markdown";
-
-/** Common parameters most tools accept. */
-export interface ProjectTarget {
-  /** Absolute or relative path to the project root to review. */
-  project_root: string;
-  /** Optional stack hint to focus analysis. */
-  stack?: StackFocus | "auto";
-  /** Max files to inspect (safety limit). */
-  max_files?: number;
-  /** Response format. */
-  response_format?: ResponseFormat;
-}
 
 /**
  * Standard tool success envelope.

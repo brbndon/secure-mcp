@@ -135,6 +135,23 @@ export const webNextPack: KnowledgePack = {
       verification_suggestion: "List edge routes that touch secrets; confirm supported crypto APIs.",
     },
     {
+      id: "NEXT-CACHE-TENANCY",
+      title: "Cache tags and keys must not leak tenant data",
+      description:
+        "In multi-tenant Next.js apps, unstable_cache keys, cacheTag/cacheLife labels, and fetch cache keys that omit tenant or principal context can serve one customer’s data to another. Shared CDN/full-route cache without tenant partitioning has the same risk.",
+      category: "authorization",
+      severityHint: "high",
+      cwe: "CWE-639",
+      tags: ["cache", "multi-tenant", "cacheTag"],
+      stacks: ["nextjs"],
+      impact_if_unremediated:
+        "Cached responses or tag-based revalidation may expose or mutate another tenant’s data.",
+      remediation:
+        "Include stable tenant/org/user scope in cache keys and tags; avoid caching authorized responses under keys that only use public route params; revalidate with tenant-scoped tags.",
+      verification_suggestion:
+        "Inventory unstable_cache, cacheTag, revalidateTag, and fetch cache usage; confirm every key/tag embeds tenant or principal scope for multi-tenant data.",
+    },
+    {
       id: "NEXT-CLIENT-SECRETS",
       title: "Secrets in client components",
       description:

@@ -1,23 +1,18 @@
 /**
  * Tool: secure_mcp_review_secrets
  * Defensive identification of secret exposure for rotation and remediation.
+ *
+ * applied_pack_ids derives from detector families that actually evaluated
+ * successfully opened content. Routed packs stay in
+ * knowledge_pack_traceability.consulted_pack_ids.
  */
 
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
-import {
-  detectWithBudget,
-  findLineNumber,
-  finalizeCoverage,
-  recordCoverageExclusion,
-  normalizeAuthorizedProjectRoot,
-  readProjectFile,
-  snippetAround,
-  toolError,
-  toolSuccess,
-  walkProject,
-} from "../lib/filesystem.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
+import { detectWithBudget, findLineNumber, snippetAround } from "../lib/filesystem.js";
+import { runProjectScan } from "../lib/project-scan.js";
 import {
   redactCoverageReport,
   redactFinding,
@@ -25,8 +20,9 @@ import {
   redactedSecretPath,
   redactedSecretPaths,
 } from "../lib/redact.js";
-import { escapeMarkdown } from "../lib/markdown.js";
-import type { Finding, StackFocus } from "../lib/types.js";
+import { AWS_ACCESS_KEY_ID_SHAPE } from "../lib/secret-tokens.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
+import { SEVERITY_ORDER, type Finding, type StackFocus } from "../lib/types.js";
 import {
   buildFinding,
   createFindingIdFactory,
@@ -35,6 +31,10 @@ import {
 import { SECRET_PATTERNS } from "../knowledge/common.js";
 import { NEXTJS_PATTERNS } from "../knowledge/nextjs.js";
 import { isSwiftSensitivePath, SWIFT_SECRETS_PATTERNS } from "../knowledge/swift.js";
+import {
+  recommendCategoryPackIds,
+  type PackId,
+} from "../knowledge/packs/registry.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
@@ -43,30 +43,95 @@ type Input = z.infer<typeof InputSchema>;
  * Whether Next.js client-bundle secret detectors may run for this stack focus.
  * Explicit expo/common/swift must not claim or execute Next-only detectors.
  */
-export function shouldRunNextjsSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
-  return stack === undefined || stack === "auto" || stack === "nextjs";
+export function shouldRunNextjsSecretDetectors(
+  stack: StackFocus | "auto" | undefined,
+  detectedStacks: readonly StackFocus[] = [],
+): boolean {
+  return (
+    stack === "nextjs" ||
+    ((stack === undefined || stack === "auto") && detectedStacks.includes("nextjs"))
+  );
 }
 
-export function shouldRunSwiftSecretDetectors(stack: StackFocus | "auto" | undefined): boolean {
-  return stack === undefined || stack === "auto" || stack === "swift";
+export function shouldRunSwiftSecretDetectors(
+  stack: StackFocus | "auto" | undefined,
+  detectedStacks: readonly StackFocus[] = [],
+): boolean {
+  return (
+    stack === "swift" ||
+    ((stack === undefined || stack === "auto") && detectedStacks.includes("swift"))
+  );
 }
 
 /** Pack ids claimed by secrets review for the active stack focus. */
-export function secretsPackIdsForStack(stack: StackFocus | "auto" | undefined): string[] {
-  const ids = ["core", "secrets"];
-  if (shouldRunNextjsSecretDetectors(stack)) ids.push("web-next");
-  if (shouldRunSwiftSecretDetectors(stack)) ids.push("swift-ios");
+export function secretsPackIdsForStack(
+  stack: StackFocus | "auto" | undefined,
+  detectedStacks: readonly StackFocus[] = [],
+): PackId[] {
+  const detectorStacks: StackFocus[] = ["typescript"];
+  if (shouldRunNextjsSecretDetectors(stack, detectedStacks)) detectorStacks.push("nextjs");
+  if (shouldRunSwiftSecretDetectors(stack, detectedStacks)) detectorStacks.push("swift");
+  return recommendCategoryPackIds(detectorStacks, ["secrets"]);
+}
+
+export const SECRETS_DETECTOR_FAMILIES = [
+  "secrets.secret-patterns",
+  "secrets.environment-file",
+  "web-next.client-bundle-secrets",
+  "swift-ios.secret-config",
+  "swift-ios.secret-handling",
+] as const;
+export type SecretsDetectorFamily = (typeof SECRETS_DETECTOR_FAMILIES)[number];
+
+const PACK_ID_BY_SECRETS_FAMILY: Record<SecretsDetectorFamily, PackId> = {
+  "secrets.secret-patterns": "secrets",
+  "secrets.environment-file": "secrets",
+  "web-next.client-bundle-secrets": "web-next",
+  "swift-ios.secret-config": "swift-ios",
+  "swift-ios.secret-handling": "swift-ios",
+};
+
+/** Packs behind families that actually evaluated opened content. */
+export function appliedSecretsPackIds(evaluatedFamilies: readonly string[]): PackId[] {
+  const set = new Set(evaluatedFamilies);
+  const ids: PackId[] = [];
+  for (const family of SECRETS_DETECTOR_FAMILIES) {
+    if (!set.has(family)) continue;
+    const packId = PACK_ID_BY_SECRETS_FAMILY[family];
+    if (packId && !ids.includes(packId)) ids.push(packId);
+  }
   return ids;
 }
 
 const FALSE_POSITIVE_HINTS =
   /example|sample|placeholder|your[_-]?key|xxx+|todo|changeme|dummy|fake|test[_-]?key|process\.env/i;
 
+export interface SecretPatternMatchClassification {
+  suppressed: boolean;
+  confidence: "high" | "low";
+}
+
+/** Apply contextual false-positive hints without suppressing high-impact key material. */
+export function classifySecretPatternMatch(
+  patternName: string,
+  match: string,
+  nearbyContext: string,
+): SecretPatternMatchClassification {
+  const hasFalsePositiveHint =
+    FALSE_POSITIVE_HINTS.test(match) || FALSE_POSITIVE_HINTS.test(nearbyContext);
+  const mustRemainVisible =
+    patternName === AWS_ACCESS_KEY_ID_SHAPE.name || patternName === "Private key block";
+  return {
+    suppressed: hasFalsePositiveHint && !mustRemainVisible,
+    confidence: hasFalsePositiveHint ? "low" : "high",
+  };
+}
+
 const TOOL_DESCRIPTION = `Defensive secure-code-review tool: identify potential hardcoded secrets and unsafe secret handling so the development team can rotate credentials and harden configuration.
 
 Args: project_root, stack?, max_files?, focus_paths?, response_format.
 
-Returns: findings[] (category secrets, remediation fields; evidence redacted), env_related_files, truncated, applied_pack_ids.
+Returns: findings[] (category secrets, remediation fields; evidence redacted), env_related_files, truncated, applied_pack_ids (packs whose detectors evaluated content), knowledge_pack_traceability.consulted_pack_ids (routed secrets packs).
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
@@ -89,18 +154,15 @@ export function registerReviewSecrets(
     },
     async (params: Input) => {
       try {
-        const root = await normalizeAuthorizedProjectRoot(params.project_root, config.allowedRoots);
         const nextId = createFindingIdFactory("SEC");
         const findings: Finding[] = [];
-        const filesScanned: string[] = [];
         const detectorFamiliesRun = new Set<string>();
 
-        const { files, coverage } = await walkProject(root, {
-          maxFiles: params.max_files ?? config.defaultMaxFiles,
-          maxDepth: config.maxDepth,
-          maxFileBytes: config.maxFileBytes,
-          maxTotalBytes: config.maxTotalBytes,
-          allowedRoots: config.allowedRoots,
+        const scan = await runProjectScan({
+          projectRoot: params.project_root,
+          config,
+          maxFiles: params.max_files,
+          focusPaths: params.focus_paths,
           extensions: new Set([
             ".ts",
             ".tsx",
@@ -121,61 +183,18 @@ export function registerReviewSecrets(
             ".pem",
             ".key",
           ]),
-          focusPrefixes: params.focus_paths,
-        });
-
-        const envish = files.filter(
-          (f) =>
-            f.relativePath.includes(".env") ||
-            f.ext === ".pem" ||
-            f.ext === ".key" ||
-            f.relativePath.endsWith("credentials.json") ||
-            f.relativePath.endsWith("service-account.json") ||
-            isSwiftSensitivePath(f.relativePath),
-        );
-
-        for (const file of files) {
-          if (file.size > config.maxFileBytes) {
-            recordCoverageExclusion(coverage, {
-              path: file.relativePath,
-              kind: "file",
-              reason: "max_file_bytes",
-            });
-            continue;
-          }
-          if (file.relativePath.includes(".min.")) {
-            recordCoverageExclusion(coverage, {
-              path: file.relativePath,
-              kind: "file",
-              reason: "minified_file",
-            });
-            continue;
-          }
-
-          let content: string;
-          try {
-            content = (
-              await readProjectFile(
-                root,
-                file.relativePath,
-                config.maxFileBytes,
-                config.allowedRoots,
-              )
-            ).content;
-          } catch {
-            recordCoverageExclusion(coverage, {
-              path: file.relativePath,
-              kind: "file",
-              reason: "file_read_error",
-            });
-            continue;
-          }
-          filesScanned.push(file.relativePath);
+          selectFile: (file) =>
+            file.relativePath.includes(".min.")
+              ? { skip: true, reason: "minified_file" }
+              : { skip: false },
+          onFile: (file, content, ctx) => {
+            const detectedStacks = ctx.profile?.likelyStacks ?? [];
 
           if (
             /(^|\/)\.env($|\.(local|development|production|staging))/i.test(file.relativePath) &&
             !file.relativePath.endsWith(".example")
           ) {
+            detectorFamiliesRun.add("secrets.environment-file");
             findings.push(
               buildFinding({
                 id: nextId(),
@@ -206,9 +225,10 @@ export function registerReviewSecrets(
           }
 
           if (
-            shouldRunSwiftSecretDetectors(params.stack) &&
+            shouldRunSwiftSecretDetectors(params.stack, detectedStacks) &&
             /GoogleService-Info\.plist$/i.test(file.relativePath)
           ) {
+            detectorFamiliesRun.add("swift-ios.secret-config");
             findings.push(
               buildFinding({
                 id: nextId(),
@@ -245,14 +265,12 @@ export function registerReviewSecrets(
             let hits = 0;
             for (const hit of detectWithBudget(pattern.regex, content)) {
               const full = hit.match;
-              if (
-                FALSE_POSITIVE_HINTS.test(full) ||
-                FALSE_POSITIVE_HINTS.test(snippetAround(content, hit.index, 40))
-              ) {
-                if (!pattern.name.includes("Private key") && !pattern.name.includes("AWS")) {
-                  continue;
-                }
-              }
+              const classification = classifySecretPatternMatch(
+                pattern.name,
+                full,
+                snippetAround(content, hit.index, 40),
+              );
+              if (classification.suppressed) continue;
               if (hits >= 10) break;
               hits++;
               findings.push(
@@ -262,7 +280,7 @@ export function registerReviewSecrets(
                     title: `Possible secret: ${pattern.name}`,
                     description: `Matched heuristic for ${pattern.name}. Verify whether this is a real credential and whether it is still active; if so, remediate and rotate.`,
                     severity: pattern.severity,
-                    confidence: FALSE_POSITIVE_HINTS.test(full) ? "low" : "high",
+                    confidence: classification.confidence,
                     category: "secrets",
                     rule_family: "secrets.secret-patterns",
                     root_control: `SECRET-PATTERN-${pattern.name.replace(/[^A-Z0-9]+/gi, "-").toUpperCase()}`,
@@ -286,7 +304,7 @@ export function registerReviewSecrets(
             }
           }
 
-          if (shouldRunNextjsSecretDetectors(params.stack)) {
+          if (shouldRunNextjsSecretDetectors(params.stack, detectedStacks)) {
             detectorFamiliesRun.add("web-next.client-bundle-secrets");
             for (const p of NEXTJS_PATTERNS.filter(
               (x) => x.id.includes("PUBLIC") || x.id.includes("USE-CLIENT"),
@@ -329,7 +347,7 @@ export function registerReviewSecrets(
           }
 
           if (
-            shouldRunSwiftSecretDetectors(params.stack) &&
+            shouldRunSwiftSecretDetectors(params.stack, detectedStacks) &&
             (file.ext === ".swift" || file.ext === ".plist" || file.ext === ".entitlements")
           ) {
             detectorFamiliesRun.add("swift-ios.secret-handling");
@@ -375,20 +393,35 @@ export function registerReviewSecrets(
               }
             }
           }
-        }
+          },
+        });
+        const { root, profile, files, filesReviewed: filesScanned, finishCoverage } = scan;
+        const detectedStacks = profile?.likelyStacks ?? [];
+        const envish = files.filter(
+          (f) =>
+            f.relativePath.includes(".env") ||
+            f.ext === ".pem" ||
+            f.ext === ".key" ||
+            f.relativePath.endsWith("credentials.json") ||
+            f.relativePath.endsWith("service-account.json") ||
+            isSwiftSensitivePath(f.relativePath),
+        );
 
-        const order = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
-        findings.sort((a, b) => order[b.severity] - order[a.severity]);
-        const finalizedCoverage = finalizeCoverage(coverage, filesScanned, findings);
+        findings.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
+        const finalizedCoverage = finishCoverage(findings);
         const safeFindings = redactFindings(findings);
 
-        const applied_pack_ids = secretsPackIdsForStack(params.stack);
+        const consulted_pack_ids = secretsPackIdsForStack(params.stack, detectedStacks);
+        const applied_pack_ids = appliedSecretsPackIds([...detectorFamiliesRun]);
         const detectorFamiliesAvailable = [
           "secrets.secret-patterns",
-          ...(shouldRunNextjsSecretDetectors(params.stack)
+          "secrets.environment-file",
+          ...(shouldRunNextjsSecretDetectors(params.stack, detectedStacks)
             ? ["web-next.client-bundle-secrets"]
             : []),
-          ...(shouldRunSwiftSecretDetectors(params.stack) ? ["swift-ios.secret-handling"] : []),
+          ...(shouldRunSwiftSecretDetectors(params.stack, detectedStacks)
+            ? ["swift-ios.secret-handling", "swift-ios.secret-config"]
+            : []),
         ];
         const data = {
           ok: true as const,
@@ -401,7 +434,7 @@ export function registerReviewSecrets(
           coverage: redactCoverageReport(finalizedCoverage),
           applied_pack_ids,
           knowledge_pack_traceability: {
-            consulted_pack_ids: applied_pack_ids,
+            consulted_pack_ids,
             detector_families_run: [...detectorFamiliesRun].sort(),
             detector_families_not_run: detectorFamiliesAvailable
               .filter((family) => !detectorFamiliesRun.has(family))
@@ -412,22 +445,16 @@ export function registerReviewSecrets(
             "Defensive secret hygiene only: identify → classify → rotate/remediate.",
             "Evidence is partially redacted; open the file locally to confirm.",
             "Never use discovered credentials against systems — only help owners fix and rotate.",
-            "Pack ids are for traceability; load checklists via secure_mcp_get_knowledge_pack when needed.",
+            "applied_pack_ids are packs whose detectors evaluated opened content; knowledge_pack_traceability.consulted_pack_ids are the routed secrets packs for this stack.",
           ],
         };
 
-        const md = [
-          `# Secrets review (remediation focused)`,
-          data.summary,
-          "",
-          ...safeFindings.slice(0, 40).map(
-            (f) =>
-              `### ${escapeMarkdown(f.id)} [${escapeMarkdown(`${f.severity}/${f.confidence}`)}] ${escapeMarkdown(f.title)}\n` +
-              `- ${escapeMarkdown(`${f.file ?? "?"}:${f.line ?? "?"}`)}\n` +
-              `- Evidence: ${escapeMarkdown(f.evidence)}\n` +
-              `- Remediation: ${escapeMarkdown(f.remediation)}\n`,
-          ),
-        ].join("\n");
+        const md = renderMarkdownDocument({
+          title: "Secrets review (remediation focused)",
+          summary: data.summary,
+          findings: safeFindings.slice(0, 40),
+          findingOptions: { detail: "compact", headingLevel: 3 },
+        });
 
         return toolSuccess(data, {
           responseFormat: params.response_format,

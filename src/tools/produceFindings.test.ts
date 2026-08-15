@@ -25,7 +25,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
 async function callProduceResult(
   findings: Finding | Finding[],
   reportTitle = "Boundary report",
-  response_format: "json" | "markdown" = "markdown",
+  response_format: "json" | "markdown" | "sarif" = "markdown",
 ): Promise<{ text: string; structured: any }> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createServer({
@@ -276,5 +276,371 @@ describe("produceFindings bounded inputs and redaction", () => {
     assert.equal(result.isError, undefined);
     assert.ok(!result.text.includes(secret));
     assert.ok(!JSON.stringify(result.structured).includes(secret));
+  });
+});
+
+describe("produceFindings disposition counting and priority", () => {
+  it("counts fixed dispositions without letting them dominate remediation_priority", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({
+          id: "OPEN-1",
+          title: "Open auth gap",
+          severity: "high",
+          confidence: "high",
+          disposition: "reportable",
+          file: "src/a.ts",
+          line: 1,
+        }),
+        makeFinding({
+          id: "FIXED-1",
+          title: "Already fixed injection",
+          severity: "critical",
+          confidence: "high",
+          disposition: "fixed",
+          disposition_reason: "Parameterized query landed; verified at sink.",
+          file: "src/b.ts",
+          line: 2,
+        }),
+        makeFinding({
+          id: "REVIEW-1",
+          title: "Needs review secret",
+          severity: "high",
+          confidence: "medium",
+          disposition: "needs_review",
+          file: "src/c.ts",
+          line: 3,
+        }),
+        makeFinding({
+          id: "DEFERRED-1",
+          title: "Deferred high-risk work",
+          severity: "high",
+          confidence: "high",
+          disposition: "deferred",
+          file: "src/d.ts",
+          line: 4,
+        }),
+        makeFinding({
+          id: "SUPPRESSED-1",
+          title: "Suppressed high candidate",
+          severity: "high",
+          disposition: "suppressed",
+          disposition_reason: "Fixture-only false positive.",
+          file: "src/e.ts",
+          line: 5,
+        }),
+        makeFinding({
+          id: "NA-1",
+          title: "Not applicable critical candidate",
+          severity: "critical",
+          disposition: "not_applicable",
+          disposition_reason: "The runtime does not include this surface.",
+          file: "src/f.ts",
+          line: 6,
+        }),
+        makeFinding({
+          id: "ACCEPT-1",
+          title: "Accepted residual risk",
+          severity: "medium",
+          disposition: "accepted_risk",
+          disposition_reason: "Owner accepted residual XSS in archived admin UI.",
+          file: "src/g.ts",
+          line: 7,
+        }),
+      ],
+      "Disposition report",
+      "json",
+    );
+    const counts = result.structured.candidate_disposition_counts as Record<string, number>;
+    assert.equal(counts.reportable, 1);
+    assert.equal(counts.fixed, 1);
+    assert.equal(counts.needs_review, 1);
+    assert.equal(counts.deferred, 1);
+    assert.equal(counts.suppressed, 1);
+    assert.equal(counts.not_applicable, 1);
+    assert.equal(counts.accepted_risk, 1);
+    for (const count of Object.values(counts)) assert.ok(Number.isFinite(count));
+
+    const priority = result.structured.executive_summary.remediation_priority as Array<{
+      title: string;
+      disposition?: string;
+    }>;
+    assert.ok(priority.some((item) => item.title === "Open auth gap"));
+    assert.ok(!priority.some((item) => item.title === "Already fixed injection"));
+    assert.ok(priority.some((item) => item.title === "Deferred high-risk work"));
+    assert.ok(!priority.some((item) => item.title === "Suppressed high candidate"));
+    assert.ok(!priority.some((item) => item.title === "Not applicable critical candidate"));
+    assert.ok(!priority.some((item) => item.title === "Accepted residual risk"));
+
+    const findings = result.structured.findings as Array<{ title: string; disposition?: string }>;
+    // Open reportable should sort ahead of fixed even if fixed is more severe.
+    const openIdx = findings.findIndex((f) => f.title === "Open auth gap");
+    const fixedIdx = findings.findIndex((f) => f.title === "Already fixed injection");
+    assert.ok(openIdx >= 0 && fixedIdx >= 0);
+    assert.ok(openIdx < fixedIdx);
+  });
+
+  it("ranks deferred open work ahead of needs-review candidates before applying the priority cap", async () => {
+    const needsReview = Array.from({ length: 11 }, (_, index) =>
+      makeFinding({
+        id: `REVIEW-${index}`,
+        title: `Needs review ${index}`,
+        severity: "high",
+        disposition: "needs_review",
+        file: `src/review-${index}.ts`,
+        line: index + 1,
+      }),
+    );
+    const deferred = makeFinding({
+      id: "DEFERRED-CRITICAL",
+      title: "Deferred critical remediation",
+      severity: "critical",
+      confidence: "high",
+      disposition: "deferred",
+      disposition_reason: "Confirmed open work with an approved delivery owner and date.",
+      file: "src/deferred.ts",
+      line: 1,
+    });
+
+    const result = await callProduceResult([...needsReview, deferred], "Open-work policy", "json");
+    const priority = result.structured.executive_summary.remediation_priority as Array<{
+      title: string;
+      disposition?: string;
+    }>;
+    const findings = result.structured.findings as Array<{
+      title: string;
+      disposition?: string;
+    }>;
+
+    assert.equal(priority.length, 10);
+    assert.equal(priority[0]?.title, "Deferred critical remediation");
+    assert.ok(priority.some((item) => item.title === "Deferred critical remediation"));
+    assert.equal(findings[0]?.title, "Deferred critical remediation");
+  });
+
+  it("frames a fixed-only ledger as zero open remediation risk in JSON and Markdown", async () => {
+    const fixed = makeFinding({
+      id: "FIXED-ONLY",
+      title: "Revalidated control",
+      severity: "critical",
+      confidence: "high",
+      disposition: "fixed",
+      disposition_reason: "The control is present and its regression test passes.",
+    });
+
+    const json = await callProduceResult(fixed, "Fixed ledger", "json");
+    const markdown = await callProduceResult(fixed, "Fixed ledger", "markdown");
+
+    assert.equal(json.structured.executive_summary.risk_score, 0);
+    assert.equal(json.structured.executive_summary.ledger_risk_score, 10);
+    assert.equal(json.structured.executive_summary.open_total, 0);
+    assert.deepEqual(json.structured.executive_summary.remediation_priority, []);
+    assert.match(json.structured.summary, /open=0/i);
+    assert.doesNotMatch(json.structured.summary, /Prioritise remediation/i);
+    assert.match(markdown.text, /Open remediation work by severity/i);
+    assert.match(markdown.text, /Ledger items by severity/i);
+  });
+});
+
+describe("produceFindings validation_status labels", () => {
+  it("labels unconfirmed heuristic candidates needs_runtime by default", async () => {
+    const result = await callProduceResult(
+      makeFinding({ id: "V-1", title: "Unconfirmed candidate" }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0]?.validation_status, "needs_runtime");
+  });
+
+  it("labels revalidated fixed findings static_only", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-2",
+        title: "Revalidated control",
+        disposition: "fixed",
+        disposition_reason: "The control is present and verified.",
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("labels a confirmed finding with cleared proof gaps static_only", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-3",
+        title: "Confirmed static finding",
+        disposition: "reportable",
+        disposition_reason: "Confirmed via code review.",
+        proof_gap: [],
+        counterevidence: [],
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("preserves an explicit validation_status override", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "V-4",
+        title: "Explicitly static",
+        disposition: "needs_review",
+        validation_status: "static_only",
+      }),
+      "Validation label report",
+      "json",
+    );
+    const findings = result.structured.findings as Array<{ validation_status?: string }>;
+    assert.equal(findings[0]?.validation_status, "static_only");
+  });
+
+  it("reports validation_counts in the executive summary", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({ id: "V-5", title: "Needs runtime A", file: "src/a.ts", line: 1 }),
+        makeFinding({
+          id: "V-6",
+          title: "Static B",
+          file: "src/b.ts",
+          line: 1,
+          disposition: "fixed",
+          disposition_reason: "Verified.",
+        }),
+      ],
+      "Validation count report",
+      "json",
+    );
+    const counts = result.structured.executive_summary.validation_counts as Record<
+      string,
+      number
+    >;
+    assert.equal(counts.needs_runtime, 1);
+    assert.equal(counts.static_only, 1);
+  });
+
+  it("exposes a resumable review_checkpoint for interrupted audits", async () => {
+    const result = await callProduceResult(
+      makeFinding({ id: "V-7", title: "Resumable candidate", file: "src/c.ts", line: 1 }),
+      "Checkpoint report",
+      "json",
+    );
+    const checkpoint = result.structured.review_checkpoint as {
+      resumable: boolean;
+      next_steps: string[];
+    };
+    assert.equal(checkpoint.resumable, true);
+    assert.ok(checkpoint.next_steps.length >= 1);
+    assert.match(checkpoint.next_steps.join("\n"), /focus_paths/);
+  });
+});
+
+describe("produceFindings SARIF export", () => {
+  it("emits a valid SARIF 2.1.0 subset", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({
+          id: "S-1",
+          title: "Unsafe command",
+          severity: "critical",
+          confidence: "high",
+          category: "injection-risk",
+          file: "app/api/search/route.ts",
+          line: 12,
+          cwe: "CWE-78",
+          disposition: "reportable",
+          disposition_reason: "Confirmed open weakness.",
+          proof_gap: [],
+          counterevidence: [],
+        }),
+        makeFinding({
+          id: "S-2",
+          title: "Hardcoded secret",
+          severity: "medium",
+          confidence: "medium",
+          category: "secrets",
+          file: "lib/auth.ts",
+          line: 3,
+          disposition: "needs_review",
+        }),
+      ],
+      "SARIF report",
+      "sarif",
+    );
+    const sarif = result.structured;
+    assert.equal(sarif.version, "2.1.0");
+    assert.match(sarif.$schema, /sarif-2\.1\.0/);
+    assert.equal(sarif.runs.length, 1);
+    const run = sarif.runs[0];
+    assert.equal(run.tool.driver.name, "secure-mcp");
+    assert.ok(run.tool.driver.version);
+    assert.equal(run.results.length, 2);
+    const rules = run.tool.driver.rules as Array<{ id: string }>;
+    const ruleIds = new Set(rules.map((rule) => rule.id));
+    for (const res of run.results) {
+      assert.ok(ruleIds.has(res.ruleId), `missing rule ${res.ruleId}`);
+      assert.equal(typeof res.ruleIndex, "number");
+      assert.equal(rules[res.ruleIndex].id, res.ruleId);
+    }
+    const first = run.results.find((r) => r.properties.instance_id);
+    assert.ok(first, "expected a result");
+    const location = first.locations.find((loc) => loc.physicalLocation.artifactLocation.uri);
+    assert.ok(location, "expected a physical location when a file is present");
+  });
+
+  it("maps severity to SARIF level", async () => {
+    const result = await callProduceResult(
+      [
+        makeFinding({ id: "L-1", title: "Critical", severity: "critical", file: "a.ts", line: 1 }),
+        makeFinding({ id: "L-2", title: "High", severity: "high", file: "b.ts", line: 1 }),
+        makeFinding({ id: "L-3", title: "Medium", severity: "medium", file: "c.ts", line: 1 }),
+        makeFinding({ id: "L-4", title: "Low", severity: "low", file: "d.ts", line: 1 }),
+        makeFinding({ id: "L-5", title: "Info", severity: "info", file: "e.ts", line: 1 }),
+      ],
+      "Level map",
+      "sarif",
+    );
+    const levels = result.structured.runs[0].results.map((r: { level: string }) => r.level);
+    assert.deepEqual(levels, ["error", "error", "warning", "note", "note"]);
+  });
+
+  it("redacts secrets from SARIF export", async () => {
+    const secret = "sarifsecretvalue777";
+    const result = await callProduceResult(
+      makeFinding({
+        id: "R-1",
+        title: "Leak",
+        category: `secrets api_key=${secret}`,
+        evidence: `token=${secret}`,
+        file: "lib/auth.ts",
+        line: 1,
+      }),
+      "Redaction SARIF",
+      "sarif",
+    );
+    assert.ok(!JSON.stringify(result.structured).includes(secret));
+    assert.ok(!result.text.includes(secret));
+  });
+
+  it("emits remediation help text on SARIF rules", async () => {
+    const result = await callProduceResult(
+      makeFinding({
+        id: "H-1",
+        title: "Unsafe sink",
+        remediation: "Parameterize queries.",
+        file: "src/x.ts",
+        line: 2,
+      }),
+      "Help text",
+      "sarif",
+    );
+    const rule = result.structured.runs[0].tool.driver.rules[0];
+    assert.ok(rule.help.text.length > 0);
   });
 });

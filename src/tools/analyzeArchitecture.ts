@@ -7,28 +7,29 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 import {
-  finalizeInventoryCoverage,
   normalizeAuthorizedProjectRoot,
   profileProject,
   readProjectFileIfExists,
-  toolError,
-  toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
+import type { CoverageReport, StackFocus } from "../lib/types.js";
 import { redactCoverageReport, redactedSecretPaths } from "../lib/redact.js";
-import { escapeMarkdown } from "../lib/markdown.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
 import { ProjectRootInput } from "../knowledge/findings-schema.js";
 import {
   checklistFromPackIds,
   focusedProfileForStack,
   recommendPackPlan,
 } from "../knowledge/packs/registry.js";
+import { threatHighlightsForStacks } from "../knowledge/threat-highlights.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
 
-interface SurfaceArea {
+/** Legacy path-bucket surface kept for compatibility with existing agents. */
+interface SurfaceBuckets {
   entrypoints: string[];
   auth_related: string[];
   config_files: string[];
@@ -36,29 +37,133 @@ interface SurfaceArea {
   data_layer_hints: string[];
 }
 
-async function detectSurface(
-  root: string,
-  maxFiles?: number,
-  focusPaths?: string[],
-  config: ServerConfig = loadConfig(),
-): Promise<{ surface: SurfaceArea; coverage: ReturnType<typeof finalizeInventoryCoverage> }> {
-  const { files, coverage } = await walkProject(root, {
-    maxFiles: maxFiles ?? config.defaultMaxFiles,
-    maxDepth: config.maxDepth,
-    maxFileBytes: config.maxFileBytes,
-    maxTotalBytes: config.maxTotalBytes,
-    allowedRoots: config.allowedRoots,
-    focusPrefixes: focusPaths,
-  });
+/**
+ * Stack-honest high-value surface kinds. Only kinds that match detected stacks
+ * are emitted — never invent Next-only surfaces for non-Next roots.
+ */
+export type SurfaceKind =
+  | "http_route"
+  | "server_action"
+  | "middleware"
+  | "page_entry"
+  | "app_entry"
+  | "auth_surface"
+  | "deep_link"
+  | "webview"
+  | "secure_storage"
+  | "config"
+  | "data_layer"
+  | "agent_tool"
+  | "webhook"
+  | "cron"
+  | "rpc"
+  | "queue";
+
+export type SurfaceExposure = "public" | "authenticated" | "internal" | "unknown";
+
+export interface TypedSurface {
+  id: string;
+  kind: SurfaceKind;
+  exposure: SurfaceExposure;
+  paths: string[];
+  auth_expectation: string;
+  stacks: StackFocus[];
+  evidence_basis: "path_inventory";
+  /** True when any path is an authorization-sensitive surface (dynamic ids, admin, webhooks, server actions). */
+  authz_sensitive: boolean;
+}
+
+export interface CoverageGap {
+  surface_id: string;
+  kind: SurfaceKind;
+  paths: string[];
+  reason: string;
+  suggested_tools: string[];
+}
+
+export interface SecurityBrief {
+  stacks: string[];
+  trust_boundaries: string[];
+  high_value_surfaces: Array<{
+    kind: SurfaceKind;
+    exposure: SurfaceExposure;
+    path_count: number;
+    sample_paths: string[];
+  }>;
+  coverage_gap_count: number;
+  recommended_packs: string[];
+  priority_paths: string[];
+  notes: string[];
+}
+
+const SURFACE_PATH_CAP = 12;
+// Sized to hold a mixed nextjs + expo + swift monorepo without silently dropping
+// a stack's surfaces (each stack pushes up to ~12 kinds). When the cap is still
+// exceeded, surfaces_truncated is reported instead of dropping kinds silently.
+const SURFACE_KIND_CAP = 40;
+const PRIORITY_PATH_CAP = 24;
+const COVERAGE_GAP_CAP = 16;
+
+const HIGH_VALUE_KINDS = new Set<SurfaceKind>([
+  "http_route",
+  "server_action",
+  "middleware",
+  "auth_surface",
+  "deep_link",
+  "webview",
+  "secure_storage",
+  "data_layer",
+  "agent_tool",
+  "webhook",
+  "cron",
+  "rpc",
+  "queue",
+]);
+
+/**
+ * Authorization-sensitive path heuristic. Used only to rank sample/priority
+ * ordering, never to emit findings. Targets object-level authz (BOLA/IDOR)
+ * surfaces: Next dynamic route segments, admin/account/tenant paths, webhooks,
+ * server actions, and mobile deep-link/AuthSession entry points.
+ */
+const AUTHZ_DYNAMIC_SEGMENT_RE = /\/\[[^\]]+\]/;
+const AUTHZ_PATH_SEGMENT_RE =
+  /(^|\/)(admin|account|dashboard|settings|profile|billing|checkout|team|teams|org|organizations|users?|members|roles?|permissions?|tenants?)(\/|\.|$)/i;
+const AUTHZ_WEBHOOK_RE = /webhook|stripe-hook|svix|callback/i;
+const AUTHZ_SERVER_ACTION_RE = /(^|\/)actions?\//i;
+const AUTHZ_DEEP_LINK_RE = /authsession|deep.?link|universal.?link|onopenurl|linking/i;
+
+/** Exported for tests. */
+export function isAuthzSensitivePath(relativePath: string): boolean {
+  if (!relativePath) return false;
+  const lower = relativePath.toLowerCase();
+  if (AUTHZ_DYNAMIC_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_PATH_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_WEBHOOK_RE.test(lower)) return true;
+  if (AUTHZ_SERVER_ACTION_RE.test(lower)) return true;
+  if (AUTHZ_DEEP_LINK_RE.test(lower)) return true;
+  return false;
+}
+
+function baseName(relativePath: string): string {
+  const lower = relativePath.toLowerCase();
+  return lower.split("/").pop() ?? lower;
+}
+
+function uniqPaths(paths: string[], cap = SURFACE_PATH_CAP): string[] {
+  return [...new Set(paths)].slice(0, cap);
+}
+
+function classifyBuckets(relativePaths: string[]): SurfaceBuckets {
   const entrypoints: string[] = [];
   const auth_related: string[] = [];
   const config_files: string[] = [];
   const api_routes: string[] = [];
   const data_layer_hints: string[] = [];
 
-  for (const f of files) {
-    const p = f.relativePath.toLowerCase();
-    const base = p.split("/").pop() ?? p;
+  for (const relativePath of relativePaths) {
+    const p = relativePath.toLowerCase();
+    const base = baseName(relativePath);
 
     if (
       base === "package.json" ||
@@ -74,7 +179,7 @@ async function detectSurface(
       base === "app.json" ||
       base.startsWith("app.config")
     ) {
-      config_files.push(f.relativePath);
+      config_files.push(relativePath);
     }
 
     if (
@@ -88,7 +193,7 @@ async function detectSurface(
       p.includes("securestore") ||
       p.includes("secure-store")
     ) {
-      auth_related.push(f.relativePath);
+      auth_related.push(relativePath);
     }
 
     if (
@@ -98,7 +203,7 @@ async function detectSurface(
       p.includes("server action") ||
       /actions?\.(ts|js|swift)$/.test(base)
     ) {
-      api_routes.push(f.relativePath);
+      api_routes.push(relativePath);
     }
 
     if (
@@ -111,7 +216,7 @@ async function detectSurface(
       p.includes("model/") ||
       base.includes("schema")
     ) {
-      data_layer_hints.push(f.relativePath);
+      data_layer_hints.push(relativePath);
     }
 
     if (
@@ -126,20 +231,596 @@ async function detectSurface(
       base === "app.tsx" ||
       base === "_layout.tsx"
     ) {
-      entrypoints.push(f.relativePath);
+      entrypoints.push(relativePath);
     }
   }
 
   const uniq = (arr: string[]) => [...new Set(arr)].slice(0, 50);
   return {
-    surface: {
-      entrypoints: uniq(entrypoints),
-      auth_related: uniq(auth_related),
-      config_files: uniq(config_files),
-      api_routes: uniq(api_routes),
-      data_layer_hints: uniq(data_layer_hints),
-    },
-    coverage: finalizeInventoryCoverage(coverage, files.map((file) => file.relativePath)),
+    entrypoints: uniq(entrypoints),
+    auth_related: uniq(auth_related),
+    config_files: uniq(config_files),
+    api_routes: uniq(api_routes),
+    data_layer_hints: uniq(data_layer_hints),
+  };
+}
+
+/**
+ * Unsupported-stack honesty: detect recognizable-but-uncovered stacks so agents
+ * report a limited generic review instead of pretending full AppSec coverage.
+ * Detection is marker-file based (bounded, no extra tree walk); no pack is
+ * routed for these stacks and no surfaces are invented for them.
+ */
+export interface UnsupportedStackSignal {
+  stack: string;
+  evidence: string[];
+  frameworks: string[];
+}
+
+const UNSUPPORTED_MARKER_MAP: ReadonlyArray<{
+  stack: string;
+  markers: readonly string[];
+}> = [
+  {
+    stack: "python",
+    markers: [
+      "pyproject.toml",
+      "requirements.txt",
+      "setup.py",
+      "setup.cfg",
+      "Pipfile",
+      "Pipfile.lock",
+      "poetry.lock",
+    ],
+  },
+  { stack: "go", markers: ["go.mod", "go.sum"] },
+  {
+    stack: "android-kotlin",
+    markers: ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+  },
+  { stack: "java", markers: ["pom.xml", "build.xml", "gradlew"] },
+  { stack: "dotnet", markers: ["global.json", "packages.config", "Directory.Build.props"] },
+  { stack: "ruby", markers: ["Gemfile", "Gemfile.lock", "Rakefile"] },
+  { stack: "php", markers: ["composer.json", "composer.lock"] },
+  { stack: "rust", markers: ["Cargo.toml", "Cargo.lock"] },
+];
+
+const PYTHON_FRAMEWORK_RE =
+  /\b(fastapi|django|flask|starlette|tornado|sanic|pyramid|aiohttp)\b/gi;
+
+/** Exported for tests: map top-level entry names to unsupported-stack signals. */
+export function unsupportedSignalsForEntries(
+  topLevelEntries: readonly string[],
+): UnsupportedStackSignal[] {
+  const names = topLevelEntries.map((entry) => entry.replace(/\/$/, ""));
+  const signals: UnsupportedStackSignal[] = [];
+  for (const { stack, markers } of UNSUPPORTED_MARKER_MAP) {
+    const evidence = markers.filter((marker) => names.includes(marker));
+    if (evidence.length === 0) continue;
+    signals.push({ stack, evidence, frameworks: [] });
+  }
+  return signals;
+}
+
+/** Enrich python signals with a framework name read from requirements/pyproject. */
+async function enrichPythonFrameworks(
+  root: string,
+  signals: UnsupportedStackSignal[],
+  maxFileBytes: number | undefined,
+  allowedRoots: readonly string[] | undefined,
+): Promise<void> {
+  const python = signals.find((signal) => signal.stack === "python");
+  if (!python) return;
+  for (const file of ["requirements.txt", "pyproject.toml"]) {
+    const content = await readProjectFileIfExists(root, file, maxFileBytes, allowedRoots);
+    if (!content) continue;
+    const matches = content.content.match(PYTHON_FRAMEWORK_RE) ?? [];
+    for (const match of matches) {
+      const framework = match.toLowerCase();
+      if (!python.frameworks.includes(framework)) python.frameworks.push(framework);
+      if (python.frameworks.length >= 4) return;
+    }
+  }
+}
+
+function collectKindPaths(
+  relativePaths: string[],
+  matcher: (relativePath: string, base: string) => boolean,
+): string[] {
+  const matches: string[] = [];
+  for (const relativePath of relativePaths) {
+    if (matcher(relativePath, baseName(relativePath))) {
+      matches.push(relativePath);
+    }
+  }
+  return uniqPaths(matches);
+}
+
+function isJavaScriptOrTypeScriptPath(relativePath: string): boolean {
+  return /\.(?:[cm]?[jt]sx?)$/i.test(relativePath);
+}
+
+function isSwiftPath(relativePath: string): boolean {
+  return /\.swift$/i.test(relativePath);
+}
+
+function isNextRouteRoot(relativePath: string, root: "app" | "pages"): boolean {
+  return new RegExp(`^(?:src/)?${root}/`, "i").test(relativePath);
+}
+
+function isNamedSurfacePath(relativePath: string, pattern: RegExp): boolean {
+  return pattern.test(relativePath) && isJavaScriptOrTypeScriptPath(relativePath);
+}
+
+function buildTypedSurfaces(
+  relativePaths: string[],
+  stacks: StackFocus[],
+): { surfaces: TypedSurface[]; truncated: boolean } {
+  const surfaces: TypedSurface[] = [];
+  let truncated = false;
+
+  const push = (
+    kind: SurfaceKind,
+    paths: string[],
+    exposure: SurfaceExposure,
+    auth_expectation: string,
+    kindStacks: StackFocus[],
+  ): void => {
+    if (paths.length === 0 || kindStacks.length === 0) return;
+    if (surfaces.length >= SURFACE_KIND_CAP) {
+      truncated = true;
+      return;
+    }
+    surfaces.push({
+      id: `surf-${kind}-${surfaces.length + 1}`,
+      kind,
+      exposure,
+      paths,
+      auth_expectation,
+      stacks: kindStacks,
+      evidence_basis: "path_inventory",
+      authz_sensitive: paths.some(isAuthzSensitivePath),
+    });
+  };
+
+  const authName = /auth|session|login|clerk|nextauth|credential|keychain|securestore|secure-store/i;
+  const deepLinkName = /deep.?link|universal.?link|onopenurl|linking|authsession|redirect/i;
+  const webviewName = /webview|wkwebview|wkscript|javascriptbridge|react-native-webview/i;
+  const secureStorageName = /keychain|securestore|secure-store|secentitlement|ksecattr/i;
+  const dataName = /prisma|drizzle|supabase|repository|swiftdata|coredata|model\//i;
+  const webhookName = /webhook|stripe-hook|svix/i;
+  const cronName = /(^|\/)(?:cron|crons|scheduled)(?:\/|\.[cm]?[jt]sx?$)|\/jobs\/scheduled/i;
+  const agentToolName =
+    /(^|\/)(?:mcp|agent-?tools?)(?:\/|-)|tool-handler|registertool/i;
+  const rpcName = /(^|\/)(?:rpc|trpc|grpc)(?:\/|\.)/i;
+  const queueName = /(^|\/)(?:queues?|workers?|bullmq|inngest|sqs)(?:\/|\.)/i;
+
+  // When Next is detected, its TS/JS paths are represented by the more precise
+  // Next surfaces. Avoid duplicating them as generic TypeScript surfaces.
+  const activeStacks = [...new Set(stacks)].filter(
+    (stack) =>
+      !(stack === "typescript" && stacks.includes("nextjs")) &&
+      !(stack === "common" && stacks.some((candidate) => candidate !== "common")),
+  );
+
+  for (const stack of activeStacks) {
+    const stackPaths = (matcher: (path: string, base: string) => boolean): string[] =>
+      collectKindPaths(relativePaths, matcher);
+
+    if (stack === "nextjs") {
+      push(
+        "http_route",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          ((isNextRouteRoot(path, "app") && /^route\.[cm]?[jt]sx?$/i.test(base)) ||
+            (isNextRouteRoot(path, "pages") && /^(?:src\/)?pages\/api\//i.test(path))),
+        ),
+        "public",
+        "Authenticate and authorize every method; do not rely on middleware alone.",
+        [stack],
+      );
+      push(
+        "server_action",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/^actions?\.[cm]?[jt]sx?$/i.test(base) || /(^|\/)actions?\//i.test(path)),
+        ),
+        "public",
+        "Treat as HTTP-invocable: schema-validate inputs and enforce object-level authz.",
+        [stack],
+      );
+      push(
+        "middleware",
+        stackPaths((_path, base) => /^middleware\.[cm]?[jt]s$/i.test(base)),
+        "public",
+        "Matcher coverage is incomplete by design; re-check authz at each sensitive entrypoint.",
+        [stack],
+      );
+      push(
+        "page_entry",
+        stackPaths((path, base) => {
+          if (!isJavaScriptOrTypeScriptPath(path)) return false;
+          if (isNextRouteRoot(path, "app")) return /^(?:page|layout)\.[cm]?[jt]sx?$/i.test(base);
+          return isNextRouteRoot(path, "pages") && !/^(?:src\/)?pages\/api\//i.test(path);
+        }),
+        "unknown",
+        "Confirm server-side data loaders enforce session/ownership before rendering sensitive data.",
+        [stack],
+      );
+    } else if (stack === "typescript") {
+      push(
+        "http_route",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/\/(?:api|routes?)\//i.test(`/${path}`) || /^route\.[cm]?[jt]sx?$/i.test(base)),
+        ),
+        "public",
+        "Authenticate, authorize, and validate every externally reachable handler.",
+        [stack],
+      );
+      push(
+        "app_entry",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/^(?:index|main|app)\.[cm]?[jt]sx?$/i.test(base) || /^src\/index\.[cm]?[jt]s$/i.test(path)),
+        ),
+        "internal",
+        "Confirm process entrypoints do not expose privileged operations without auth checks.",
+        [stack],
+      );
+    } else if (stack === "swift") {
+      push(
+        "app_entry",
+        stackPaths((path, base) =>
+          isSwiftPath(path) &&
+          (base === "main.swift" || base === "app.swift" || /appdelegate\.swift$/i.test(path)),
+        ),
+        "internal",
+        "Confirm launch/deep-link handlers do not grant privileged state before auth.",
+        [stack],
+      );
+      push(
+        "deep_link",
+        stackPaths((path) => isSwiftPath(path) && deepLinkName.test(path)),
+        "public",
+        "Validate deep-link targets before elevating session or navigation privileges.",
+        [stack],
+      );
+      push(
+        "webview",
+        stackPaths((path) => isSwiftPath(path) && webviewName.test(path)),
+        "public",
+        "Restrict script bridges and navigation allowlists; treat WebView content as untrusted.",
+        [stack],
+      );
+      push(
+        "secure_storage",
+        stackPaths(
+          (path) =>
+            (isSwiftPath(path) && secureStorageName.test(path)) || /\.entitlements$/i.test(path),
+        ),
+        "internal",
+        "Use Keychain with least accessibility; never store tokens in plain preferences.",
+        [stack],
+      );
+    } else if (stack === "expo") {
+      push(
+        "app_entry",
+        stackPaths((path, base) =>
+          isJavaScriptOrTypeScriptPath(path) &&
+          (/^(?:app|_layout|index)\.[cm]?[jt]sx?$/i.test(base) || /^src\/index\.[cm]?[jt]s$/i.test(path)),
+        ),
+        "internal",
+        "Confirm launch/deep-link handlers do not grant privileged state before auth.",
+        [stack],
+      );
+      push(
+        "deep_link",
+        stackPaths((path) => isNamedSurfacePath(path, deepLinkName)),
+        "public",
+        "Validate deep-link/AuthSession targets before elevating session or navigation privileges.",
+        [stack],
+      );
+      push(
+        "webview",
+        stackPaths((path) => isNamedSurfacePath(path, webviewName)),
+        "public",
+        "Restrict script bridges and navigation allowlists; treat WebView content as untrusted.",
+        [stack],
+      );
+      push(
+        "secure_storage",
+        stackPaths((path) => isNamedSurfacePath(path, secureStorageName)),
+        "internal",
+        "Use SecureStore with least accessibility; never store tokens in plain preferences.",
+        [stack],
+      );
+    }
+
+    const sourceMatchesStack = (path: string): boolean =>
+      stack === "swift"
+        ? isSwiftPath(path)
+        : stack === "common"
+          ? false
+          : isJavaScriptOrTypeScriptPath(path);
+
+    push(
+      "webhook",
+      stackPaths((path) => sourceMatchesStack(path) && webhookName.test(path)),
+      "public",
+      "Verify signatures and authenticate the publisher before side effects.",
+      [stack],
+    );
+    push(
+      "cron",
+      stackPaths((path, base) => sourceMatchesStack(path) && (cronName.test(path) || /^cron\.[cm]?[jt]sx?$/i.test(base))),
+      "internal",
+      "Treat scheduled jobs as privileged: lock down triggers and secrets.",
+      [stack],
+    );
+    if (stack !== "swift") {
+      push(
+        "agent_tool",
+        stackPaths((path) => isJavaScriptOrTypeScriptPath(path) && agentToolName.test(path)),
+        "internal",
+        "Treat agent/MCP tools as public ingress: authenticate callers and constrain side effects.",
+        [stack],
+      );
+      push(
+        "rpc",
+        stackPaths((path) => isJavaScriptOrTypeScriptPath(path) && rpcName.test(path)),
+        "public",
+        "Authenticate and authorize every RPC procedure; do not trust client-supplied identity.",
+        [stack],
+      );
+      push(
+        "queue",
+        stackPaths((path) => isJavaScriptOrTypeScriptPath(path) && queueName.test(path)),
+        "internal",
+        "Validate queue payloads as untrusted input and isolate worker credentials.",
+        [stack],
+      );
+    }
+
+    push(
+      "auth_surface",
+      stackPaths((path) => sourceMatchesStack(path) && authName.test(path)),
+      "unknown",
+      "Verify session establishment, refresh, logout, and object-level authorization together.",
+      [stack],
+    );
+
+    push(
+      "config",
+      stackPaths((_path, base) => {
+        switch (stack) {
+          case "nextjs":
+            return (
+              base === "package.json" ||
+              base === "tsconfig.json" ||
+              base.startsWith("next.config") ||
+              base === "vercel.json" ||
+              /^middleware\.[cm]?[jt]s$/i.test(base)
+            );
+          case "typescript":
+            return (
+              base === "package.json" ||
+              base === "tsconfig.json" ||
+              base === "dockerfile" ||
+              base === "vercel.json"
+            );
+          case "swift":
+            return base === "package.swift" || base === "info.plist" || base.endsWith(".entitlements");
+          case "expo":
+            return (
+              base === "package.json" ||
+              base === "tsconfig.json" ||
+              base === "app.json" ||
+              base.startsWith("app.config") ||
+              base === "eas.json"
+            );
+          case "common":
+            return base === "dockerfile" || base === "makefile";
+        }
+      }),
+      "internal",
+      "Review public env, entitlements, and deploy config for over-broad exposure.",
+      [stack],
+    );
+
+    push(
+      "data_layer",
+      stackPaths((path, base) =>
+        sourceMatchesStack(path) && (dataName.test(path) || base.includes("schema")),
+      ),
+      "internal",
+      "Enforce authorization at the data access boundary; avoid trusting client-supplied ids.",
+      [stack],
+    );
+  }
+
+  return { surfaces, truncated };
+}
+
+function toolsForSurfaceKind(kind: SurfaceKind): string[] {
+  switch (kind) {
+    case "http_route":
+    case "server_action":
+    case "middleware":
+    case "auth_surface":
+    case "deep_link":
+    case "webview":
+    case "agent_tool":
+    case "webhook":
+    case "cron":
+    case "rpc":
+    case "queue":
+      return [
+        "secure_mcp_check_authentication",
+        "secure_mcp_analyze_injection_risks",
+      ];
+    case "secure_storage":
+      return ["secure_mcp_check_authentication", "secure_mcp_review_secrets"];
+    case "data_layer":
+      return [
+        "secure_mcp_analyze_injection_risks",
+        "secure_mcp_check_authentication",
+      ];
+    case "page_entry":
+    case "app_entry":
+      return ["secure_mcp_check_authentication"];
+    case "config":
+      return ["secure_mcp_review_secrets", "secure_mcp_check_authentication"];
+  }
+}
+
+function buildCoverageGaps(surfaces: TypedSurface[]): CoverageGap[] {
+  const gaps: CoverageGap[] = [];
+  for (const surface of surfaces) {
+    if (!HIGH_VALUE_KINDS.has(surface.kind)) continue;
+    gaps.push({
+      surface_id: surface.id,
+      kind: surface.kind,
+      paths: surface.paths.slice(0, 6),
+      reason:
+        "Architecture inventory only — no category detector evidence yet. Sample these paths after auth/injection/secrets tools and reconcile zero-hit high-value surfaces.",
+      suggested_tools: toolsForSurfaceKind(surface.kind),
+    });
+    if (gaps.length >= COVERAGE_GAP_CAP) break;
+  }
+  return gaps;
+}
+
+function buildPriorityPaths(
+  surfaces: TypedSurface[],
+  focusPaths: string[] | undefined,
+): string[] {
+  const ranked = [...surfaces].sort((a, b) => {
+    const aAuthz = a.authz_sensitive ? 1 : 0;
+    const bAuthz = b.authz_sensitive ? 1 : 0;
+    if (aAuthz !== bAuthz) return bAuthz - aAuthz;
+    const aHigh = HIGH_VALUE_KINDS.has(a.kind) ? 1 : 0;
+    const bHigh = HIGH_VALUE_KINDS.has(b.kind) ? 1 : 0;
+    if (aHigh !== bHigh) return bHigh - aHigh;
+    return a.kind.localeCompare(b.kind);
+  });
+  const paths: string[] = [];
+  for (const surface of ranked) {
+    const ordered = [...surface.paths].sort(
+      (a, b) =>
+        (isAuthzSensitivePath(b) ? 1 : 0) - (isAuthzSensitivePath(a) ? 1 : 0),
+    );
+    for (const p of ordered) {
+      if (!paths.includes(p)) paths.push(p);
+      if (paths.length >= PRIORITY_PATH_CAP) {
+        return paths;
+      }
+    }
+  }
+  if (focusPaths) {
+    for (const focus of focusPaths) {
+      if (!paths.includes(focus)) paths.push(focus);
+      if (paths.length >= PRIORITY_PATH_CAP) break;
+    }
+  }
+  return paths;
+}
+
+function buildSecurityBrief(input: {
+  stacks: string[];
+  trust_boundaries: string[];
+  surfaces: TypedSurface[];
+  coverage_gaps: CoverageGap[];
+  recommended_packs: string[];
+  priority_paths: string[];
+}): SecurityBrief {
+  return {
+    stacks: input.stacks,
+    trust_boundaries: input.trust_boundaries.slice(0, 8),
+    high_value_surfaces: input.surfaces
+      .filter((s) => HIGH_VALUE_KINDS.has(s.kind))
+      .slice(0, 12)
+      .map((s) => ({
+        kind: s.kind,
+        exposure: s.exposure,
+        path_count: s.paths.length,
+        sample_paths: s.paths.slice(0, 3),
+      })),
+    coverage_gap_count: input.coverage_gaps.length,
+    recommended_packs: input.recommended_packs,
+    priority_paths: input.priority_paths.slice(0, 12),
+    notes: [
+      "Derived from architecture path inventory and pack routing — not a separate project walk.",
+      "Treat as the security brief for this root; retain through category tools and revalidation.",
+      "Reconcile coverage_gaps after category detectors: sample zero-hit high-value surfaces manually.",
+      ...(input.surfaces.some((s) => s.authz_sensitive)
+        ? [
+            "Authorization-sensitive surfaces detected (dynamic ids, admin/tenant, webhooks, server actions). Verify object-level authorization on every sensitive action before trusting empty auth findings.",
+          ]
+        : []),
+    ],
+  };
+}
+
+async function detectSurface(
+  root: string,
+  maxFiles: number | undefined,
+  focusPaths: string[] | undefined,
+  stacks: StackFocus[],
+  config: ServerConfig = loadConfig(),
+): Promise<{
+  surface: SurfaceBuckets;
+  surfaces: TypedSurface[];
+  surfaces_truncated: boolean;
+  coverage_gaps: CoverageGap[];
+  priority_paths: string[];
+  coverage: CoverageReport;
+}> {
+  const { files, coverageSession } = await walkProject(root, {
+    maxFiles: maxFiles ?? config.defaultMaxFiles,
+    maxDepth: config.maxDepth,
+    maxFileBytes: config.maxFileBytes,
+    maxTotalBytes: config.maxTotalBytes,
+    allowedRoots: config.allowedRoots,
+    focusPrefixes: focusPaths,
+  });
+  const relativePaths = files.map((f) => f.relativePath);
+  const surface = classifyBuckets(relativePaths);
+  const { surfaces, truncated: surfacesTruncated } = buildTypedSurfaces(relativePaths, stacks);
+  const coverage_gaps = buildCoverageGaps(surfaces);
+  const priority_paths = buildPriorityPaths(surfaces, focusPaths);
+  return {
+    surface,
+    surfaces,
+    surfaces_truncated: surfacesTruncated,
+    coverage_gaps,
+    priority_paths,
+    coverage: coverageSession.finish(),
+  };
+}
+
+function redactTypedSurfaces(surfaces: TypedSurface[]): TypedSurface[] {
+  return surfaces.map((surface) => ({
+    ...surface,
+    paths: redactedSecretPaths(surface.paths),
+  }));
+}
+
+function redactCoverageGaps(gaps: CoverageGap[]): CoverageGap[] {
+  return gaps.map((gap) => ({
+    ...gap,
+    paths: redactedSecretPaths(gap.paths),
+  }));
+}
+
+function redactSecurityBrief(brief: SecurityBrief): SecurityBrief {
+  return {
+    ...brief,
+    high_value_surfaces: brief.high_value_surfaces.map((item) => ({
+      ...item,
+      sample_paths: redactedSecretPaths(item.sample_paths),
+    })),
+    priority_paths: redactedSecretPaths(brief.priority_paths),
   };
 }
 
@@ -151,10 +832,10 @@ export function registerAnalyzeArchitecture(
     "secure_mcp_analyze_architecture",
     {
       title: "Analyze architecture for hardening",
-      description: `Defensive secure-code-review tool: high-level architecture map (stacks, surfaces, trust boundaries) and recommended knowledge packs for progressive loading.
+      description: `Defensive secure-code-review tool: high-level architecture map (stacks, typed surfaces, coverage gaps, trust boundaries) and recommended knowledge packs for progressive loading.
 
 Args: project_root, stack?, max_files?, focus_paths?, response_format.
-Returns: stacks, surface, trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
+Returns: stacks, surface (legacy path buckets), surfaces (typed), surfaces_truncated, coverage_gaps, priority_paths, security_brief, threat_highlights (advisory stack-gated shortlist, not findings), trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`,
       inputSchema: InputSchema,
@@ -177,8 +858,17 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           maxTotalBytes: config.maxTotalBytes,
           allowedRoots: config.allowedRoots,
         });
-        const detected = await detectSurface(root, effectiveMaxFiles, params.focus_paths, config);
-        const { surface } = detected;
+        const forcedStack =
+          params.stack && params.stack !== "auto" ? params.stack : undefined;
+        const stacks = forcedStack ? [forcedStack] : profile.likelyStacks;
+        const detected = await detectSurface(
+          root,
+          effectiveMaxFiles,
+          params.focus_paths,
+          stacks,
+          config,
+        );
+        const { surface, surfaces, surfaces_truncated, coverage_gaps, priority_paths } = detected;
         const safeSurface = {
           entrypoints: redactedSecretPaths(surface.entrypoints),
           auth_related: redactedSecretPaths(surface.auth_related),
@@ -186,6 +876,19 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           api_routes: redactedSecretPaths(surface.api_routes),
           data_layer_hints: redactedSecretPaths(surface.data_layer_hints),
         };
+        const safeSurfaces = redactTypedSurfaces(surfaces);
+        const safeGaps = redactCoverageGaps(coverage_gaps);
+        const safePriorityPaths = redactedSecretPaths(priority_paths);
+
+        // Unsupported-stack honesty: flag recognizable-but-uncovered stacks so
+        // agents degrade to a limited generic review instead of claiming coverage.
+        const unsupported = unsupportedSignalsForEntries(profile.topLevelEntries);
+        await enrichPythonFrameworks(
+          root,
+          unsupported,
+          config.maxFileBytes,
+          config.allowedRoots,
+        );
 
         const packageJson = await readProjectFileIfExists(
           root,
@@ -209,9 +912,6 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           }
         }
 
-        const forcedStack =
-          params.stack && params.stack !== "auto" ? params.stack : undefined;
-        const stacks = forcedStack ? [forcedStack] : profile.likelyStacks;
         // auto: union of profile detection. Forced stack: exclusive focus (no unrelated flags).
         const packPlan = forcedStack
           ? recommendPackPlan(stacks, focusedProfileForStack(forcedStack, profile))
@@ -262,11 +962,32 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           );
         }
 
+        const threat_highlights = threatHighlightsForStacks(stacks, {
+          hasMacOS: profile.hasMacOS,
+        });
+        const security_brief = redactSecurityBrief(
+          buildSecurityBrief({
+            stacks,
+            trust_boundaries,
+            surfaces: safeSurfaces,
+            coverage_gaps: safeGaps,
+            recommended_packs,
+            priority_paths: safePriorityPaths,
+          }),
+        );
+        if (unsupported.length > 0) {
+          security_brief.notes.push(
+            `Unsupported stack(s) detected (${unsupported.map((s) => s.stack).join(", ")}): limited generic review only — no stack-specific packs or surfaces for these stacks.`,
+          );
+        }
+
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}.`,
+          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}${unsupported.length > 0 ? `; unsupported=${unsupported.map((s) => s.stack).join(",")}` : ""}.`,
           stacks,
+          /** Recognizable-but-uncovered stacks (marker-file detected). Limited generic review only. */
+          unsupported_signals: unsupported,
           detection: {
             hasExpo: profile.hasExpo,
             hasMacOS: profile.hasMacOS,
@@ -275,7 +996,29 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           },
           top_level: redactedSecretPaths(profile.topLevelEntries),
           top_level_truncated: profile.topLevelEntriesTruncated,
+          /** Legacy path buckets for existing agents. Prefer `surfaces` for prioritization. */
           surface: safeSurface,
+          /** Typed high-value surface inventory (kind, exposure, auth expectation, paths). */
+          surfaces: safeSurfaces,
+          /** True when SURFACE_KIND_CAP dropped later surface kinds (mixed monorepos). */
+          surfaces_truncated,
+          /**
+           * High-value surfaces without category-detector evidence yet.
+           * After auth/injection/secrets tools, sample zero-hit surface files and reconcile.
+           */
+          coverage_gaps: safeGaps,
+          /** Suggested focus_paths / manual sample order for follow-up category or revalidation work. */
+          priority_paths: safePriorityPaths,
+          /**
+           * Compact security brief derived from architecture fields only (no extra walks).
+           * Retain this as the agent-side project brief through the rest of the audit.
+           */
+          security_brief,
+          /**
+           * Advisory stack-gated shortlist lifted from pack titles.
+           * Not a finding list and not a substitute for category tools.
+           */
+          threat_highlights,
           coverage: redactCoverageReport(detected.coverage),
           files_reviewed: [],
           trust_boundaries,
@@ -301,6 +1044,22 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           ],
           notes: [
             "Defensive architecture review for control placement and remediation planning.",
+            "Retain surfaces, coverage_gaps, priority_paths, security_brief, and threat_highlights as the architecture-as-brief artifact.",
+            "threat_highlights is an advisory shortlist gated by detected/forced stacks — not findings and not a noise tier.",
+            ...(unsupported.length > 0
+              ? [
+                  `Unsupported stack(s) detected: ${unsupported
+                    .map((s) =>
+                      s.frameworks.length > 0 ? `${s.stack} (${s.frameworks.join(", ")})` : s.stack,
+                    )
+                    .join(", ")}. This review degrades to core/secrets/threat-model; report a limited generic review, not full stack coverage.`,
+                ]
+              : []),
+            ...(surfaces_truncated
+              ? [
+                  "surface kind cap reached; some later stacks' surfaces were dropped — run architecture per deployable package root for a mixed monorepo.",
+                ]
+              : []),
             pack_batches.length > 1
               ? `Load knowledge in ${pack_batches.length} get_knowledge_pack calls using pack_batches (max 6 ids each); start with pack_batches[0], detail=summary.`
               : "Load knowledge via secure_mcp_get_knowledge_pack(pack_ids=pack_batches[0] or recommended_packs) with detail=summary first.",
@@ -308,30 +1067,82 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           ],
         };
 
-        const md = [
-          `# Architecture overview`,
-          "",
-          `**Root:** ${escapeMarkdown(root)}`,
-          `**Stacks:** ${escapeMarkdown(stacks.join(", "))}`,
-          `**Recommended packs:** ${escapeMarkdown(recommended_packs.join(", "))}`,
-          `**Pack batches:** ${escapeMarkdown(pack_batches.map((b, i) => `[${i}] ${b.join(", ")}`).join(" · "))}`,
-          "",
-          `## Trust boundaries`,
-          ...trust_boundaries.map((t) => `- ${t}`),
-          "",
-          `## Auth-related paths (${surface.auth_related.length})`,
-          ...safeSurface.auth_related.slice(0, 20).map((p) => `- ${escapeMarkdown(p)}`),
-          "",
-          `## API / route surface (${surface.api_routes.length})`,
-          ...safeSurface.api_routes.slice(0, 20).map((p) => `- ${escapeMarkdown(p)}`),
-          "",
-          `## Next: load packs then category tools`,
-          ...pack_batches.map(
-            (batch, i) =>
-              `- \`secure_mcp_get_knowledge_pack\` batch ${i}: pack_ids=[${batch.map((p) => `"${p}"`).join(", ")}]`,
-          ),
-          ...data.next_tools.slice(1).map((t) => `- \`${t}\``),
-        ].join("\n");
+        const md = renderMarkdownDocument({
+          title: "Architecture overview",
+          metadata: [
+            { label: "Root", value: root },
+            { label: "Stacks", value: stacks.join(", ") },
+            { label: "Recommended packs", value: recommended_packs.join(", ") },
+            {
+              label: "Pack batches",
+              value: pack_batches.map((batch, i) => `[${i}] ${batch.join(", ")}`).join(" · "),
+            },
+            {
+              label: "Typed surfaces",
+              value: String(safeSurfaces.length),
+            },
+            {
+              label: "Coverage gaps",
+              value: String(safeGaps.length),
+            },
+          ],
+          sections: [
+            { heading: "Trust boundaries", bullets: trust_boundaries },
+            {
+              heading: `High-value surfaces (${safeSurfaces.filter((s) => HIGH_VALUE_KINDS.has(s.kind)).length})`,
+              bullets: safeSurfaces
+                .filter((s) => HIGH_VALUE_KINDS.has(s.kind))
+                .slice(0, 12)
+                .map(
+                  (s) =>
+                    `${s.kind} (${s.exposure}): ${s.paths.slice(0, 3).join(", ") || "(no paths)"} — ${s.auth_expectation}`,
+                ),
+            },
+            {
+              heading: `Coverage gaps (${safeGaps.length})`,
+              bullets: safeGaps.slice(0, 12).map(
+                (g) =>
+                  `${g.kind}: ${g.paths.slice(0, 2).join(", ") || "(none)"} — sample after category tools (${g.suggested_tools.join(", ")})`,
+              ),
+            },
+            {
+              heading: `Priority paths (${safePriorityPaths.length})`,
+              bullets: safePriorityPaths.slice(0, 16),
+            },
+            {
+              heading: "Security brief",
+              bullets: [
+                `High-value surface count: ${security_brief.high_value_surfaces.length}`,
+                `Coverage gap count: ${security_brief.coverage_gap_count}`,
+                ...security_brief.notes,
+              ],
+            },
+            {
+              heading: `Threat highlights (${threat_highlights.length}, advisory)`,
+              bullets: threat_highlights.map(
+                (item) => `[${item.stack}/${item.pack_id}] ${item.text}`,
+              ),
+            },
+            {
+              heading: `Auth-related paths (${surface.auth_related.length})`,
+              bullets: safeSurface.auth_related.slice(0, 20),
+            },
+            {
+              heading: `API / route surface (${surface.api_routes.length})`,
+              bullets: safeSurface.api_routes.slice(0, 20),
+            },
+            {
+              heading: "Next: load packs then category tools",
+              bullets: [
+                ...pack_batches.map(
+                  (batch, i) =>
+                    `secure_mcp_get_knowledge_pack batch ${i}: pack_ids=[${batch.map((pack) => `"${pack}"`).join(", ")}]`,
+                ),
+                ...data.next_tools.slice(1),
+              ],
+            },
+          ],
+        });
 
         return toolSuccess(data, {
           responseFormat: params.response_format,

@@ -30,7 +30,7 @@ const transport = new StdioClientTransport({
   cwd: root,
   env,
 });
-const client = new Client({ name: "capture", version: "1.0.0" });
+const client = new Client({ name: "capture", version: "2.0.0" });
 await client.connect(transport);
 
 function textOf(result) {

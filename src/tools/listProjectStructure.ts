@@ -6,16 +6,14 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 import {
-  finalizeInventoryCoverage,
   normalizeAuthorizedProjectRoot,
   profileProject,
-  toolError,
-  toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
 import { redactCoverageReport, redactedSecretPaths } from "../lib/redact.js";
-import { escapeMarkdown, markdownCode } from "../lib/markdown.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
 import { ProjectRootInput } from "../knowledge/findings-schema.js";
 
 const InputSchema = ProjectRootInput.extend({
@@ -43,31 +41,47 @@ function toMarkdown(data: {
   sample_files: string[];
   truncated: boolean;
 }): string {
-  const lines: string[] = [
-    `# Project structure: ${escapeMarkdown(data.project_root)}`,
-    "",
-    "## Profile",
-    `- Stacks: ${data.profile.likelyStacks.join(", ")}`,
-    `- TypeScript files: ${data.profile.hasTypeScriptFiles}`,
-    `- Next.js signals: ${data.profile.hasNextConfig}`,
-    `- Swift signals: ${data.profile.hasSwiftFiles}`,
-    `- Top-level entry preview truncated: ${data.profile.topLevelEntriesTruncated}`,
-    "",
-    "## Top-level entries",
-    ...redactedSecretPaths(data.profile.topLevelEntries).map((e) => `- ${escapeMarkdown(e)}`),
-    "",
-    `## Files scanned: ${data.file_count}${data.truncated ? " (truncated)" : ""}`,
-    "",
-    "### By extension",
-  ];
-  for (const [ext, count] of Object.entries(data.by_extension).sort((a, b) => b[1] - a[1])) {
-    lines.push(`- ${markdownCode(ext || "(none)")}: ${count}`);
-  }
-  lines.push("", "### Sample paths");
-  for (const f of redactedSecretPaths(data.sample_files).slice(0, 40)) {
-    lines.push(`- ${escapeMarkdown(f)}`);
-  }
-  return lines.join("\n");
+  return renderMarkdownDocument({
+    title: `Project structure: ${data.project_root}`,
+    sections: [
+      {
+        heading: "Profile",
+        fields: [
+          { label: "Stacks", value: data.profile.likelyStacks.join(", ") },
+          { label: "TypeScript files", value: String(data.profile.hasTypeScriptFiles) },
+          { label: "Next.js signals", value: String(data.profile.hasNextConfig) },
+          { label: "Swift signals", value: String(data.profile.hasSwiftFiles) },
+          {
+            label: "Top-level entry preview truncated",
+            value: String(data.profile.topLevelEntriesTruncated),
+          },
+        ],
+      },
+      {
+        heading: "Top-level entries",
+        bullets: redactedSecretPaths(data.profile.topLevelEntries),
+      },
+      {
+        heading: `Files scanned: ${data.file_count}${data.truncated ? " (truncated)" : ""}`,
+      },
+      {
+        heading: "By extension",
+        level: 3,
+        fields: Object.entries(data.by_extension)
+          .sort((a, b) => b[1] - a[1])
+          .map(([extension, count]) => ({
+            label: extension || "(none)",
+            value: String(count),
+            labelCode: true,
+          })),
+      },
+      {
+        heading: "Sample paths",
+        level: 3,
+        bullets: redactedSecretPaths(data.sample_files).slice(0, 40),
+      },
+    ],
+  });
 }
 
 export function registerListProjectStructure(
@@ -140,7 +154,7 @@ Error Handling:
             ? new Set(params.include_extensions.map((e) => (e.startsWith(".") ? e : `.${e}`)))
             : undefined;
 
-        const { files, truncated, coverage } = await walkProject(root, {
+        const { files, truncated, coverageSession } = await walkProject(root, {
           maxFiles: effectiveMaxFiles,
           maxDepth: effectiveMaxDepth,
           maxFileBytes: config.maxFileBytes,
@@ -178,9 +192,7 @@ Error Handling:
           by_extension,
           sample_files: redactedSecretPaths(sample_files),
           truncated,
-          coverage: redactCoverageReport(
-            finalizeInventoryCoverage(coverage, files.map((file) => file.relativePath)),
-          ),
+          coverage: redactCoverageReport(coverageSession.finish()),
           files_reviewed: [],
         };
 

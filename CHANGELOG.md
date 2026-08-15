@@ -2,18 +2,27 @@
 
 Notable changes to secure-mcp are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 2.0.0 — 2026-08-12
 
 ### Changed
 
-- Migrated to MCP spec `2026-07-28` (stateless protocol core) via SDK v2: `@modelcontextprotocol/server` and `@modelcontextprotocol/client` replace the monolithic `@modelcontextprotocol/sdk`, and Zod moved to v4. No handshake or session state; each request is self-contained. Legacy clients (pre-2026-07-28) remain supported through the SDK's backward-compatible fallback.
-- Documented npm-first install (`npx` / global bin) alongside the clone development path.
-- Routed vulnerability reports to private GitHub Security Advisories instead of public issues.
-- Added Contributor Covenant code of conduct and clarified support vs security channels.
-- Clarified that npm `@brdndon/secure-mcp@1.0.0` ships MCP SDK v1 while the default branch may already include SDK v2 (Unreleased).
-- Linked the bug report template directly to Security Advisories (not only SECURITY.md by name).
-- Renamed the README protocol section to cover npm SDK v1 vs default-branch SDK v2 without a v2-only heading.
-- Added a Security Advisories contact link on the GitHub issue chooser (`contact_links`).
+- Became a strict MCP v2 project: protocol revision `2026-07-28` only, served via `serveStdio` with `legacy: "reject"`. Legacy 2025-era `initialize` openings are rejected with the SDK's unsupported-protocol-version error; there is no SDK v1 dependency or compatibility fallback.
+- Set the package, server-reported version, changelog, registry metadata, and future tag identity to `2.0.0`.
+- Made clone + build + `install-agents` the primary onboarding path. The README, docs site, help page, and `llms.txt` now lead with the checkout, skill, installer, fixtures, and source.
+- Documented npm as a server-only fallback that targets `@brdndon/secure-mcp@2` explicitly and intentionally excludes the skill, installer, fixtures, and source.
+- Hardened `scripts/install-agents.sh` with an ownership marker, refusal to overwrite conflicting non-owned entries or skills, and verified temp-home install/check/uninstall behavior.
+- Added `scripts/install-agents.ps1`, a Windows installer with equivalent ownership and safety behavior, plus cross-platform installer integration coverage.
+- Added a nonpublishing npm tarball E2E test that installs the packed artifact in a temporary consumer directory, checks the `secure-mcp` bin, and connects with the MCP v2 client pinned to `2026-07-28`.
+- Added a documented client compatibility and configuration matrix for Codex, Cursor, Claude Desktop, Claude Code, VS Code / GitHub Copilot, pi, and generic stdio clients. The server does not claim compatibility with clients that have not adopted `2026-07-28`.
+- Added MCP Registry metadata (`server.json` with `io.github.brbndon/secure-mcp`, matching `mcpName` in `package.json`) and deterministic consistency validation in the test and release gates.
+- Added a manual-only, OIDC trusted-publishing release workflow that refuses non-`main`, non-canonical-repository runs and verifies identity, tag, and changelog before publishing.
+- Expanded CI to Linux, macOS, and Windows, including Bash and PowerShell installer tests, protocol tests, package E2E, and documentation checks.
+- Updated the security policy so 2.x is supported and 1.x is historical and unsupported.
+
+### Fixed
+
+- Removed claims that legacy SDK v1 clients continue to work and stale `1.0.0` server identity outside the historical changelog.
+- Replaced shell-only cleanup in package scripts with cross-platform Node cleanup.
 
 ## 1.0.0 — 2026-08-09
 

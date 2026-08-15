@@ -4,8 +4,8 @@ Guidance for coding agents that modify this repository.
 
 ## Product constraints
 
-- Local **stdio** MCP only (v1)
-- TypeScript + official `@modelcontextprotocol/sdk`
+- Local **stdio** MCP only, strict protocol revision `2026-07-28` (`legacy: "reject"`)
+- TypeScript + official MCP SDK v2 (`@modelcontextprotocol/server`, `@modelcontextprotocol/client`)
 - Open source under Apache-2.0
 - **Defensive secure-code-review framing only** — identify weaknesses, classify, remediate
 - Keep code clear and commented—the owner is learning and multiple agents collaborate
@@ -27,13 +27,16 @@ pnpm build
 pnpm smoke
 ```
 
-Install the master skill and MCP client wiring for pi / Claude Code / Cursor / Codex:
+Install the master skill and MCP client wiring for pi / Cursor / Codex:
 
 ```bash
 ./scripts/install-agents.sh install    # idempotent; re-run any time
 ./scripts/install-agents.sh check     # verify symlinks, configs, server startup
 ./scripts/install-agents.sh uninstall
 ```
+
+Windows uses the equivalent `scripts/install-agents.ps1`. The installer never
+overwrites conflicting non-owned entries or skills.
 
 ## Code map
 
@@ -44,7 +47,7 @@ Install the master skill and MCP client wiring for pi / Claude Code / Cursor / C
 | `src/tools/` | One tool per file + `index.ts` registration |
 | `src/knowledge/packs/` | Named packs + registry / stack routing |
 | `src/knowledge/common.ts` etc. | Scan patterns + re-exports of pack checklists |
-| `scripts/install-agents.sh` | Idempotent install/check/uninstall of the master skill symlinks + MCP client configs (pi, Claude Code, Cursor, Codex) |
+| `scripts/install-agents.sh` / `install-agents.ps1` | Idempotent install/check/uninstall of the master skill links + MCP client configs (pi, Cursor, Codex) |
 | `agents/codex.toml` | OpenAI Codex agent manifest copied to `~/.codex/agents/secure-mcp.toml` by the install script |
 | `src/lib/filesystem.ts` | Safe FS walk/read/helpers + stack profiling |
 | `src/lib/types.ts` | Shared TS types |
@@ -101,7 +104,9 @@ Aim ~10–13 checklist items per pack (a full five-pack recommendation must fit 
 ## Testing
 
 - `pnpm verify` — typecheck + unit tests + build + smoke
-- `pnpm test` — pack registry, stack profiling, and auth-heuristic unit tests
+- `pnpm test` — unit tests, registry metadata checks, and strict v2 protocol tests
+- `pnpm test:installer` — temp-home integration tests for the Bash/PowerShell installers
+- `pnpm test:package` — nonpublishing npm tarball E2E against a temporary consumer
 - `pnpm smoke` — client connect + tool calls against `fixtures/` (Next, Expo, non-Expo `app.json`)
 - Manual: MCP Inspector with `SECURE_MCP_ALLOWED_ROOTS` set to a test fixture or repository
 

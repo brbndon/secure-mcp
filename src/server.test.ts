@@ -208,7 +208,7 @@ describe("server configuration and stack scoping", () => {
     }
   });
 
-  it("does not add Next.js injection detectors to explicit TypeScript scans", () => {
+  it("adds Next.js injection detectors only for nextjs focus or detected nextjs", () => {
     assert.equal(shouldRunNextjsInjectionDetectors("typescript"), false);
     assert.equal(shouldRunNextjsInjectionDetectors("nextjs"), true);
     assert.equal(shouldRunNextjsInjectionDetectors("auto", ["common", "nextjs"]), true);
@@ -252,8 +252,108 @@ describe("server configuration and stack scoping", () => {
     }
   });
 
+  it("runs common injection detectors for an Expo-focused MCP scan", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-expo-injection-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 10,
+      maxFileBytes: 1024,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+
+    try {
+      await fs.writeFile(
+        path.join(root, "App.tsx"),
+        "export const run = (input: string) => eval(input);\n",
+        "utf8",
+      );
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_injection_risks",
+        arguments: { project_root: root, stack: "expo", response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        findings: Array<{ root_control?: string }>;
+        applied_pack_ids: string[];
+        coverage: {
+          files_reviewed: string[];
+          review_basis: string;
+          scan_status: string;
+          not_observed_means: string;
+        };
+        knowledge_pack_traceability: { detector_families_run: string[] };
+      };
+      assert.ok(data.findings.some((finding) => finding.root_control === "INJ-EVAL"));
+      assert.ok(data.applied_pack_ids.includes("core"));
+      assert.ok(data.knowledge_pack_traceability.detector_families_run.includes("core.injection"));
+      assert.deepEqual(data.coverage.files_reviewed, ["App.tsx"]);
+      assert.equal(data.coverage.review_basis, "content_review");
+      assert.equal(data.coverage.scan_status, "complete");
+      assert.equal(data.coverage.not_observed_means, "no_candidate_in_files_reviewed");
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not issue content-review receipts when no injection detector applies", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-injection-receipt-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 10,
+      maxFileBytes: 1024,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+
+    try {
+      await fs.writeFile(path.join(root, "App.tsx"), "export const safe = true;\n", "utf8");
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_injection_risks",
+        arguments: { project_root: root, stack: "swift", response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const coverage = (result.structuredContent as {
+        coverage: {
+          excluded_paths: Array<{ path: string; reason: string }>;
+          files_reviewed: string[];
+          review_basis: string;
+          scan_status: string;
+          not_observed_means: string;
+        };
+      }).coverage;
+      assert.deepEqual(coverage.files_reviewed, []);
+      assert.equal(coverage.review_basis, "inventory_only");
+      assert.equal(coverage.scan_status, "partial");
+      assert.equal(coverage.not_observed_means, "inventory_only_contents_not_reviewed");
+      assert.ok(
+        coverage.excluded_paths.some(
+          (entry) =>
+            entry.path === "App.tsx" && entry.reason === "no_applicable_injection_detectors",
+        ),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("applies caller file caps to profiling and redacts inventory paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-inventory-boundary-"));
+    const githubToken = `ghp_${"B".repeat(32)}`;
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), `secure-mcp-inventory-${githubToken}-`),
+    );
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createServer({
       name: "secure-mcp-test",
@@ -306,6 +406,8 @@ describe("server configuration and stack scoping", () => {
       assert.ok(markdownInventory);
       assert.ok(!markdownInventory.text.includes(".env.production"));
       assert.ok(!markdownInventory.text.includes("server.pem"));
+      assert.ok(!markdownInventory.text.replaceAll("\\", "").includes(githubToken));
+      assert.ok(!JSON.stringify(markdownInventoryResult.structuredContent).includes(githubToken));
 
       const architectureResult = await client.callTool({
         name: "secure_mcp_analyze_architecture",
@@ -353,6 +455,371 @@ describe("server configuration and stack scoping", () => {
     } finally {
       await client.close();
       await server.close();
+    }
+  });
+});
+
+describe("architecture typed surfaces", () => {
+  it("returns typed surfaces, coverage gaps, priority paths, and security brief", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-surfaces-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 50,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "fixture-next",
+          dependencies: { next: "15.0.0", react: "19.0.0" },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "next.config.js"), "module.exports = {};\n", "utf8");
+      await fs.mkdir(path.join(root, "app", "api", "items"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "items", "route.ts"),
+        "export async function GET() { return Response.json({}); }\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(root, "app", "page.tsx"),
+        "export default function Page() { return null; }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "app", "account"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "app", "account", "page.tsx"),
+        "export default function AccountPage() { return null; }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "pages"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "pages", "dashboard.tsx"),
+        "export default function Dashboard() { return null; }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "app", "api", "keys"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "keys", "service-account.json"),
+        "{}",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(root, "middleware.ts"),
+        "export function middleware() {}\n",
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "app.json"), JSON.stringify({ expo: {} }), "utf8");
+      await fs.mkdir(path.join(root, "components"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "components", "page.tsx"),
+        "export default function Component() { return null; }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "lib"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "lib", "auth.ts"),
+        "export function requireUser() {}\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "app", "api", "webhooks", "stripe"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "webhooks", "stripe", "route.ts"),
+        "export async function POST() { return Response.json({}); }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "app", "api", "cron"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "app", "api", "cron", "route.ts"),
+        "export async function GET() { return Response.json({}); }\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "mcp"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "mcp", "tools.ts"),
+        "export async function lookup() {}\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "tools"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "src", "tools", "build-helper.ts"),
+        "export function helper() {}\n",
+        "utf8",
+      );
+      await fs.mkdir(path.join(root, "src", "trpc"), { recursive: true });
+      await fs.writeFile(path.join(root, "src", "trpc", "router.ts"), "export const router = {};\n", "utf8");
+      await fs.mkdir(path.join(root, "src", "workers"), { recursive: true });
+      await fs.writeFile(path.join(root, "src", "workers", "ingest.ts"), "export async function ingest() {}\n", "utf8");
+
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_architecture",
+        arguments: { project_root: root, stack: "nextjs", max_files: 50, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        stacks: string[];
+        surface: Record<string, string[]>;
+        surfaces: Array<{
+          kind: string;
+          exposure: string;
+          paths: string[];
+          auth_expectation: string;
+        }>;
+        surfaces_truncated: boolean;
+        coverage_gaps: Array<{ kind: string; paths: string[]; suggested_tools: string[] }>;
+        priority_paths: string[];
+        security_brief: {
+          stacks: string[];
+          coverage_gap_count: number;
+          high_value_surfaces: unknown[];
+          priority_paths: string[];
+        };
+        threat_highlights: Array<{ stack: string; pack_id: string; id: string; text: string }>;
+        trust_boundaries: string[];
+      };
+
+      assert.ok(data.stacks.includes("nextjs"));
+      assert.ok(Array.isArray(data.surface.api_routes));
+      assert.ok(data.surfaces.length > 0);
+      assert.equal(data.surfaces_truncated, false);
+      assert.ok(data.surfaces.some((s) => s.kind === "http_route"));
+      assert.ok(data.surfaces.some((s) => s.kind === "middleware" || s.kind === "auth_surface"));
+      assert.ok(data.surfaces.some((s) => s.kind === "webhook"));
+      assert.ok(data.surfaces.some((s) => s.kind === "cron"));
+      assert.ok(data.surfaces.some((s) => s.kind === "agent_tool"));
+      const agentToolSurface = data.surfaces.find((s) => s.kind === "agent_tool");
+      assert.ok(agentToolSurface?.paths.includes("src/mcp/tools.ts"));
+      assert.ok(
+        !agentToolSurface?.paths.some((p) => p.includes("src/tools/")),
+        "generic src/tools trees must not be classified as agent_tool",
+      );
+      assert.ok(data.surfaces.some((s) => s.kind === "rpc"));
+      assert.ok(data.surfaces.some((s) => s.kind === "queue"));
+      for (const surface of data.surfaces) {
+        assert.ok(surface.auth_expectation.length > 0);
+        assert.ok(["public", "internal", "unknown"].includes(surface.exposure));
+        // stack-honest: nextjs forced should not invent pure mobile-only kinds without paths
+        assert.ok(!["deep_link", "webview", "secure_storage"].includes(surface.kind));
+      }
+      const pageEntry = data.surfaces.find((s) => s.kind === "page_entry");
+      assert.ok(pageEntry);
+      assert.ok(!pageEntry.paths.includes("components/page.tsx"));
+      assert.ok(pageEntry.paths.includes("src/app/account/page.tsx"));
+      assert.ok(pageEntry.paths.includes("src/pages/dashboard.tsx"));
+      const authSurface = data.surfaces.find((s) => s.kind === "auth_surface");
+      assert.equal(authSurface?.exposure, "unknown");
+      assert.ok(!JSON.stringify(data).includes("service-account.json"));
+      assert.ok(JSON.stringify(data).includes("[redacted-secret-file]"));
+      assert.ok(data.coverage_gaps.length > 0);
+      assert.ok(
+        data.coverage_gaps.every((gap) =>
+          /architecture inventory only.*after auth\/injection\/secrets tools/i.test(
+            (gap as { reason?: string }).reason ?? "",
+          ),
+        ),
+      );
+      assert.ok(data.priority_paths.length > 0);
+      assert.ok(data.security_brief.coverage_gap_count === data.coverage_gaps.length);
+      assert.ok(data.security_brief.high_value_surfaces.length > 0);
+      assert.ok(data.trust_boundaries.length > 0);
+      assert.ok(data.threat_highlights.some((item) => item.id === "NEXT-MIDDLEWARE-AUTH"));
+      assert.ok(!data.threat_highlights.some((item) => item.pack_id === "swift-ios"));
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not invent Next-only surfaces for a Swift root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-swift-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 40,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await fs.writeFile(path.join(root, "Package.swift"), "// swift-tools-version: 5.9\n", "utf8");
+      await fs.writeFile(path.join(root, "App.swift"), "import SwiftUI\n@main struct App {}\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "KeychainStore.swift"),
+        "import Security\nenum KeychainStore {}\n",
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "app.json"), JSON.stringify({ expo: { name: "x" } }), "utf8");
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_architecture",
+        arguments: { project_root: root, stack: "swift", max_files: 40, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        stacks: string[];
+        surfaces: Array<{ kind: string }>;
+        threat_highlights: Array<{ stack: string; pack_id: string; text: string }>;
+      };
+      assert.ok(data.stacks.includes("swift"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "server_action"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "middleware"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "page_entry"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "deep_link"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "webhook"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "cron"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "agent_tool"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "rpc"));
+      assert.ok(!data.surfaces.some((s) => s.kind === "queue"));
+      assert.ok(data.threat_highlights.some((item) => item.pack_id === "swift-ios"));
+      assert.ok(!data.threat_highlights.some((item) => item.stack === "nextjs"));
+      assert.ok(!data.threat_highlights.some((item) => /server action|middleware/i.test(item.text)));
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps every typed path honest for forced stacks in a mixed tree", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-mixed-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 80,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ dependencies: { next: "15.0.0", expo: "53.0.0" } }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "next.config.js"), "module.exports = {};\n", "utf8");
+      await fs.writeFile(path.join(root, "app.json"), JSON.stringify({ expo: { name: "x" } }), "utf8");
+      await fs.writeFile(path.join(root, "Package.swift"), "// swift-tools-version: 5.9\n", "utf8");
+      await fs.mkdir(path.join(root, "src", "app", "login"), { recursive: true });
+      await fs.writeFile(path.join(root, "src", "app", "login", "page.tsx"), "export default 1;\n", "utf8");
+      await fs.writeFile(path.join(root, "App.tsx"), "export default function App() {}\n", "utf8");
+      await fs.writeFile(path.join(root, "Linking.ts"), "export const redirect = 'app://callback';\n", "utf8");
+      await fs.writeFile(path.join(root, "App.swift"), "import SwiftUI\n@main struct App {}\n", "utf8");
+      await fs.writeFile(path.join(root, "KeychainStore.swift"), "import Security\n", "utf8");
+
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const expectations = {
+        nextjs: {
+          included: ["src/app/login/page.tsx"],
+          excluded: ["App.tsx", "Linking.ts", "App.swift", "KeychainStore.swift", "Package.swift", "app.json"],
+        },
+        typescript: {
+          included: ["package.json"],
+          excluded: ["App.swift", "KeychainStore.swift", "Package.swift", "app.json", "next.config.js"],
+        },
+        swift: {
+          included: ["App.swift", "KeychainStore.swift", "Package.swift"],
+          excluded: ["App.tsx", "Linking.ts", "package.json", "app.json", "next.config.js"],
+        },
+        expo: {
+          included: ["App.tsx", "Linking.ts", "package.json", "app.json"],
+          excluded: ["App.swift", "KeychainStore.swift", "Package.swift", "next.config.js"],
+        },
+      } as const;
+
+      for (const [stack, expected] of Object.entries(expectations)) {
+        const result = await client.callTool({
+          name: "secure_mcp_analyze_architecture",
+          arguments: { project_root: root, stack, max_files: 80, response_format: "json" },
+        });
+        assert.equal(result.isError, undefined);
+        const data = result.structuredContent as {
+          surface: Record<string, string[]>;
+          surfaces: Array<{ kind: string; paths: string[]; stacks: string[] }>;
+        };
+        const typedPaths = [...new Set(data.surfaces.flatMap((surface) => surface.paths))];
+        for (const included of expected.included) {
+          assert.ok(typedPaths.includes(included), `${stack} should include ${included}`);
+        }
+        for (const excluded of expected.excluded) {
+          assert.ok(!typedPaths.includes(excluded), `${stack} should exclude ${excluded}`);
+        }
+        assert.ok(
+          data.surfaces.every((surface) => surface.stacks.length === 1 && surface.stacks[0] === stack),
+        );
+        // The legacy buckets remain additive and stack-neutral for compatibility.
+        assert.ok(Object.values(data.surface).flat().includes("KeychainStore.swift"));
+      }
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("caps typed surface path lists and priority paths", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-arch-caps-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 100,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "cap-fixture", dependencies: { next: "15.0.0" } }),
+        "utf8",
+      );
+      for (let i = 0; i < 15; i += 1) {
+        await fs.mkdir(path.join(root, "app", "api", `items-${i}`), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "app", "api", `items-${i}`, "route.ts"),
+          "export async function GET() { return Response.json({}); }\n",
+          "utf8",
+        );
+      }
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_analyze_architecture",
+        arguments: { project_root: root, stack: "nextjs", max_files: 100, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        surfaces: Array<{ kind: string; paths: string[] }>;
+        coverage_gaps: Array<{ paths: string[] }>;
+        priority_paths: string[];
+      };
+      const httpRoutes = data.surfaces.find((s) => s.kind === "http_route");
+      assert.ok(httpRoutes);
+      assert.ok(httpRoutes.paths.length <= 12);
+      assert.ok(data.coverage_gaps.every((gap) => gap.paths.length <= 6));
+      assert.ok(data.surfaces.length <= 20);
+      assert.ok(data.surfaces.every((surface) => surface.paths.length <= 12));
+      assert.ok(data.coverage_gaps.length <= 16);
+      assert.ok(data.priority_paths.length <= 24);
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

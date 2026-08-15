@@ -6,12 +6,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { loadConfig, type ServerConfig } from "../config.js";
+import { toolError, toolSuccess } from "../lib/envelope.js";
 import {
-  finalizeInventoryCoverage,
   normalizeAuthorizedProjectRoot,
   profileProject,
-  toolError,
-  toolSuccess,
   walkProject,
 } from "../lib/filesystem.js";
 import {
@@ -20,14 +18,16 @@ import {
   redactedSecretPath,
   redactedSecretPaths,
 } from "../lib/redact.js";
-import { escapeMarkdown } from "../lib/markdown.js";
+import { renderMarkdownDocument } from "../lib/markdown.js";
 import {
   buildFinding,
   createFindingIdFactory,
   ProjectRootInput,
+  StackFocusSchema,
 } from "../knowledge/findings-schema.js";
 import {
-  recommendPackIds,
+  recommendCategoryPackIds,
+  uniquePackIds,
   type PackId,
 } from "../knowledge/packs/registry.js";
 import type { Finding, StackFocus } from "../lib/types.js";
@@ -233,19 +233,58 @@ function pathMatchesInventory(component: string, inventoryPath: string): boolean
 /** Pack ids claimed by the threat-model tool for the active stacks. */
 export function threatModelPackIds(stacks: readonly string[]): PackId[] {
   const stackFocus = stacks.filter((s): s is StackFocus =>
-    ["common", "typescript", "nextjs", "swift", "expo"].includes(s),
+    StackFocusSchema.options.includes(s as StackFocus),
   );
-  const recommended = recommendPackIds(stackFocus.length ? stackFocus : ["common"]);
-  const ids = new Set<PackId>(["threat-model", "core"]);
-  for (const id of recommended) {
-    if (id === "threat-model" || id === "core" || id === "secrets") ids.add(id);
-    if (stackFocus.includes("nextjs") && (id === "web-next" || id === "auth-web" || id === "web-api")) {
-      ids.add(id);
-    }
-    if (stackFocus.includes("swift") && (id === "swift-ios" || id === "apple-desktop")) ids.add(id);
-    if (stackFocus.includes("expo") && id === "expo-rn") ids.add(id);
+  const routedStacks: StackFocus[] = stackFocus.length ? stackFocus : ["common"];
+  const categories = stackFocus.includes("nextjs")
+    ? ["authentication", "authorization", "secrets", "injection-risk", "configuration", "privacy"]
+    : ["secrets"];
+  const recommended = recommendCategoryPackIds(routedStacks, categories);
+  return uniquePackIds(["threat-model", "core", ...recommended]);
+}
+
+export const THREAT_MODEL_DETECTOR_FAMILIES = [
+  "threat-model.stride",
+  "web-next.stride",
+  "swift-ios.stride",
+] as const;
+export type ThreatModelDetectorFamily = (typeof THREAT_MODEL_DETECTOR_FAMILIES)[number];
+
+const PACK_ID_BY_THREAT_FAMILY: Record<ThreatModelDetectorFamily, PackId> = {
+  "threat-model.stride": "threat-model",
+  "web-next.stride": "web-next",
+  "swift-ios.stride": "swift-ios",
+};
+
+/**
+ * Families whose stack-gated STRIDE fragments were actually emitted.
+ * Generic STRIDE is always applied; Next/Swift families only when those
+ * stacks contributed threat content.
+ */
+export function threatModelFamiliesForStacks(
+  stacks: readonly string[],
+): ThreatModelDetectorFamily[] {
+  const families: ThreatModelDetectorFamily[] = ["threat-model.stride"];
+  // Next-specific STRIDE fragments are emitted only when Next is actually
+  // detected/forced. A generic TypeScript root must not claim web-next in
+  // applied_pack_ids (its consulted routing also omits web-next).
+  if (stacks.includes("nextjs")) {
+    families.push("web-next.stride");
   }
-  return ["threat-model", "core", ...recommended.filter((id) => ids.has(id) && id !== "threat-model" && id !== "core")];
+  if (stacks.includes("swift")) families.push("swift-ios.stride");
+  return families;
+}
+
+/** Packs behind emitted threat-model families (content-true, not merely routed). */
+export function appliedThreatModelPackIds(evaluatedFamilies: readonly string[]): PackId[] {
+  const set = new Set(evaluatedFamilies);
+  const ids: PackId[] = [];
+  for (const family of THREAT_MODEL_DETECTOR_FAMILIES) {
+    if (!set.has(family)) continue;
+    const packId = PACK_ID_BY_THREAT_FAMILY[family];
+    if (packId && !ids.includes(packId)) ids.push(packId);
+  }
+  return ids;
 }
 
 function buildThreats(
@@ -321,7 +360,7 @@ function buildThreats(
       "Re-run secrets review tools; confirm .gitignore and env policy; check client bundles for leaked keys.",
   });
 
-  if (stacks.includes("nextjs") || stacks.includes("typescript")) {
+  if (stacks.includes("nextjs")) {
     push({
       stride: "E",
       title: "Incomplete Next.js boundary checks (middleware-only protection)",
@@ -462,7 +501,7 @@ function buildThreats(
   return threats;
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: produce STRIDE-oriented remediation threat fragments and high-residual finding seeds to prioritise hardening.\n\nArgs: project_root, stack?, focus_area?, assets?, max_files?, focus_paths?, response_format.\nReturns: threats[], finding_seeds (also exposed as findings).\n\nGuidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
+const TOOL_DESCRIPTION = `Defensive tool: produce STRIDE-oriented remediation threat fragments and high-residual finding seeds to prioritise hardening.\n\nArgs: project_root, stack?, focus_area?, assets?, max_files?, focus_paths?, response_format.\nReturns: threats[], finding_seeds (also exposed as findings), applied_pack_ids (packs whose STRIDE fragments were emitted), knowledge_pack_traceability.consulted_pack_ids (routed packs).\n\nGuidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`;
 
 export function registerBuildRemediationThreatModel(
   server: McpServer,
@@ -496,7 +535,7 @@ export function registerBuildRemediationThreatModel(
         const stacks =
           params.stack && params.stack !== "auto" ? [params.stack] : profile.likelyStacks;
 
-        const { files, coverage } = await walkProject(root, {
+        const { files, coverageSession } = await walkProject(root, {
           maxFiles: params.max_files ?? config.defaultMaxFiles,
           maxDepth: config.maxDepth,
           maxFileBytes: config.maxFileBytes,
@@ -585,7 +624,9 @@ export function registerBuildRemediationThreatModel(
           );
 
         const findings = finding_seeds;
-        const applied_pack_ids = threatModelPackIds(stacks);
+        const consulted_pack_ids = threatModelPackIds(stacks);
+        const detectorFamiliesRun = threatModelFamiliesForStacks(stacks);
+        const applied_pack_ids = appliedThreatModelPackIds(detectorFamiliesRun);
 
         const data = {
           ok: true as const,
@@ -596,13 +637,14 @@ export function registerBuildRemediationThreatModel(
           evidence_backed_assets: evidence.assets,
           focus_area: params.focus_area ?? null,
           applied_pack_ids,
+          knowledge_pack_traceability: {
+            consulted_pack_ids,
+            detector_families_run: [...detectorFamiliesRun].sort(),
+            detector_families_not_run: [],
+            consulted_via: "bundled STRIDE templates and routed pack metadata; no remote pack lookup",
+          },
           findings,
-          coverage: redactCoverageReport(
-            finalizeInventoryCoverage(
-              coverage,
-              files.map((file) => file.relativePath),
-            ),
-          ),
+          coverage: redactCoverageReport(coverageSession.finish(findings)),
           evidence,
           boundary_evidence: evidence.boundaries,
           assumptions: evidence.assumptions,
@@ -630,28 +672,41 @@ export function registerBuildRemediationThreatModel(
             "Evidence-backed fields are based on bounded path inventory unless marked caller_supplied or inferred_from_stack.",
             "Do not generate exploits, PoCs, or bypass instructions from these fragments.",
             "Merge confirmed seeds with scan evidence via secure_mcp_produce_findings.",
+            "applied_pack_ids are packs whose STRIDE fragments were emitted; knowledge_pack_traceability.consulted_pack_ids are the routed packs for this stack.",
             "Load the threat-model pack via secure_mcp_get_knowledge_pack when you need the checklist text.",
           ],
         };
 
-        const md = [
-          `# Remediation-focused threat model`,
-          escapeMarkdown(data.summary),
-          "",
-          `## Trust boundaries (for control placement)`,
-          ...data.trust_boundaries.map((b) => `- ${escapeMarkdown(b)}`),
-          "",
-          ...threats.map(
-            (t) =>
-              `## ${escapeMarkdown(t.id)} [${escapeMarkdown(t.stride_label)}] ${escapeMarkdown(t.title)}\n` +
-              `${escapeMarkdown(t.description)}\n` +
-              `- Evidence paths: ${escapeMarkdown(t.evidence_paths?.join(", ") || "none in bounded inventory")}\n` +
-              `- Recommended controls: ${escapeMarkdown(t.recommended_controls.join("; "))}\n` +
-              `- Proof gaps: ${escapeMarkdown(t.proof_gap?.join("; ") || "manual confirmation required")}\n` +
-              `- Residual risk: ${escapeMarkdown(t.residual_risk)}\n` +
-              `- Verify: ${escapeMarkdown(t.verification_suggestion)}\n`,
-          ),
-        ].join("\n");
+        const md = renderMarkdownDocument({
+          title: "Remediation-focused threat model",
+          summary: data.summary,
+          sections: [
+            {
+              heading: "Trust boundaries (for control placement)",
+              bullets: data.trust_boundaries,
+            },
+            ...threats.map((threat) => ({
+              heading: `${threat.id} [${threat.stride_label}] ${threat.title}`,
+              paragraphs: [threat.description],
+              fields: [
+                {
+                  label: "Evidence paths",
+                  value: threat.evidence_paths?.join(", ") || "none in bounded inventory",
+                },
+                {
+                  label: "Recommended controls",
+                  value: threat.recommended_controls.join("; "),
+                },
+                {
+                  label: "Proof gaps",
+                  value: threat.proof_gap?.join("; ") || "manual confirmation required",
+                },
+                { label: "Residual risk", value: threat.residual_risk },
+                { label: "Verify", value: threat.verification_suggestion },
+              ],
+            })),
+          ],
+        });
 
         return toolSuccess(data, {
           responseFormat: params.response_format,

@@ -1,5 +1,6 @@
 /**
- * Pack module barrel — prefer importing from registry for lookups.
+ * Compatibility barrel for package consumers. Internal lookups should import
+ * directly from registry so pack routing continues to have one owner.
  */
 
 export { appleDesktopPack } from "./apple-desktop.js";
@@ -25,16 +26,12 @@ export {
   isPackId,
   listPackSummaries,
   packIdsWithCategories,
+  recommendCategoryPackIds,
   recommendPackIds,
   recommendPackPlan,
   uniquePackIds,
   PACK_IDS,
 } from "./registry.js";
-export type {
-  KnowledgePack,
-  PackId,
-  PackItem,
-  PackItemSummary,
-} from "./types.js";
 export type { PackRecommendation } from "./registry.js";
+export type { KnowledgePack, PackId, PackItem, PackItemSummary } from "./types.js";
 export { toItemSummary } from "./types.js";
