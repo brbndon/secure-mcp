@@ -43,9 +43,12 @@ try {
 }
 
 if ([string]::IsNullOrWhiteSpace($env:SECURE_MCP_ALLOWED_ROOTS)) {
-  Write-Host "secure-mcp needs an explicit allowlist: absolute path(s) to the"
-  Write-Host "repository directories the server may inspect. Separate multiple"
-  Write-Host "paths with ';' on Windows. Keep the allowlist narrow."
+  Write-Host "secure-mcp needs an explicit allowlist of existing absolute directories."
+  Write-Host "Prefer the parent that contains the repositories you review"
+  Write-Host "(for example C:\Users\you\Code), not your home directory and not a"
+  Write-Host "single app unless that is the only tree you will audit. Separate"
+  Write-Host "multiple paths with ';' on Windows. Add another root later with:"
+  Write-Host "  .\scripts\install-agents.ps1 -Action add-root C:\absolute\path"
   $roots = Read-Host "[setup] allowlisted roots"
   if ([string]::IsNullOrWhiteSpace($roots)) {
     throw "an allowlist is required (SECURE_MCP_ALLOWED_ROOTS)"

@@ -9,6 +9,7 @@
 # Usage:
 #   SECURE_MCP_ALLOWED_ROOTS=/path/to/repos ./scripts/install-agents.sh install
 #   ./scripts/install-agents.sh check      # verify symlinks, configs, and server startup
+#   ./scripts/install-agents.sh add-root /absolute/path   # append a root to an existing install
 #   ./scripts/install-agents.sh uninstall  # remove exactly what install added
 #
 # Windows users should use scripts/install-agents.ps1 instead.
@@ -217,6 +218,26 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
+json_read_roots() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  python3 - "$file" <<'PY'
+import json, sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError):
+    sys.exit(1)
+entry = (data.get("mcpServers") or {}).get("secure-mcp")
+env = entry.get("env") if isinstance(entry, dict) else None
+raw = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+if isinstance(raw, str) and raw.strip():
+    print(raw)
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
 json_has_entry() {
   local file="$1"
   [ -f "$file" ] || return 1
@@ -242,6 +263,19 @@ codex_section_present() {
 
 codex_has_marker() {
   grep -qE "^# secure-mcp install owner: $INSTALL_REPO" "$CODEX_CONFIG" 2>/dev/null
+}
+
+codex_read_roots() {
+  [ -f "$CODEX_CONFIG" ] || return 1
+  python3 - "$CODEX_CONFIG" <<'PY'
+import json, re, sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r'^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*("(?:\\.|[^"\\])*")', text, re.M)
+if not match:
+    sys.exit(1)
+print(json.loads(match.group(1)))
+PY
 }
 
 codex_has_authorized_entry() {
@@ -463,6 +497,50 @@ probe_server() {
 
 # --- Modes ------------------------------------------------------------------
 
+read_installed_roots() {
+  local cfg
+  for cfg in "${JSON_CONFIGS[@]}"; do
+    if json_read_roots "$cfg"; then
+      return 0
+    fi
+  done
+  if codex_read_roots; then
+    return 0
+  fi
+  return 1
+}
+
+merge_roots_string() {
+  EXISTING_ROOTS="$1" EXTRA_ROOTS="$2" python3 - <<'PY'
+import os
+
+seen: list[str] = []
+for raw in (os.environ.get("EXISTING_ROOTS", ""), os.environ.get("EXTRA_ROOTS", "")):
+    for part in raw.split(os.pathsep):
+        root = part.strip()
+        if root and root not in seen:
+            seen.append(root)
+print(os.pathsep.join(seen))
+PY
+}
+
+cmd_add_root() {
+  [ "$#" -ge 1 ] || die "usage: $0 add-root /absolute/path [...]"
+  local existing extra path
+  existing="$(read_installed_roots)" || die "no existing install found; run install first"
+  for path in "$@"; do
+    validate_roots_string "$path" || die "invalid root: $path"
+  done
+  extra="$(python3 - "$@" <<'PY'
+import os, sys
+print(os.pathsep.join(sys.argv[1:]))
+PY
+)"
+  CONFIGURED_ROOTS="$(merge_roots_string "$existing" "$extra")"
+  log "allowlist is now: $CONFIGURED_ROOTS"
+  cmd_install
+}
+
 cmd_install() {
   [ -n "$CONFIGURED_ROOTS" ] || die "set SECURE_MCP_ALLOWED_ROOTS to the repositories this server may inspect"
   validate_configured_roots || die "invalid SECURE_MCP_ALLOWED_ROOTS"
@@ -554,5 +632,6 @@ case "${1:-install}" in
   install)   cmd_install ;;
   uninstall) cmd_uninstall ;;
   check)     cmd_check ;;
-  *) die "usage: $0 [install|uninstall|check]" ;;
+  add-root)  shift; cmd_add_root "$@" ;;
+  *) die "usage: $0 [install|uninstall|check|add-root]" ;;
 esac

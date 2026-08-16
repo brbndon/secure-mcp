@@ -34,14 +34,27 @@ function ensureBuilt(): void {
   assert.equal(result.status, 0, "pnpm build failed before installer integration tests");
 }
 
-function installerCommand(action: string, shell: "bash" | "pwsh"): { command: string; args: string[] } {
+function installerCommand(
+  action: string,
+  shell: "bash" | "pwsh",
+  extraArgs: string[] = [],
+): { command: string; args: string[] } {
   if (shell === "pwsh") {
     return {
       command: "pwsh",
-      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/install-agents.ps1", "-Action", action],
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/install-agents.ps1",
+        "-Action",
+        action,
+        ...extraArgs,
+      ],
     };
   }
-  return { command: "bash", args: ["scripts/install-agents.sh", action] };
+  return { command: "bash", args: ["scripts/install-agents.sh", action, ...extraArgs] };
 }
 
 function runInstaller(
@@ -49,8 +62,9 @@ function runInstaller(
   roots: string,
   action: string,
   shell: "bash" | "pwsh" = isWindows ? "pwsh" : "bash",
+  extraArgs: string[] = [],
 ): SpawnSyncReturns<string> {
-  const { command, args } = installerCommand(action, shell);
+  const { command, args } = installerCommand(action, shell, extraArgs);
   return spawnSync(command, args, {
     cwd: root,
     env: {
@@ -299,6 +313,56 @@ test("installer refuses conflicting non-owned entries and skills", { timeout: 12
     result = runInstaller(codexHome, codexRoots, "install");
     assert.notEqual(result.status, 0, "install should refuse a conflicting Codex section");
     assert.equal(readFileSync(codexConfig, "utf8"), conflictingCodex);
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("add-root appends a directory to an existing install without dropping roots", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    const home = tempHome("add-root");
+    const first = tempHome("roots-first");
+    const second = tempHome("roots-second");
+    tempDirs.push(home, first, second);
+
+    let result = runInstaller(home, first, "install");
+    assert.equal(result.status, 0, result.stderr);
+    expectInstalled(home, first);
+
+    result = runInstaller(home, first, "add-root", isWindows ? "pwsh" : "bash", [second]);
+    assert.equal(result.status, 0, result.stderr);
+    const merged = [first, second].join(path.delimiter);
+    expectInstalled(home, merged);
+
+    result = runInstaller(home, first, "add-root", isWindows ? "pwsh" : "bash", [second]);
+    assert.equal(result.status, 0, result.stderr);
+    expectInstalled(home, merged);
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("add-root fails without an existing install or a path", { timeout: 60_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    const home = tempHome("add-root-missing");
+    const extra = tempHome("roots-missing");
+    tempDirs.push(home, extra);
+
+    let result = runInstaller(home, extra, "add-root", isWindows ? "pwsh" : "bash", [extra]);
+    assert.notEqual(result.status, 0, "add-root should require an existing install");
+
+    const installedHome = tempHome("add-root-no-path");
+    const first = tempHome("roots-no-path");
+    tempDirs.push(installedHome, first);
+    result = runInstaller(installedHome, first, "install");
+    assert.equal(result.status, 0, result.stderr);
+    result = runInstaller(installedHome, first, "add-root");
+    assert.notEqual(result.status, 0, "add-root should require at least one path");
+    expectInstalled(installedHome, first);
   } finally {
     for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   }

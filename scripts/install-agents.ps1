@@ -9,6 +9,7 @@ Usage:
   $env:SECURE_MCP_ALLOWED_ROOTS = "C:\path\to\repos"
   .\scripts\install-agents.ps1 install
   .\scripts\install-agents.ps1 check
+  .\scripts\install-agents.ps1 add-root C:\absolute\path
   .\scripts\install-agents.ps1 uninstall
 
 Idempotent and ownership-safe: the installer modifies only the secure-mcp keys
@@ -17,8 +18,11 @@ harnesses may redirect all user-level writes with SECURE_MCP_INSTALL_HOME.
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet("install", "check", "uninstall")]
-  [string]$Action = "install"
+  [ValidateSet("install", "check", "uninstall", "add-root")]
+  [string]$Action = "install",
+
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$RootPaths = @()
 )
 
 Set-StrictMode -Version Latest
@@ -216,6 +220,19 @@ function Remove-SecureMcpJson {
   Write-Log "json: removed secure-mcp from $Path"
 }
 
+function Get-JsonRoots {
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+  $data = Read-JsonFile $Path
+  $servers = if ($data.ContainsKey("mcpServers")) { $data["mcpServers"] } else { @{} }
+  $entry = if ($servers -is [hashtable] -and $servers.ContainsKey("secure-mcp")) { $servers["secure-mcp"] } else { $null }
+  if ($null -eq $entry -or $entry -isnot [hashtable]) { return $null }
+  $envMap = if ($entry.ContainsKey("env")) { $entry["env"] } else { $null }
+  $raw = if ($envMap -is [hashtable] -and $envMap.ContainsKey("SECURE_MCP_ALLOWED_ROOTS")) { [string]$envMap["SECURE_MCP_ALLOWED_ROOTS"] } else { "" }
+  if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+  return $raw
+}
+
 function Test-JsonHasEntry {
   param([Parameter(Mandatory)][string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) { return $false }
@@ -293,6 +310,19 @@ function Test-CodexEntryPointsToCheckout {
   return ($server -match "(?m)^\s*command\s*=\s*`"node`"") -and
     ($server -match "(?m)^\s*args\s*=\s*\[$entry\]") -and
     ($envSection -match '(?m)^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*".+"')
+}
+
+function Get-CodexRoots {
+  if (-not (Test-Path -LiteralPath $CodexConfig)) { return $null }
+  $text = Get-Content -LiteralPath $CodexConfig -Raw -Encoding UTF8
+  $envSection = Get-CodexSection $text "mcp_servers.secure-mcp.env"
+  if ($null -eq $envSection) { return $null }
+  $match = [regex]::Match($envSection, '(?m)^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*"(.*)"\s*$')
+  if (-not $match.Success) { return $null }
+  # Values are written with backslashes escaped (`C:\\abs\\path`).
+  $raw = $match.Groups[1].Value -replace '\\(.)', '$1'
+  if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+  return $raw
 }
 
 function Test-CodexAuthorizedEntry {
@@ -475,6 +505,43 @@ function Cleanup-LegacyClaude {
   }
 }
 
+function Get-InstalledRoots {
+  foreach ($cfg in $JsonConfigs) {
+    $found = Get-JsonRoots $cfg
+    if (-not [string]::IsNullOrWhiteSpace($found)) { return $found }
+  }
+  return Get-CodexRoots
+}
+
+function Invoke-AddRoot {
+  param([string[]]$Paths)
+  if ($null -eq $Paths -or @($Paths).Count -eq 0) {
+    throw "usage: $($MyInvocation.ScriptName) add-root <absolute-path> [...]"
+  }
+  $existing = Get-InstalledRoots
+  if ([string]::IsNullOrWhiteSpace($existing)) {
+    throw "no existing install found; run install first"
+  }
+  $merged = [System.Collections.Generic.List[string]]::new()
+  foreach ($part in ($existing -split [IO.Path]::PathSeparator)) {
+    $trimmed = $part.Trim()
+    if ($trimmed -and -not $merged.Contains($trimmed)) { $merged.Add($trimmed) }
+  }
+  foreach ($candidate in $Paths) {
+    $path = [string]$candidate
+    if (-not [IO.Path]::IsPathRooted($path)) {
+      throw "every add-root path must be absolute"
+    }
+    if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+      throw "every add-root path must be an existing directory: $path"
+    }
+    if (-not $merged.Contains($path)) { $merged.Add($path) }
+  }
+  $script:Roots = ($merged -join [IO.Path]::PathSeparator)
+  Write-Log "allowlist is now: $script:Roots"
+  Invoke-Install
+}
+
 function Invoke-Install {
   Assert-ConfiguredRoots
   if (-not (Test-Path -LiteralPath $ServerEntry)) {
@@ -570,4 +637,5 @@ switch ($Action) {
   "install" { Invoke-Install }
   "uninstall" { Invoke-Uninstall }
   "check" { Invoke-Check }
+  "add-root" { Invoke-AddRoot $RootPaths }
 }

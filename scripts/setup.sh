@@ -32,9 +32,12 @@ log "building the server (pnpm build)"
 
 if [[ ! "${SECURE_MCP_ALLOWED_ROOTS:-}" =~ [^[:space:]] ]]; then
   printf '%s\n' \
-    "secure-mcp needs an explicit allowlist: absolute path(s) to the" \
-    "repository directories the server may inspect. Separate multiple paths" \
-    "with ':' on macOS/Linux. Keep the allowlist narrow."
+    "secure-mcp needs an explicit allowlist of existing absolute directories." \
+    "Prefer the parent that contains the repositories you review" \
+    "(for example /Users/you/Code), not your home directory and not a single" \
+    "app unless that is the only tree you will audit. Separate multiple" \
+    "paths with ':' on macOS/Linux. Add another root later with:" \
+    "  ./scripts/install-agents.sh add-root /absolute/path"
   read -r -p "[setup] allowlisted roots: " SECURE_MCP_ALLOWED_ROOTS \
     || die "an allowlist is required (SECURE_MCP_ALLOWED_ROOTS)"
   if [ -z "$SECURE_MCP_ALLOWED_ROOTS" ]; then
