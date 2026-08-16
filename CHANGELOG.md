@@ -6,6 +6,9 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 
 ### Changed
 
+- Documented Grok Build TUI as unsupported until it negotiates MCP `2026-07-28`. It currently requests `2025-11-25`; the installer does not write `~/.grok/config.toml`.
+- Setup and README now treat `SECURE_MCP_ALLOWED_ROOTS` as a parent that can contain multiple Swift/web checkouts, with `install-agents add-root` to append another directory without repeating the bootstrap.
+- `secure_mcp_list_projects` now treats `*.xcodeproj` / `*.xcworkspace` bundles as project markers (parent of the bundle), so typical Xcode iOS/macOS apps are discoverable without `Package.swift`.
 - `secure_mcp_list_projects` now returns an absolute `project_root` alongside the parent-relative `path`, so discovered packages can be passed to other tools without resolving against the MCP process cwd.
 - Relocated the eval-harness notes into the public docs tree and removed local planning, vendored `mcp-builder`, unused icon/screenshot variants, and unused logos.
 - Inventory now reports `hasExpo` and `hasMacOS`. Next.js is claimed only from `next.config.*` or a `next` dependency; a `package.json` or top-level `app/`/`pages/` directory is no longer enough. The TypeScript/JS stack is claimed from `.ts`/`.tsx`/`.js`/`.jsx` files or a tsconfig — a `package.json` alone is not enough, but a plain-JS service still routes to the TS/JS packs.

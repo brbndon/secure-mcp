@@ -29,7 +29,7 @@ cd secure-mcp
 ./scripts/setup.sh
 ```
 
-On Windows, run `.\scripts\setup.ps1` in PowerShell. To skip the prompt, pass the allowlist explicitly: `SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories ./scripts/setup.sh`.
+On Windows, run `.\scripts\setup.ps1` in PowerShell. To skip the prompt, pass the allowlist explicitly: `SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/Code ./scripts/setup.sh`. Prefer a parent directory that contains the Swift and web checkouts you review.
 
 ### What the bootstrap runs (the manual path)
 
@@ -41,9 +41,11 @@ export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
 ./scripts/install-agents.sh check
 ```
 
-Filesystem tools fail closed unless `SECURE_MCP_ALLOWED_ROOTS` names one or more roots that may contain a requested `project_root`. Use `:` between multiple roots on macOS/Linux and `;` on Windows. Keep the scope as narrow as practical; canonical-path and symlink checks still apply within each authorized root.
+Filesystem tools fail closed unless `SECURE_MCP_ALLOWED_ROOTS` names one or more roots that may contain a requested `project_root`. Use `:` between multiple roots on macOS/Linux and `;` on Windows. Prefer the parent that contains the repositories you review (for example `/Users/you/Code`) rather than a single app or your home directory. Canonical-path and symlink checks still apply within each authorized root.
 
-`check` verifies installation; `uninstall` removes only entries owned by secure-mcp.
+`check` verifies installation. `add-root /absolute/path` appends another existing directory to an existing install. `uninstall` removes only entries owned by secure-mcp.
+
+Grok Build TUI is unsupported until it negotiates MCP `2026-07-28`. It currently requests `2025-11-25`; do not add it to client config. See [Client compatibility](/docs/clients).
 
 ## Manual client configuration
 

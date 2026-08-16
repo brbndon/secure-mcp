@@ -11,8 +11,9 @@ secrets or live credentials here.
 
 Use the `secure-mcp` skill for authorized, defensive, remediation-focused
 secure code review of this repository. The secure-mcp MCP server is configured
-with `SECURE_MCP_ALLOWED_ROOTS` pointing at this repository; do not review
-paths outside it.
+with `SECURE_MCP_ALLOWED_ROOTS` covering this repository — often a parent
+such as your `Code` directory. Pass this repository's absolute path as
+`project_root`. Do not review paths outside the allowlist.
 
 - Treat every `secure_mcp_*` result as a bounded heuristic candidate, not a
   confirmed vulnerability. Open the cited code and trace the data flow before

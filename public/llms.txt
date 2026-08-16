@@ -25,7 +25,7 @@ cd secure-mcp
 ./scripts/setup.sh
 ```
 
-On Windows, run `.\scripts\setup.ps1`. The bootstrap installs dependencies, builds the server, prompts for `SECURE_MCP_ALLOWED_ROOTS` when it is unset, then wires the skill and MCP server for pi, Cursor, and OpenAI Codex and verifies the result. Equivalent manual steps:
+On Windows, run `.\scripts\setup.ps1`. The bootstrap installs dependencies, builds the server, prompts for `SECURE_MCP_ALLOWED_ROOTS` when it is unset, then wires the skill and MCP server for pi, Cursor, and OpenAI Codex and verifies the result. Prefer an allowlist parent that contains the repositories you review. Equivalent manual steps:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -35,7 +35,7 @@ SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories \
 ./scripts/install-agents.sh check
 ```
 
-The installer points clients at this checkout's `dist/index.js`, installs the committed agent workflow, and configures pi, Cursor, and OpenAI Codex. Restart agent sessions after installation. `check` verifies installation; `uninstall` removes only entries owned by secure-mcp.
+The installer points clients at this checkout's `dist/index.js`, installs the committed agent workflow, and configures pi, Cursor, and OpenAI Codex. Restart agent sessions after installation. `check` verifies installation; `add-root /absolute/path` appends another authorized parent; `uninstall` removes only entries owned by secure-mcp.
 
 The npm package `@brdndon/secure-mcp` is a last-resort, server-only fallback. It does not contain or install `.agents/skills/secure-mcp/SKILL.md` or `scripts/install-agents.sh`. Prefer the checkout path for the complete agent workflow. npm users should target the v2 artifact explicitly after publication, for example `npx -y @brdndon/secure-mcp@2`.
 
@@ -46,12 +46,12 @@ The npm package `@brdndon/secure-mcp` is a last-resort, server-only fallback. It
 - A tool's absolute `project_root` must resolve beneath an allowed root.
 - Missing, empty, stale, or out-of-scope roots fail closed.
 - Canonical-path checks reject path-traversal and symlink escapes.
-- Keep authorization narrow: allowlist the repositories or smallest practical parent directories, not an entire home directory.
-- The installer records the allowlist in each client configuration. Re-run it when the authorized roots change.
+- Keep authorization narrow: allowlist the parent that contains the Swift/web checkouts you review, not an entire home directory and not a single app unless that is the only tree you will audit.
+- The installer records the allowlist in each client configuration. Use `./scripts/install-agents.sh add-root /absolute/path` to append another parent without repeating the full bootstrap.
 
 ## Client compatibility
 
-The server strictly requires MCP protocol revision `2026-07-28`. Configuration shapes are documented for OpenAI Codex (`~/.codex/config.toml`), Cursor (`~/.cursor/mcp.json`), Claude Desktop (`claude_desktop_config.json`), Claude Code (`.mcp.json` or `claude mcp add --transport stdio`), VS Code / GitHub Copilot (`.vscode/mcp.json` with a top-level `servers` key), pi (`~/.pi/agent/mcp.json`), and generic stdio clients. The installer automates pi, Cursor, and Codex; other clients are manual. See https://mcp.branalytic.com/docs/clients.
+The server strictly requires MCP protocol revision `2026-07-28`. Configuration shapes are documented for OpenAI Codex (`~/.codex/config.toml`), Cursor (`~/.cursor/mcp.json`), Claude Desktop (`claude_desktop_config.json`), Claude Code (`.mcp.json` or `claude mcp add --transport stdio`), VS Code / GitHub Copilot (`.vscode/mcp.json` with a top-level `servers` key), pi (`~/.pi/agent/mcp.json`), and generic stdio clients. The installer automates pi, Cursor, and Codex; other clients are manual. Grok Build TUI is unsupported until it negotiates `2026-07-28`; it currently requests `2025-11-25` and is rejected. See https://mcp.branalytic.com/docs/clients.
 
 ## Tools
 
