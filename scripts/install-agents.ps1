@@ -227,6 +227,11 @@ function Get-JsonRoots {
   $servers = if ($data.ContainsKey("mcpServers")) { $data["mcpServers"] } else { @{} }
   $entry = if ($servers -is [hashtable] -and $servers.ContainsKey("secure-mcp")) { $servers["secure-mcp"] } else { $null }
   if ($null -eq $entry -or $entry -isnot [hashtable]) { return $null }
+  # Read only owned or installer-equivalent entries; a conflicting non-owned
+  # entry must never feed add-root.
+  $owned = Test-EntryOwned $data
+  $pointsToCheckout = Test-EntryPointsToCheckout $entry
+  if (-not $owned -and -not $pointsToCheckout) { return $null }
   $envMap = if ($entry.ContainsKey("env")) { $entry["env"] } else { $null }
   $raw = if ($envMap -is [hashtable] -and $envMap.ContainsKey("SECURE_MCP_ALLOWED_ROOTS")) { [string]$envMap["SECURE_MCP_ALLOWED_ROOTS"] } else { "" }
   if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
@@ -314,10 +319,13 @@ function Test-CodexEntryPointsToCheckout {
 
 function Get-CodexRoots {
   if (-not (Test-Path -LiteralPath $CodexConfig)) { return $null }
+  # Read only owned or installer-equivalent sections; a conflicting non-owned
+  # section must never feed add-root.
+  if (-not (Test-CodexMarker) -and -not (Test-CodexEntryPointsToCheckout)) { return $null }
   $text = Get-Content -LiteralPath $CodexConfig -Raw -Encoding UTF8
   $envSection = Get-CodexSection $text "mcp_servers.secure-mcp.env"
   if ($null -eq $envSection) { return $null }
-  $match = [regex]::Match($envSection, '(?m)^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*"(.*)"\s*$')
+  $match = [regex]::Match($envSection, '(?m)^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*"((?:\\.|[^"\\])*)"\s*$')
   if (-not $match.Success) { return $null }
   # Values are written with backslashes escaped (`C:\\abs\\path`).
   $raw = $match.Groups[1].Value -replace '\\(.)', '$1'
@@ -506,11 +514,28 @@ function Cleanup-LegacyClaude {
 }
 
 function Get-InstalledRoots {
+  # Union of every owned client's allowlist, first-seen order, exact
+  # duplicates skipped; a root installed in only one client is preserved
+  # instead of being dropped for the first client's allowlist.
+  $merged = [System.Collections.Generic.List[string]]::new()
   foreach ($cfg in $JsonConfigs) {
     $found = Get-JsonRoots $cfg
-    if (-not [string]::IsNullOrWhiteSpace($found)) { return $found }
+    if (-not [string]::IsNullOrWhiteSpace($found)) {
+      foreach ($part in ($found -split [IO.Path]::PathSeparator)) {
+        $trimmed = $part.Trim()
+        if ($trimmed -and -not $merged.Contains($trimmed)) { $merged.Add($trimmed) }
+      }
+    }
   }
-  return Get-CodexRoots
+  $codexRoots = Get-CodexRoots
+  if (-not [string]::IsNullOrWhiteSpace($codexRoots)) {
+    foreach ($part in ($codexRoots -split [IO.Path]::PathSeparator)) {
+      $trimmed = $part.Trim()
+      if ($trimmed -and -not $merged.Contains($trimmed)) { $merged.Add($trimmed) }
+    }
+  }
+  if ($merged.Count -eq 0) { return $null }
+  return ($merged -join [IO.Path]::PathSeparator)
 }
 
 function Invoke-AddRoot {

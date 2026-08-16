@@ -218,18 +218,46 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
+# json_read_roots <file> — print the entry's allowlist, but only when the
+# entry is owned by this installer (marker) or points at this checkout
+# (installer-equivalent). Never read a conflicting non-owned entry.
 json_read_roots() {
   local file="$1"
   [ -f "$file" ] || return 1
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_INSTALL_REPO="$INSTALL_REPO" \
+  SECURE_MCP_INSTALL_VERSION="$INSTALL_VERSION" SECURE_MCP_MARKER_KEY="$MARKER_KEY" \
   python3 - "$file" <<'PY'
-import json, sys
+import json, os, sys
+
+path = sys.argv[1]
+marker_key = os.environ["SECURE_MCP_MARKER_KEY"]
+
+def owned(data):
+    return data.get(marker_key) == {
+        "owner": os.environ["SECURE_MCP_INSTALL_REPO"],
+        "version": os.environ["SECURE_MCP_INSTALL_VERSION"],
+    }
+
+def points_to_checkout(existing):
+    env = existing.get("env") if isinstance(existing, dict) else None
+    roots = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+    return (
+        existing.get("command") == "node"
+        and existing.get("args") == [os.environ["SECURE_MCP_ENTRY"]]
+        and isinstance(roots, str)
+        and roots.strip() != ""
+    )
 
 try:
-    data = json.load(open(sys.argv[1], encoding="utf-8"))
+    data = json.load(open(path, encoding="utf-8"))
 except (FileNotFoundError, json.JSONDecodeError):
     sys.exit(1)
+if not isinstance(data, dict):
+    sys.exit(1)
 entry = (data.get("mcpServers") or {}).get("secure-mcp")
-env = entry.get("env") if isinstance(entry, dict) else None
+if not isinstance(entry, dict) or not (owned(data) or points_to_checkout(entry)):
+    sys.exit(1)
+env = entry.get("env")
 raw = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
 if isinstance(raw, str) and raw.strip():
     print(raw)
@@ -267,6 +295,9 @@ codex_has_marker() {
 
 codex_read_roots() {
   [ -f "$CODEX_CONFIG" ] || return 1
+  if ! codex_has_marker && ! codex_entry_points_to_checkout; then
+    return 1
+  fi
   python3 - "$CODEX_CONFIG" <<'PY'
 import json, re, sys
 
@@ -511,17 +542,24 @@ probe_server() {
 
 # --- Modes ------------------------------------------------------------------
 
+# read_installed_roots — print the union of every owned client's allowlist,
+# in first-seen order with exact duplicates skipped. add-root merges this
+# union with the requested roots, so a root installed in only one client is
+# preserved instead of being dropped for the first client's allowlist.
 read_installed_roots() {
-  local cfg
+  local cfg merged="" one found=0
   for cfg in "${JSON_CONFIGS[@]}"; do
-    if json_read_roots "$cfg"; then
-      return 0
+    if one="$(json_read_roots "$cfg")"; then
+      merged="$(merge_roots_string "$merged" "$one")"
+      found=1
     fi
   done
-  if codex_read_roots; then
-    return 0
+  if one="$(codex_read_roots)"; then
+    merged="$(merge_roots_string "$merged" "$one")"
+    found=1
   fi
-  return 1
+  [ "$found" -eq 1 ] || return 1
+  printf '%s\n' "$merged"
 }
 
 merge_roots_string() {
