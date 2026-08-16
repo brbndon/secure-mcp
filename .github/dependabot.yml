@@ -10,6 +10,24 @@ updates:
         dependency-type: development
       npm-production:
         dependency-type: production
+  - package-ecosystem: npm
+    directory: /fixtures/tiny-app
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+  - package-ecosystem: npm
+    directory: /fixtures/tiny-expo
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+  - package-ecosystem: npm
+    directory: /fixtures/rn-lib-no-expo
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
