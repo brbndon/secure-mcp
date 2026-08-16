@@ -271,10 +271,24 @@ codex_read_roots() {
 import json, re, sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
-match = re.search(r'^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*("(?:\\.|[^"\\])*")', text, re.M)
+
+# Read only the installer-written [mcp_servers.secure-mcp.env] sub-table; a
+# SECURE_MCP_ALLOWED_ROOTS assignment in any other table is not this install's
+# allowlist. TOML is never executed, only this sub-table is text-matched.
+def section(name):
+    match = re.search(r"^\s*\[\s*" + re.escape(name) + r"\s*\](.*?)(?=^\s*\[|\Z)", text, re.M | re.S)
+    return match.group(1) if match else None
+
+env = section("mcp_servers.secure-mcp.env")
+if env is None:
+    sys.exit(1)
+match = re.search(r'^\s*SECURE_MCP_ALLOWED_ROOTS\s*=\s*("(?:\\.|[^"\\])*")', env, re.M)
 if not match:
     sys.exit(1)
-print(json.loads(match.group(1)))
+roots = json.loads(match.group(1))
+if not roots.strip():
+    sys.exit(1)
+print(roots)
 PY
 }
 

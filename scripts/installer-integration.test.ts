@@ -123,6 +123,8 @@ function expectInstalled(home: string, roots: string): void {
   assert.match(codexText, /\[mcp_servers\.secure-mcp\]/);
   const tomlServerEntry = serverEntry.replace(/\\/g, "\\\\");
   assert.match(codexText, new RegExp(`args = \\["${escapeRegex(tomlServerEntry)}"\\]`));
+  const tomlRoots = roots.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  assert.match(codexText, new RegExp(`SECURE_MCP_ALLOWED_ROOTS = "${escapeRegex(tomlRoots)}"`));
   assert.ok(existsSync(codexAgent));
   assert.equal(
     readFileSync(codexAgent, "utf8"),
@@ -225,6 +227,11 @@ async function strictV2Probe(allowlist: string): Promise<void> {
 
 function tempHome(label: string): string {
   return mkdtempSync(path.join(os.tmpdir(), `secure-mcp-${label}-`));
+}
+
+function addRootShells(): Array<"bash" | "pwsh"> {
+  if (isWindows) return ["pwsh"];
+  return hasPwsh ? ["bash", "pwsh"] : ["bash"];
 }
 
 test("installer is idempotent, ownership-safe, and leaves temp homes clean", { timeout: 180_000 }, async () => {
@@ -363,6 +370,48 @@ test("add-root fails without an existing install or a path", { timeout: 60_000 }
     result = runInstaller(installedHome, first, "add-root");
     assert.notEqual(result.status, 0, "add-root should require at least one path");
     expectInstalled(installedHome, first);
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("codex-only add-root reads the owned secure-mcp env table and ignores foreign TOML assignments", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const shell of addRootShells()) {
+      const home = tempHome(`codex-scope-${shell}`);
+      const first = tempHome(`roots-codex-scope-first-${shell}`);
+      const second = tempHome(`roots-codex-scope-second-${shell}`);
+      const decoy = tempHome(`roots-codex-scope-decoy-${shell}`);
+      tempDirs.push(home, first, second, decoy);
+
+      let result = runInstaller(home, first, "install", shell);
+      assert.equal(result.status, 0, result.stderr);
+
+      // Codex-only install: drop both JSON configs so the TOML env table is
+      // the only allowlist source, then prepend a decoy assignment in a
+      // foreign table that must not be treated as the installed allowlist.
+      rmSync(path.join(home, ".pi", "agent", "mcp.json"));
+      rmSync(path.join(home, ".cursor", "mcp.json"));
+      const codexConfig = path.join(home, ".codex", "config.toml");
+      const decoyToml = decoy.replace(/\\/g, "\\\\");
+      const foreign = `[mcp_servers.other]\ncommand = "node"\n\n[mcp_servers.other.env]\nSECURE_MCP_ALLOWED_ROOTS = "${decoyToml}"\n\n`;
+      writeFileSync(codexConfig, foreign + readFileSync(codexConfig, "utf8"));
+
+      result = runInstaller(home, first, "add-root", shell, [second]);
+      assert.equal(result.status, 0, result.stderr);
+      expectInstalled(home, [first, second].join(path.delimiter));
+
+      const text = readFileSync(codexConfig, "utf8");
+      assert.equal((text.match(/SECURE_MCP_ALLOWED_ROOTS = /g) ?? []).length, 2, text);
+      const mergedToml = [first, second].join(path.delimiter).replace(/\\/g, "\\\\");
+      assert.ok(
+        text.indexOf(`SECURE_MCP_ALLOWED_ROOTS = "${decoyToml}"`) <
+          text.indexOf(`SECURE_MCP_ALLOWED_ROOTS = "${mergedToml}"`),
+        "the foreign assignment must precede and not feed the owned allowlist",
+      );
+    }
   } finally {
     for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   }
