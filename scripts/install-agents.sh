@@ -282,6 +282,91 @@ sys.exit(0 if isinstance(roots, str) and roots.strip() else 1)
 PY
 }
 
+# json_set_preflight <file> — read-only mirror of the json_set refusal checks,
+# so add-root can fail before mutating any client.
+json_set_preflight() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_INSTALL_REPO="$INSTALL_REPO" \
+  SECURE_MCP_INSTALL_VERSION="$INSTALL_VERSION" SECURE_MCP_MARKER_KEY="$MARKER_KEY" \
+  python3 - "$file" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+marker_key = os.environ["SECURE_MCP_MARKER_KEY"]
+marker = {
+    "owner": os.environ["SECURE_MCP_INSTALL_REPO"],
+    "version": os.environ["SECURE_MCP_INSTALL_VERSION"],
+}
+
+def owned(data):
+    return data.get(marker_key) == marker
+
+def points_to_checkout(existing):
+    env = existing.get("env") if isinstance(existing, dict) else None
+    roots = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+    return (
+        existing.get("command") == "node"
+        and existing.get("args") == [os.environ["SECURE_MCP_ENTRY"]]
+        and isinstance(roots, str)
+        and roots.strip() != ""
+    )
+
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except json.JSONDecodeError as exc:
+    sys.exit(f"cannot parse {path}: {exc}")
+if not isinstance(data, dict):
+    sys.exit(f"cannot update {path}: top-level JSON value must be an object")
+servers = data.get("mcpServers")
+if servers is not None and not isinstance(servers, dict):
+    sys.exit(f"cannot update {path}: mcpServers must be an object")
+existing = servers.get("secure-mcp") if isinstance(servers, dict) else None
+if existing is not None and not owned(data) and not points_to_checkout(existing):
+    sys.exit(f"refusing to overwrite non-owned secure-mcp entry in {path}; move it aside and re-run")
+PY
+}
+
+# json_remove_preflight <file> — read-only mirror of the json_remove refusal
+# check, for the legacy Claude cleanup the install path performs last.
+json_remove_preflight() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  SECURE_MCP_ENTRY="$SERVER_ENTRY" SECURE_MCP_INSTALL_REPO="$INSTALL_REPO" \
+  SECURE_MCP_MARKER_KEY="$MARKER_KEY" python3 - "$file" <<'PY'
+import json, os, sys
+
+path = sys.argv[1]
+marker_key = os.environ["SECURE_MCP_MARKER_KEY"]
+expected_owner = os.environ["SECURE_MCP_INSTALL_REPO"]
+
+def points_to_checkout(existing):
+    env = existing.get("env") if isinstance(existing, dict) else None
+    roots = env.get("SECURE_MCP_ALLOWED_ROOTS") if isinstance(env, dict) else None
+    return (
+        existing.get("command") == "node"
+        and existing.get("args") == [os.environ["SECURE_MCP_ENTRY"]]
+        and isinstance(roots, str)
+        and roots.strip() != ""
+    )
+
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except json.JSONDecodeError as exc:
+    sys.exit(f"cannot parse {path}: {exc}")
+if not isinstance(data, dict):
+    sys.exit(f"cannot update {path}: top-level JSON value must be an object")
+servers = data.get("mcpServers")
+existing = servers.get("secure-mcp") if isinstance(servers, dict) else None
+marker = data.get(marker_key)
+owned = isinstance(marker, dict) and marker.get("owner") == expected_owner
+if existing is not None and not owned and not points_to_checkout(existing):
+    sys.exit(f"refusing to remove non-owned secure-mcp entry in {path}")
+PY
+}
+
 # --- Codex TOML helpers -----------------------------------------------------
 
 codex_section_present() {
@@ -576,6 +661,35 @@ print(os.pathsep.join(seen))
 PY
 }
 
+# preflight_install_targets — before add-root mutates anything, verify every
+# target the install rewrite would write, using the same ownership and
+# points-to-this-checkout predicates as the writers. A refused add-root must
+# leave every client's allowlist unchanged.
+preflight_install_targets() {
+  local target cfg
+  for target in "${SKILL_LINKS[@]}"; do
+    if [ -L "$target" ] && [ "$(readlink "$target")" = "$SKILL_SRC" ]; then
+      continue
+    fi
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      die "refusing to replace non-owned path at $target; move it aside and re-run"
+    fi
+  done
+  for cfg in "${JSON_CONFIGS[@]}"; do
+    json_set_preflight "$cfg" || die "add-root aborted: it would refuse to update $cfg; move it aside and re-run"
+  done
+  if codex_section_present && ! codex_has_marker && ! codex_entry_points_to_checkout; then
+    die "refusing to overwrite non-owned [mcp_servers.secure-mcp] in $CODEX_CONFIG; move it aside and re-run"
+  fi
+  if [ -f "$CODEX_AGENT_DST" ] && ! cmp -s "$CODEX_AGENT_SRC" "$CODEX_AGENT_DST"; then
+    die "refusing to overwrite non-owned Codex agent manifest $CODEX_AGENT_DST; move it aside and re-run"
+  fi
+  if json_has_entry "$LEGACY_CLAUDE_CONFIG"; then
+    json_remove_preflight "$LEGACY_CLAUDE_CONFIG" ||
+      die "add-root aborted: it would refuse to remove the legacy Claude entry in $LEGACY_CLAUDE_CONFIG; move it aside and re-run"
+  fi
+}
+
 cmd_add_root() {
   [ "$#" -ge 1 ] || die "usage: $0 add-root /absolute/path [...]"
   local existing extra path
@@ -583,6 +697,7 @@ cmd_add_root() {
   for path in "$@"; do
     validate_roots_string "$path" || die "invalid root: $path"
   done
+  preflight_install_targets
   extra="$(python3 - "$@" <<'PY'
 import os, sys
 print(os.pathsep.join(sys.argv[1:]))

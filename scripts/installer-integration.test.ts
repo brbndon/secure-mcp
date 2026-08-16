@@ -450,6 +450,48 @@ test("add-root unions allowlists across owned clients instead of taking the firs
   }
 });
 
+test("add-root refuses a non-owned later client before mutating the owned first client", { timeout: 180_000 }, () => {
+  ensureBuilt();
+  const tempDirs: string[] = [];
+  try {
+    for (const shell of addRootShells()) {
+      const home = tempHome(`add-root-preflight-${shell}`);
+      const first = tempHome(`roots-preflight-first-${shell}`);
+      const second = tempHome(`roots-preflight-second-${shell}`);
+      tempDirs.push(home, first, second);
+
+      let result = runInstaller(home, first, "install", shell);
+      assert.equal(result.status, 0, result.stderr);
+
+      // Cursor becomes a conflicting non-owned entry: the install rewrite
+      // would refuse it, so add-root must fail before touching pi or Codex.
+      const cursorJson = path.join(home, ".cursor", "mcp.json");
+      const conflicting = { mcpServers: { "secure-mcp": { command: "python", args: ["other.py"] } } };
+      writeFileSync(cursorJson, JSON.stringify(conflicting, null, 2));
+
+      result = runInstaller(home, first, "add-root", shell, [second]);
+      assert.notEqual(result.status, 0, "add-root should refuse before touching any client");
+
+      const piEntry = jsonServers(path.join(home, ".pi", "agent", "mcp.json"))["secure-mcp"] as {
+        env: { SECURE_MCP_ALLOWED_ROOTS: string };
+      };
+      assert.equal(piEntry.env.SECURE_MCP_ALLOWED_ROOTS, first);
+      assert.deepEqual(readJson(cursorJson), conflicting);
+      const codexText = readFileSync(path.join(home, ".codex", "config.toml"), "utf8");
+      assert.match(codexText, new RegExp(`SECURE_MCP_ALLOWED_ROOTS = "${escapeRegex(first)}"`));
+      assert.equal(codexText.includes(second), false);
+      for (const skill of [
+        path.join(home, ".agents", "skills", "secure-mcp"),
+        path.join(home, ".cursor", "skills", "secure-mcp"),
+      ]) {
+        assert.equal(linkTarget(skill), realpathSync(path.join(root, ".agents", "skills", "secure-mcp")));
+      }
+    }
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("codex-only add-root reads the owned secure-mcp env table and ignores foreign TOML assignments", { timeout: 180_000 }, () => {
   ensureBuilt();
   const tempDirs: string[] = [];
