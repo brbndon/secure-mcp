@@ -1,6 +1,6 @@
 ---
 name: secure-mcp
-description: Master defensive secure-code-review and hardening workflow for websites, Next.js or TypeScript services, Expo or React Native apps, iOS Swift apps, macOS Swift apps, and mixed repositories. Use when auditing, reviewing, or securing an app, repository, or codebase — even when the user only describes the app ("audit my iOS app", "is my Next.js service secure?") — or when reviewing authentication, authorization, injection, secrets, trust boundaries, or Apple entitlements, or producing a remediation plan. On invocation, autonomously create an audit goal in the host goal facility, preflight and classify the repository, create an explicit TODO, then route a bounded multi-phase review through the secure_mcp tools and manual evidence confirmation.
+description: Defensive security auditing and hardening for applications and codebases. Use whenever the user requests a security audit, code review, vulnerability assessment, threat model, or security-related code change, including authentication, authorization, injection, secrets, trust boundaries, or platform security.
 ---
 
 # Secure MCP
@@ -56,6 +56,15 @@ Use these routing heuristics; require multiple signals and preserve mixed classi
 | Unknown / other (Python, Go, Java, Android/Kotlin, Ruby, PHP, Rust, .NET) | No known app-stack signals; language manifests only (`pyproject.toml`/`requirements.txt`, `go.mod`, `build.gradle`, `Cargo.toml`, etc.) | Inventory with `auto`. Architecture returns `unsupported_signals` and a limited-review note; expect `core`, `secrets`, `threat-model` only. Report a **limited generic review**, never full stack coverage. |
 
 Do not infer macOS or iOS from Swift alone, Expo from a bare `app.json`, or an app from a library or dev-only framework dependency. Treat auto Expo/Swift signals as advisory when they conflict with preflight classification. The server accepts `auto`, `common`, `typescript`, `nextjs`, `swift`, and `expo` stack hints; it does not accept `ios`, `macos`, or `web` as values. If preflight evidence conflicts with auto-detection, use an explicit valid stack or split the package review rather than trusting the root profile.
+
+### Independent repositories
+
+When the user requests an audit across multiple repositories, treat each repository as an independent review unit:
+
+- Establish a separate absolute `project_root`, authorization check, preflight note, goal/TODO scope, coverage artifact, disposition ledger, and findings set for each repository.
+- Use `secure_mcp_list_projects` only to discover candidate roots; do not treat a shared parent directory as one complete audit unless the user explicitly scopes it that way.
+- Run the full bounded sequence per repository, then produce per-repository reports before an aggregate comparison or remediation plan.
+- Preserve repository identity in every finding and do not merge coverage, dispositions, or “no findings” conclusions across roots.
 
 4. Create an explicit audit TODO before invoking the server, aligned with the goal created at invocation. Use the agent's built-in plan/task facility when available; otherwise keep a transient structured note and do not add a TODO file to the target unless requested. Include:
 
@@ -114,7 +123,7 @@ Start pack selection from the architecture response (`recommended_packs` / `pack
 
 ### Phase 3: category analysis
 
-First-scan (under 60s, secret-safe): after inventory and architecture, call `secure_mcp_review_secrets` on the same root before or with the other category tools. A committed credential surfaces as a high-severity `secrets.secret-patterns` candidate whose `evidence` is already redacted — the bundled `fixtures/tiny-app` always produces one, so use it to verify a fresh install before trusting real scans. Never copy raw secret material from the cited file into notes, prompts, SARIF, markdown, or a later `secure_mcp_produce_findings` payload.
+First scan (secret-safe): after inventory and architecture, call `secure_mcp_review_secrets` on the same root before or with the other category tools. Tool evidence is redacted at the output boundary; never copy raw secret material from the cited file into notes, prompts, SARIF, markdown, or a later `secure_mcp_produce_findings` payload. Use the bundled fixtures and repository smoke checks to verify a fresh installation when available.
 
 After architecture and initial pack loading, call these tools with the same root, stack scope, and `focus_paths`:
 
