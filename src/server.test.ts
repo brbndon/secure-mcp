@@ -621,11 +621,14 @@ describe("architecture typed surfaces", () => {
       assert.ok(JSON.stringify(data).includes("[redacted-secret-file]"));
       assert.ok(data.coverage_gaps.length > 0);
       assert.ok(
-        data.coverage_gaps.every((gap) =>
-          /architecture inventory only.*after auth\/injection\/secrets tools/i.test(
-            (gap as { reason?: string }).reason ?? "",
-          ),
-        ),
+        data.coverage_gaps.every((gap) => {
+          const reason = (gap as { reason?: string }).reason ?? "";
+          return (
+            /architecture inventory only.*after auth\/injection\/secrets tools/i.test(reason) ||
+            /no object-level owner\/tenant check observed/i.test(reason) ||
+            /authz-sensitive path without observed authorization evidence/i.test(reason)
+          );
+        }),
       );
       assert.ok(data.priority_paths.length > 0);
       assert.ok(data.security_brief.coverage_gap_count === data.coverage_gaps.length);

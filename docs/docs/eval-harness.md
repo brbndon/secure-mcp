@@ -39,6 +39,8 @@ fixture declares:
 | `forbidden_rule_families` | Detector families that must not appear |
 | `forbidden_packs` | Recommended pack ids that must not appear |
 | `clean_files` | Fixture-relative paths that must not be cited |
+| `required_authz_gap_paths` | Architecture `authz_id` coverage-gap paths that must appear |
+| `forbidden_raw_secrets` | Planted credential strings that must never appear in any tool payload |
 | `expect_zero_findings` | The fixture must produce no candidates at all |
 
 ## Interpreting failures

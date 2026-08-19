@@ -1,5 +1,6 @@
 <#
-setup.ps1 - one-command bootstrap for a fresh clone (Windows).
+setup.ps1 - unsupported Windows bootstrap retained for historical reference.
+Windows is not supported by secure-mcp; use scripts/setup.sh on Linux/macOS.
 Builds the server, prompts for the filesystem allowlist when unset, then
 installs the skill and MCP server wiring for the configured harness (pi,
 Cursor, OpenAI Codex) and verifies the result.

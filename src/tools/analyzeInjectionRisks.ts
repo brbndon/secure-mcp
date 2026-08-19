@@ -30,6 +30,7 @@ import {
 import { renderMarkdownDocument } from "../lib/markdown.js";
 import { SEVERITY_ORDER, type Finding, type StackFocus } from "../lib/types.js";
 import {
+  applyDispositionBaseline,
   buildFinding,
   createFindingIdFactory,
   ProjectRootInput,
@@ -415,8 +416,9 @@ export function registerAnalyzeInjectionRisks(
         configureForProfile(profile?.likelyStacks);
 
         findings.sort((a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]);
-        const finalizedCoverage = finishCoverage(findings);
-        const safeFindings = redactFindings(findings);
+        const baselined = applyDispositionBaseline(findings, params.disposition_baseline);
+        const finalizedCoverage = finishCoverage(baselined);
+        const safeFindings = redactFindings(baselined);
         const appliedPackIds = appliedInjectionPackIds([...detectorFamiliesRun]);
 
         const data = {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../server.js";
@@ -125,6 +126,46 @@ describe("secrets stack routing", () => {
       await client.close();
       await server.close();
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("planted tiny-app secret is recalled and redacted", () => {
+  it("surfaces secrets.secret-patterns without the raw planted token", async () => {
+    const fixtureRoot = path.resolve(fileURLToPath(new URL("../../fixtures/tiny-app", import.meta.url)));
+    const planted = "planted_secure_mcp_eval_api_key_value_123456";
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 80,
+      maxFileBytes: 16_384,
+      maxDepth: 12,
+      allowedRoots: [fixtureRoot],
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_review_secrets",
+        arguments: { project_root: fixtureRoot, response_format: "json" },
+      });
+      assert.equal(result.isError, undefined);
+      const data = result.structuredContent as {
+        findings: Array<{ rule_family?: string; evidence?: string; severity?: string }>;
+      };
+      const secrets = data.findings.filter((finding) => finding.rule_family === "secrets.secret-patterns");
+      assert.ok(secrets.length > 0, "planted secret must surface as secrets.secret-patterns");
+      assert.ok(secrets.some((finding) => finding.severity === "high" || finding.severity === "critical"));
+      const serialized = JSON.stringify(result.structuredContent);
+      assert.ok(!serialized.includes(planted), "raw planted token leaked in structured content");
+      for (const finding of secrets) {
+        assert.match(finding.evidence ?? "", /REDACTED|\*{4}/);
+      }
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 });

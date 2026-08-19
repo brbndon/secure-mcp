@@ -13,7 +13,7 @@ Thanks for helping improve defensive, agent-first code review. Contributions of 
 
 ## Development setup
 
-Requirements are Node.js 20 or newer and pnpm 10.
+Requirements are Linux or macOS, Node.js 20 or newer, and pnpm 10. Windows is not supported.
 
 ```bash
 git clone https://github.com/brbndon/secure-mcp.git

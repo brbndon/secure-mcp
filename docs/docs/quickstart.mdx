@@ -6,9 +6,13 @@ sidebar:
   order: 3
 ---
 
+> **Platform support:** Linux and macOS only. Windows is not supported.
+
 ## Quickstart
 
-Install first: clone, then run the one-command bootstrap `./scripts/setup.sh` (or `.\scripts\setup.ps1` on Windows). It builds the server, prompts for the filesystem allowlist when it is unset, wires the skill and MCP server into pi, Cursor, and Codex, and verifies the result — then restart your agent. Prefer an allowlist parent that contains the repositories you review. The server requires MCP protocol `2026-07-28`. Grok Build TUI is unsupported until it negotiates that revision.
+Install first: clone, then run the one-command bootstrap `./scripts/setup.sh`. It builds the server, prompts for the filesystem allowlist when it is unset, wires the skill and MCP server into pi, Cursor, and Codex, and verifies the result — then restart your agent. Prefer an allowlist parent that contains the repositories you review. The server requires MCP protocol `2026-07-28`. Grok Build TUI is unsupported until it negotiates that revision.
+
+`npx -y @brdndon/secure-mcp@2` is the server-only fallback: it starts the published bin with `SECURE_MCP_ALLOWED_ROOTS` and does not install the skill. Use the checkout path for the full workflow.
 
 The safest useful audit is staged. Each phase leaves a small artifact the next phase can use, so agents do not spend context on irrelevant checklists or jump from a regex hit to a confident claim.
 

@@ -371,8 +371,8 @@ async function main(): Promise<void> {
       "Expected secrets findings in response",
     );
     assert(
-      !secretsText.includes("sk_live_fixtureexamplekeynotreal000"),
-      "review_secrets must redact the raw Stripe key from output",
+      !secretsText.includes("planted_secure_mcp_eval_api_key_value_123456"),
+      "review_secrets must redact the planted eval API key from output",
     );
     console.log("[smoke] review_secrets OK (raw secret redacted)");
 

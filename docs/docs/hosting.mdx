@@ -8,7 +8,7 @@ sidebar:
 
 ## Docs hosting
 
-The site is a single Blume build: the marketing pages live in `pages/` (custom .astro routes served at `/`, `/help`, `/support`, `/privacy`, `/terms`) and the documentation lives under `/docs/*` (content in `docs/docs/`). The workflow at `.github/workflows/deploy-docs.yml` builds and checks the site whenever `main` changes. It does not deploy the result, so the repository can remain independent of a hosting provider and its account requirements.
+The site is a single Blume build: the marketing pages live in `pages/` (custom .astro routes served at `/`, `/help`, `/support`, `/privacy`, `/terms`) and the documentation lives under `/docs/*` (content in `docs/docs/`). Build and validate it locally before publishing through your chosen static host; this repository does not run an automatic docs workflow.
 
 ## Local build
 

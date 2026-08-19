@@ -675,3 +675,147 @@ describe("produceFindings SARIF export", () => {
     }
   });
 });
+
+describe("produceFindings disposition baseline", () => {
+  it("keeps a suppressed finding out of open risk when the evidence hash is unchanged", async () => {
+    const finding = makeFinding({
+      title: "Known false positive",
+      evidence: "stable evidence snippet",
+      file: "src/route.ts",
+      line: 4,
+      severity: "high",
+      disposition: "needs_review",
+    });
+    const first = await callProduceResult(finding, "Baseline seed", "json");
+    const seeded = (first.structured.findings as Finding[])[0];
+    assert.ok(seeded?.evidence_hash);
+    const result = await callProduceRaw({
+      findings: [finding],
+      project_root: "/tmp/reviewed-project",
+      report_title: "Baseline preserve",
+      response_format: "json",
+      disposition_baseline: [
+        {
+          instance_id: seeded.instance_id,
+          rule_family: seeded.rule_family,
+          file: seeded.file,
+          evidence_hash: seeded.evidence_hash,
+          disposition: "suppressed",
+          disposition_reason: "Documented false positive",
+        },
+      ],
+    });
+    assert.equal(result.isError, undefined);
+    const exported = result.structured.findings as Finding[];
+    assert.equal(exported[0]?.disposition, "suppressed");
+    assert.equal(result.structured.executive_summary.open_total, 0);
+    assert.ok(
+      !(result.structured.executive_summary.remediation_priority as unknown[]).some(
+        (item) => (item as { title?: string }).title === "Known false positive",
+      ),
+    );
+    const ledger = result.structured.disposition_ledger as Array<{ disposition: string }>;
+    assert.equal(ledger[0]?.disposition, "suppressed");
+  });
+
+  it("round-trips a core.authorization ledger whose instance_id is redacted at the output boundary", async () => {
+    const finding = makeFinding({
+      title: "No object-level authorization observed on identifier-bearing handler",
+      category: "authorization",
+      rule_family: "core.authorization",
+      root_control: "CMN-AUTHZ-IDOR",
+      evidence: "const { id } = params;",
+      file: "app/api/users/[id]/route.ts",
+      line: 6,
+      severity: "high",
+      disposition: "needs_review",
+    });
+    const first = await callProduceResult(finding, "Seed redacted-instance-id ledger", "json");
+    const seeded = (first.structured.findings as Finding[])[0];
+    assert.ok(
+      seeded?.instance_id?.includes("[REDACTED:"),
+      `expected the output boundary to redact the instance_id, got ${seeded?.instance_id}`,
+    );
+    const ledger = first.structured.disposition_ledger as Array<{
+      instance_id?: string;
+      rule_family?: string;
+      file?: string;
+      evidence_hash?: string;
+    }>;
+    const entry = ledger[0];
+    assert.ok(entry?.instance_id?.includes("[REDACTED:"));
+    const result = await callProduceRaw({
+      findings: [finding],
+      project_root: "/tmp/reviewed-project",
+      report_title: "Replay redacted-instance-id baseline",
+      response_format: "json",
+      disposition_baseline: [
+        {
+          instance_id: entry.instance_id,
+          rule_family: entry.rule_family,
+          file: entry.file,
+          evidence_hash: entry.evidence_hash,
+          disposition: "suppressed",
+          disposition_reason: "Documented false positive",
+        },
+      ],
+    });
+    assert.equal(result.isError, undefined);
+    const exported = result.structured.findings as Finding[];
+    assert.equal(exported[0]?.disposition, "suppressed");
+    assert.equal(result.structured.executive_summary.open_total, 0);
+  });
+
+  it("returns a suppressed item to needs_review when the evidence hash changes", async () => {
+    const finding = makeFinding({
+      title: "Code changed",
+      evidence: "new evidence after edit",
+      file: "src/route.ts",
+      line: 4,
+      severity: "high",
+      disposition: "needs_review",
+    });
+    const result = await callProduceRaw({
+      findings: [finding],
+      project_root: "/tmp/reviewed-project",
+      report_title: "Baseline invalidate",
+      response_format: "json",
+      disposition_baseline: [
+        {
+          instance_id: "will-not-match-until-traceability",
+          rule_family: "injection-risk",
+          file: "src/route.ts",
+          evidence_hash: "0000000000000000",
+          disposition: "suppressed",
+          disposition_reason: "Old suppression",
+        },
+      ],
+    });
+    assert.equal(result.isError, undefined);
+    const seeded = (result.structured.findings as Finding[])[0];
+    const second = await callProduceRaw({
+      findings: [finding],
+      project_root: "/tmp/reviewed-project",
+      report_title: "Baseline invalidate",
+      response_format: "json",
+      disposition_baseline: [
+        {
+          instance_id: seeded.instance_id,
+          rule_family: seeded.rule_family,
+          file: seeded.file,
+          evidence_hash: "ffffffffffffffff",
+          disposition: "suppressed",
+          disposition_reason: "Old suppression",
+        },
+      ],
+    });
+    assert.equal(second.isError, undefined);
+    const exported = second.structured.findings as Finding[];
+    assert.equal(exported[0]?.disposition, "needs_review");
+    assert.match(exported[0]?.disposition_reason ?? "", /evidence or justifying code changed/i);
+    const priority = second.structured.executive_summary.remediation_priority as Array<{
+      title?: string;
+    }>;
+    assert.ok(priority.some((item) => item.title === "Code changed"));
+  });
+});

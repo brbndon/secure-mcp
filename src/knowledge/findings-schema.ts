@@ -45,6 +45,31 @@ export const CandidateDispositionSchema = z.enum([
   "fixed",
 ]);
 
+/** Closed ledger states that must not re-enter open risk unless evidence changes. */
+export const CLOSED_CANDIDATE_DISPOSITIONS = [
+  "suppressed",
+  "accepted_risk",
+  "not_applicable",
+  "fixed",
+] as const;
+
+export const DispositionBaselineEntrySchema = z
+  .object({
+    instance_id: z.string().min(1).max(MAX_FINDING_LABEL).optional(),
+    rule_family: z.string().min(1).max(MAX_FINDING_LABEL).optional(),
+    file: z.string().max(MAX_FINDING_PATH).optional(),
+    evidence_hash: z
+      .string()
+      .min(1)
+      .max(MAX_FINDING_LABEL)
+      .describe("Hash of the prior finding evidence; compared to the current evidence_hash"),
+    disposition: CandidateDispositionSchema,
+    disposition_reason: z.string().min(1).max(MAX_FINDING_DISPOSITION_REASON).optional(),
+  })
+  .strict();
+
+export type DispositionBaselineEntry = z.infer<typeof DispositionBaselineEntrySchema>;
+
 /**
  * Required shape for every security finding.
  * Forces defensive secure-code-review output (not offensive guidance).
@@ -169,6 +194,14 @@ export const FindingSchema = z
       .describe(
         "Validation label: static_only when code review alone confirms and verifies the finding; needs_runtime when owner-authorized runtime/configuration verification (manual QA or existing DAST) is still required. Defensive only; never exploit steps.",
       ),
+    evidence_hash: z
+      .string()
+      .min(1)
+      .max(MAX_FINDING_LABEL)
+      .optional()
+      .describe(
+        "Stable hash of the finding evidence used to decide whether a prior closed disposition still applies",
+      ),
   })
   .strict();
 
@@ -246,6 +279,7 @@ export const FINDING_FIELD_METADATA = {
     itemMaxChars: MAX_FINDING_LIST_ITEM,
   },
   validation_status: { merge: "first-defined" },
+  evidence_hash: { merge: "first-defined", maxChars: MAX_FINDING_LABEL },
 } as const satisfies Record<keyof FindingInput, FindingFieldMetadata>;
 
 const FINDING_FIELDS = Object.keys(FINDING_FIELD_METADATA) as Array<keyof FindingInput>;
@@ -389,6 +423,13 @@ export const ProjectRootInput = z
       .enum(["json", "markdown"])
       .default("json")
       .describe("json for structured agent processing; markdown for human-readable summaries"),
+    disposition_baseline: z
+      .array(DispositionBaselineEntrySchema)
+      .max(MAX_FINDINGS)
+      .optional()
+      .describe(
+        "Optional caller-held prior dispositions. The server is stateless and does not write a baseline file. If the fingerprint matches and evidence_hash is unchanged, a closed disposition is preserved; if the evidence hash changed, the item returns to needs_review.",
+      ),
   })
   .strict();
 
@@ -435,11 +476,13 @@ export function buildFinding(
     source: partial.source,
     sink: partial.sink,
   });
+  const evidenceHash = partial.evidence_hash ?? createEvidenceHash(partial.evidence);
   return {
     ...partial,
     rule_family: ruleFamily,
     root_control: rootControl,
     instance_id: instanceId,
+    evidence_hash: evidenceHash,
     disposition: partial.disposition ?? "needs_review",
     disposition_reason:
       partial.disposition_reason ??
@@ -512,4 +555,91 @@ export function createFindingInstanceId(input: {
   );
   const digest = createHash("sha256").update(seed).digest("hex").slice(0, 16);
   return `${input.rule_family.slice(0, MAX_FINDING_LABEL - digest.length - 1)}:${digest}`;
+}
+
+/** Hash of finding evidence used to decide whether a prior closed disposition still applies. */
+export function createEvidenceHash(evidence: string): string {
+  return createHash("sha256").update(evidence).digest("hex").slice(0, 16);
+}
+
+function baselineFingerprint(entry: {
+  instance_id?: string;
+  rule_family?: string;
+  file?: string;
+}): string {
+  if (entry.instance_id) return `id:${entry.instance_id}`;
+  return `fam:${entry.rule_family ?? ""}|file:${entry.file ?? ""}`;
+}
+
+/**
+ * Re-apply caller-held closed dispositions. The server stays stateless: the
+ * agent supplies the prior ledger and persists whatever comes back.
+ * Unchanged evidence keeps the closed state out of open risk. A changed
+ * evidence hash drops the suppression back to needs_review.
+ */
+export function applyDispositionBaseline(
+  findings: readonly FindingInput[],
+  baseline: readonly DispositionBaselineEntry[] | undefined,
+): FindingInput[] {
+  if (!baseline || baseline.length === 0) return [...findings];
+  const byKey = new Map<string, DispositionBaselineEntry>();
+  for (const entry of baseline) {
+    // Register both match keys. The output boundary may redact a persisted
+    // instance_id (e.g. "core.authorization:<digest>" becomes
+    // "core.authorization:[REDACTED:****]"), so the fam|file key keeps the
+    // entry matchable when the id: key can no longer collide.
+    if (entry.instance_id) {
+      const idKey = `id:${entry.instance_id}`;
+      if (!byKey.has(idKey)) byKey.set(idKey, entry);
+    }
+    const famKey = baselineFingerprint({
+      rule_family: entry.rule_family,
+      file: entry.file,
+    });
+    if (!byKey.has(famKey)) byKey.set(famKey, entry);
+  }
+  return findings.map((finding) => {
+    const hash = finding.evidence_hash ?? createEvidenceHash(finding.evidence);
+    // A disposition the caller confirmed open this run (reportable/deferred)
+    // is fresher judgment than a stale closed baseline entry; never demote it.
+    if (finding.disposition === "reportable" || finding.disposition === "deferred") {
+      return { ...finding, evidence_hash: hash };
+    }
+    const prior =
+      (finding.instance_id ? byKey.get(`id:${finding.instance_id}`) : undefined) ??
+      byKey.get(baselineFingerprint({ rule_family: finding.rule_family, file: finding.file }));
+    if (!prior) return { ...finding, evidence_hash: hash };
+    const closed = (CLOSED_CANDIDATE_DISPOSITIONS as readonly string[]).includes(prior.disposition);
+    if (!closed) return { ...finding, evidence_hash: hash };
+    if (prior.evidence_hash === hash) {
+      return {
+        ...finding,
+        evidence_hash: hash,
+        disposition: prior.disposition,
+        disposition_reason:
+          prior.disposition_reason ??
+          "Preserved from caller baseline; evidence hash unchanged.",
+      };
+    }
+    return {
+      ...finding,
+      evidence_hash: hash,
+      disposition: "needs_review",
+      disposition_reason:
+        "Prior closed disposition dropped because the cited evidence or justifying code changed.",
+    };
+  });
+}
+
+export function dispositionLedgerFromFindings(
+  findings: readonly FindingInput[],
+): DispositionBaselineEntry[] {
+  return findings.map((finding) => ({
+    instance_id: finding.instance_id,
+    rule_family: finding.rule_family,
+    file: finding.file,
+    evidence_hash: finding.evidence_hash ?? createEvidenceHash(finding.evidence),
+    disposition: finding.disposition ?? "needs_review",
+    ...(finding.disposition_reason ? { disposition_reason: finding.disposition_reason } : {}),
+  }));
 }

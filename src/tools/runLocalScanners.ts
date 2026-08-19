@@ -233,9 +233,10 @@ const InputSchema = z
     allow_remote_rules: z
       .boolean()
       .default(false)
-      .describe(
-        "If true, semgrep may fetch remote rules when no local config is present (not recommended). Default false — offline/custom config only.",
-      ),
+      .refine((value) => !value, {
+        message: "Remote Semgrep rules are disabled; provide a local configuration instead.",
+      })
+      .describe("Deprecated compatibility field. Must remain false because scanner runs are offline-only."),
     timeout_seconds: z
       .number()
       .int()
@@ -298,14 +299,14 @@ export function registerRunLocalScanners(
 
 PURPOSE (defensive only)
 - Orchestrate scanners you already trust and install; secure-mcp shells out only (no scanner npm dependency).
-- Offline-first: semgrep uses a local config (.semgrep.yml / semgrep.yml) unless allow_remote_rules=true.
+- Offline-only: semgrep runs only with a local config (.semgrep.yml / semgrep.yml).
 - Default off: requires enable=true AND server env SECURE_MCP_LOCAL_SCANNERS=1. Missing binaries are a structured skip, not an error.
 - Findings are candidates (disposition needs_review) — always confirm before reporting.
 
 Args:
   - project_root (string): allowlisted root; scanners run with cwd=project_root only
   - enable (boolean): default false
-  - allow_remote_rules (boolean): default false — allow semgrep to fetch rules when no local config
+  - allow_remote_rules (boolean): deprecated compatibility field; must remain false
   - timeout_seconds (number): default ${DEFAULT_TIMEOUT_SECONDS}, max ${MAX_TIMEOUT_SECONDS}
   - response_format (json|markdown): default json
 
@@ -316,7 +317,7 @@ Returns:
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: true,
+        openWorldHint: false,
       },
     },
     async (params: Input) => {
@@ -354,7 +355,7 @@ Returns:
         const findings: Finding[] = [];
         const scanners: ScannerStatus[] = [];
 
-        // semgrep — offline-first: require a local config unless explicitly opted in.
+        // semgrep — offline-only: require a local config.
         let semgrepConfig: string | undefined;
         for (const candidate of SEMGREP_CONFIG_CANDIDATES) {
           if (await readProjectFileIfExists(root, candidate, config.maxFileBytes, config.allowedRoots)) {
@@ -364,15 +365,13 @@ Returns:
         }
         const semgrepArgs = semgrepConfig
           ? ["scan", "--json", "--exit-zero", "--metrics=off", "--config", semgrepConfig]
-          : params.allow_remote_rules
-            ? ["scan", "--json", "--exit-zero", "--metrics=off", "--config", "auto"]
-            : null;
+          : null;
         if (semgrepArgs === null) {
           scanners.push({
             id: "semgrep",
             status: "skipped",
             findings: 0,
-            note: "No local semgrep config found; set allow_remote_rules=true to fetch rules (offline-safe default is to skip).",
+            note: "No local semgrep config found; semgrep stays skipped to preserve offline-only behavior.",
           });
         } else {
           const run = await runBinary(execFile, "semgrep", semgrepArgs, root, timeoutMs);
@@ -438,7 +437,7 @@ Returns:
           notes: [
             "Scanner output is mapped to candidate findings (disposition needs_review); confirm each in source before reporting.",
             "Secret values from gitleaks are never included — evidence is redacted.",
-            "No ruleset is downloaded unless allow_remote_rules=true was passed.",
+            "No rulesets are downloaded; semgrep requires a local configuration and scanner execution is opt-in.",
           ],
         };
 

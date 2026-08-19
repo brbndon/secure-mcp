@@ -54,7 +54,7 @@ The server speaks the stateless MCP protocol revision `2026-07-28` over **stdio*
 
 ## Filesystem authorization
 
-Process-level configuration always supplies an explicit filesystem allowlist from `SECURE_MCP_ALLOWED_ROOTS`. The value uses the operating system path delimiter (`:` on macOS/Linux, `;` on Windows).
+Process-level configuration always supplies an explicit filesystem allowlist from `SECURE_MCP_ALLOWED_ROOTS`. On the supported Linux/macOS platforms, use `:` between roots.
 
 An empty allowlist does not stop knowledge-only tools from starting, but every filesystem tool rejects `project_root`. Configured roots and requested project roots are canonicalized before containment checks; stale entries do not grant access. Programmatic test configurations may omit the field to exercise tool behavior against temporary fixtures.
 
@@ -81,7 +81,7 @@ Required remediation structure:
 - `residual_risk`
 - `verification_suggestion`
 
-Category tools emit findings; `secure_mcp_produce_findings` normalises them for reports. Candidate dispositions include `fixed` for revalidated remediations (counted, but not prioritised over open work). Architecture responses include typed surfaces and coverage gaps so agents can prioritise entrypoints and sample zero-hit high-value paths; the architecture result is the security brief (no separate brief tool).
+Category tools emit findings; `secure_mcp_produce_findings` normalises them for reports. Candidate dispositions include `fixed` for revalidated remediations (counted, but not prioritised over open work). Architecture responses include typed surfaces, an `authz_graph` of object/tenant identifiers and observed owner predicates, and coverage gaps so agents can prioritise entrypoints and sample zero-hit high-value paths; the architecture result is the security brief (no separate brief tool). Gaps are inventory, not findings.
 
 ## Progressive knowledge packs
 

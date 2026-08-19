@@ -133,6 +133,25 @@ async function connectConsumer(installedEntry) {
       .map((part) => part.text)
       .join("\n");
     assert.ok(text.length > 0);
+
+    const secrets = await client.callTool({
+      name: "secure_mcp_review_secrets",
+      arguments: { project_root: fixture, response_format: "json" },
+    });
+    assert.notEqual(secrets.isError, true, JSON.stringify(secrets));
+    const secretsText = `${JSON.stringify(secrets.structuredContent ?? {})}\n${(secrets.content ?? [])
+      .filter((part) => part && typeof part === "object" && "text" in part)
+      .map((part) => part.text)
+      .join("\n")}`;
+    assert.ok(
+      !secretsText.includes("planted_secure_mcp_eval_api_key_value_123456"),
+      "published bin must redact the planted eval API key",
+    );
+    const secretFindings = (secrets.structuredContent ?? {}).findings ?? [];
+    assert.ok(
+      secretFindings.some((finding) => finding.rule_family === "secrets.secret-patterns"),
+      "published bin must recall secrets.secret-patterns on the tiny-app fixture",
+    );
     return { tools: listed.tools.length, called: true };
   } finally {
     await client.close();
@@ -156,7 +175,11 @@ try {
   assert.ok(manifest.filename.endsWith(`-${PROJECT_VERSION}.tgz`), manifest.filename);
   assertNoSensitiveArtifacts(manifest.files.map((file) => file.path));
 
-  const expectedFiles = ["package.json", "dist/index.js", "README.md", "LICENSE", "CHANGELOG.md"];
+  const expectedFiles = ["package.json", "dist/index.js", "README.md", "LICENSE", "CHANGELOG.md", "NOTICE"];
+  assert.ok(
+    !manifest.files.some((file) => file.path.includes("SKILL.md") || file.path.startsWith("examples/")),
+    "npm tarball must stay server-only: no skill and no examples drop-in",
+  );
   for (const expected of expectedFiles) {
     assert.ok(
       manifest.files.some((file) => file.path === expected),

@@ -132,3 +132,72 @@ export const INJECTION_PATTERNS: {
       "Path confusion can expose or overwrite files outside the intended directory.",
   },
 ];
+
+/**
+ * Path looks like an authorization-sensitive surface (object-level authz /
+ * BOLA-IDOR): Next dynamic segments, admin/account/tenant paths, webhooks,
+ * server actions, and mobile deep-link/AuthSession entry points.
+ * Used to rank inventory and to share identifiers with category tools.
+ */
+export const AUTHZ_DYNAMIC_SEGMENT_RE = /\/\[[^\]]+\]/;
+export const AUTHZ_PATH_SEGMENT_RE =
+  /(^|\/)(admin|account|dashboard|settings|profile|billing|checkout|team|teams|org|organizations|users?|members|roles?|permissions?|tenants?)(\/|\.|$)/i;
+export const AUTHZ_WEBHOOK_RE = /webhook|stripe-hook|svix|callback/i;
+export const AUTHZ_SERVER_ACTION_RE = /(^|\/)actions?\//i;
+export const AUTHZ_DEEP_LINK_RE = /authsession|deep.?link|universal.?link|onopenurl|linking/i;
+
+/** Client-supplied object or tenant identifier in handler code. Bounded spans. */
+export const OBJECT_OR_TENANT_ID_CODE_RE =
+  /\b(?:params|args|input|query)\s*(?:\.|\[)\s*['"]?(?:id|userId|user_id|orgId|org_id|tenantId|tenant_id|accountId|slug)\b|\{\s*params\s*\}\s*:\s*\{[^}]{0,80}\b(?:id|userId|orgId|tenantId)\b|\bconst\s*\{\s*id\s*\}\s*=\s*params\b/i;
+
+/**
+ * High-signal owner / tenant / ownership predicate. Does not match prose like
+ * `owned: true` or a bare `id` destructure. A where/filter clause only counts
+ * as a predicate when an owner/tenant key is paired with a session-derived
+ * reference inside the braces — `where: { id: userId }` (client-supplied id)
+ * is a BOLA shape, not an ownership check.
+ */
+export const OWNER_OR_TENANT_PREDICATE_RE =
+  /\b(?:owner(?:Id|ship)?|ownedBy|userId|orgId|organizationId|tenantId|accountId)\b[\s\S]{0,80}(?:===|==|!==|!=)|\b(?:===|==|!==|!=)[\s\S]{0,80}\b(?:owner(?:Id|ship)?|ownedBy|userId|orgId|organizationId|tenantId|accountId)\b|\b(?:where|filter)\s*:\s*\{[^}]{0,200}(?:\b(?:userId|ownerId|orgId|tenantId|accountId|user_id)\b[^}]{0,120}\b(?:session|auth|req|ctx|currentUser|principal|claims?|actor|identity|user)\b|\b(?:session|auth|req|ctx|currentUser|principal|claims?|actor|identity|user)\b[^}]{0,120}\b(?:userId|ownerId|orgId|tenantId|accountId|user_id)\b)|\b(?:assertOwner|requireOwner(?:ship)?|authorize(?:Resource|Object)?|canAccess|ownsResource|ensureOwner(?:ship)?|checkOwnership)\s*\(/i;
+
+/** Path looks like an authorization-sensitive surface. Exported for tests. */
+export function isAuthzSensitivePath(relativePath: string): boolean {
+  if (!relativePath) return false;
+  const lower = relativePath.toLowerCase();
+  if (AUTHZ_DYNAMIC_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_PATH_SEGMENT_RE.test(relativePath)) return true;
+  if (AUTHZ_WEBHOOK_RE.test(lower)) return true;
+  if (AUTHZ_SERVER_ACTION_RE.test(lower)) return true;
+  if (AUTHZ_DEEP_LINK_RE.test(lower)) return true;
+  return false;
+}
+
+/** Path carries an object or tenant identifier (dynamic segment or resource noun). */
+export function hasObjectOrTenantIdentifierPath(relativePath: string): boolean {
+  if (AUTHZ_DYNAMIC_SEGMENT_RE.test(relativePath)) return true;
+  return /(^|\/)(users?|members|orgs?|organizations|tenants?|accounts?)(\/|\.|$)/i.test(
+    relativePath,
+  );
+}
+
+/** Handler body compares a resource to the caller (owner / tenant / membership). */
+export function hasOwnerOrTenantPredicate(content: string): boolean {
+  if (!content) return false;
+  // Neutralize identifier validation guards (userId == null, userId !== undefined,
+  // null === ownerId, …) before predicate matching: a null/undefined check is
+  // input validation, not an ownership comparison, and must not hide a real
+  // missing-check gap. Remaining owner-keyword comparisons still match below.
+  const stripped = content.replace(
+    /\b(?:null|undefined)\s*(?:===|==|!==|!=)\s*[\w.$[\]]+|\b[\w.$[\]]+\s*(?:===|==|!==|!=)\s*(?:null|undefined)\b/g,
+    " ",
+  );
+  OWNER_OR_TENANT_PREDICATE_RE.lastIndex = 0;
+  return OWNER_OR_TENANT_PREDICATE_RE.test(stripped);
+}
+
+/** Handler body reads a client-supplied object or tenant identifier. */
+export function hasObjectOrTenantIdentifierCode(content: string): boolean {
+  if (!content) return false;
+  OBJECT_OR_TENANT_ID_CODE_RE.lastIndex = 0;
+  return OBJECT_OR_TENANT_ID_CODE_RE.test(content);
+}

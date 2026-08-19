@@ -83,6 +83,7 @@ const SHRINKABLE_ARRAY_KEYS = [
   "finding_seeds",
   "surfaces",
   "coverage_gaps",
+  "authz_graph",
   "priority_paths",
   "recommended_packs",
   "pack_batches",

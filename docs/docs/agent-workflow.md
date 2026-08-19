@@ -73,6 +73,15 @@ example secrets only) — still stay defensive and remediation-oriented.
 `focus_paths` scopes inventory, architecture, and category tools. Resolve
 changed paths with host-agent git (`git diff --name-only`), filter build
 artifacts and lockfiles, map the rest to relative prefixes under
-`project_root`, and re-run architecture so surfaces and gaps match the PR
-surface. Respect `max_files` and coverage truncation — do not claim full-repo
-coverage from a focused pass.
+`project_root`, and re-run architecture so surfaces, `authz_graph`, and gaps
+match the PR surface. Respect `max_files` and coverage truncation — do not
+claim full-repo coverage from a focused pass.
+
+Treat `coverage.not_observed_means` as authoritative:
+`no_candidate_in_files_reviewed` is not a clean-repo certificate;
+`scope_was_truncated_or_partial` needs a follow-up;
+`inventory_only_contents_not_reviewed` means path metadata only.
+
+Copy-paste: `examples/agents-md-snippet.md`. Any CI or pull-request
+orchestration should live in the consumer repository and be reviewed as
+trusted host code; secure-mcp does not ship a consumer GitHub Action.

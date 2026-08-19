@@ -105,6 +105,23 @@ export const authWebPack: KnowledgePack = {
       verification_suggestion: "Review reset flow for TTL, single-use, and response wording.",
     },
     {
+      id: "AUTHWEB-OBJECT-LEVEL",
+      title: "Object-level checks on identifier-bearing routes",
+      description:
+        "A session check is not an ownership check. Handlers that take :id, org, or tenant params must compare the resource owner or tenant to the authenticated principal before read or write.",
+      category: "authorization",
+      severityHint: "high",
+      cwe: "CWE-639",
+      tags: ["idor", "authz", "object-level"],
+      stacks: ["nextjs", "typescript"],
+      impact_if_unremediated:
+        "Any authenticated caller who can guess an identifier may read or change another user's objects.",
+      remediation:
+        "After authenticating, enforce an owner or tenant predicate derived from the session before the data access.",
+      verification_suggestion:
+        "Open each dynamic [id]/org/tenant handler and confirm an owner or tenant predicate next to the identifier use.",
+    },
+    {
       id: "AUTHWEB-RBAC",
       title: "Role checks on privileged routes",
       description:

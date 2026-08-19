@@ -37,12 +37,16 @@ interface FindingRef {
   rule_family?: string;
   category?: string;
   file?: string;
+  evidence?: string;
+  severity?: string;
 }
 
 interface AuditSnapshot {
   stacks: string[];
   packs: string[];
   findings: FindingRef[];
+  authz_gap_paths: string[];
+  serialized_payloads: string[];
 }
 
 async function runAudit(fixture: string): Promise<AuditSnapshot> {
@@ -68,28 +72,76 @@ async function runAudit(fixture: string): Promise<AuditSnapshot> {
     const archData = arch.structuredContent as {
       stacks?: string[];
       recommended_packs?: string[];
+      coverage_gaps?: Array<{ paths?: string[]; authz_id?: string }>;
     };
+    const authz_gap_paths = [
+      ...new Set(
+        (archData.coverage_gaps ?? [])
+          .filter((gap) => Boolean(gap.authz_id))
+          .flatMap((gap) => gap.paths ?? []),
+      ),
+    ];
 
+    const serialized_payloads: string[] = [serializeToolResult(arch)];
     const findings: FindingRef[] = [];
+    const produceInput: unknown[] = [];
     for (const tool of CATEGORY_TOOLS) {
       const result = await client.callTool({
         name: tool,
         arguments: { project_root: projectRoot, response_format: "json" },
       });
       assert.equal(result.isError, undefined, `${tool} failed for ${fixture}`);
+      serialized_payloads.push(serializeToolResult(result));
       const data = result.structuredContent as { findings?: FindingRef[] };
       for (const finding of data.findings ?? []) findings.push(finding);
+      if (tool === "secure_mcp_review_secrets") {
+        produceInput.push(...(data.findings ?? []));
+      }
+    }
+
+    if (produceInput.length > 0) {
+      for (const format of ["json", "markdown", "sarif"] as const) {
+        const report = await client.callTool({
+          name: "secure_mcp_produce_findings",
+          arguments: {
+            project_root: projectRoot,
+            findings: produceInput,
+            response_format: format,
+            report_title: `${fixture} secrets eval`,
+          },
+        });
+        assert.equal(report.isError, undefined, `produce_findings ${format} failed for ${fixture}`);
+        serialized_payloads.push(serializeToolResult(report));
+      }
     }
 
     return {
       stacks: archData.stacks ?? [],
       packs: archData.recommended_packs ?? [],
       findings,
+      authz_gap_paths,
+      serialized_payloads,
     };
   } finally {
     await client.close();
     await server.close();
   }
+}
+
+function serializeToolResult(result: {
+  structuredContent?: unknown;
+  content?: unknown;
+}): string {
+  const text = Array.isArray(result.content)
+    ? result.content
+        .map((part) =>
+          part && typeof part === "object" && "text" in part
+            ? String((part as { text: string }).text)
+            : "",
+        )
+        .join("\n")
+    : "";
+  return `${JSON.stringify(result.structuredContent ?? {})}\n${text}`;
 }
 
 function familiesOf(findings: readonly FindingRef[]): Set<string> {
@@ -153,6 +205,17 @@ for (const [fixture, expectation] of Object.entries(EVAL_FIXTURES)) {
       }
     });
 
+    if (expectation.required_authz_gap_paths?.length) {
+      it(`recalls expected authz coverage-gap paths (${fixture})`, () => {
+        for (const gapPath of expectation.required_authz_gap_paths ?? []) {
+          assert.ok(
+            audit.authz_gap_paths.includes(gapPath),
+            `missing authz coverage gap for "${gapPath}"; observed [${audit.authz_gap_paths.join(", ")}]`,
+          );
+        }
+      });
+    }
+
     it(`does not cite clean files (${fixture})`, () => {
       const cited = new Set(
         audit.findings.map((f) => f.file).filter((v): v is string => Boolean(v)),
@@ -161,6 +224,33 @@ for (const [fixture, expectation] of Object.entries(EVAL_FIXTURES)) {
         assert.ok(!cited.has(clean), `clean file "${clean}" was cited as a finding location`);
       }
     });
+
+    if (expectation.forbidden_raw_secrets?.length) {
+      it(`never emits planted secret material (${fixture})`, () => {
+        const combined = audit.serialized_payloads.join("\n");
+        for (const secret of expectation.forbidden_raw_secrets ?? []) {
+          assert.ok(
+            !combined.includes(secret),
+            `raw planted secret leaked into a tool payload: ${secret}`,
+          );
+        }
+        const secretsFindings = audit.findings.filter(
+          (finding) => finding.rule_family === "secrets.secret-patterns",
+        );
+        assert.ok(
+          secretsFindings.length > 0,
+          "secrets.secret-patterns recall floor failed before redaction check",
+        );
+        for (const finding of secretsFindings) {
+          assert.ok(finding.evidence, "secrets candidate missing evidence");
+          assert.match(
+            finding.evidence ?? "",
+            /REDACTED|\*{4}/,
+            `secrets evidence was not redacted: ${finding.evidence}`,
+          );
+        }
+      });
+    }
 
     if (expectation.expect_zero_findings) {
       it(`produces zero candidate findings (${fixture})`, () => {

@@ -6,6 +6,9 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 
 ### Changed
 
+- Documented Linux/macOS-only support; Windows is not supported.
+- Removed automatic CI, docs-build, and Dependabot automation; releases remain maintainer-triggered through the manual release workflow.
+- Made optional local scanner integration offline-only; Semgrep now requires a repository-local configuration.
 - Documented Grok Build TUI as unsupported until it negotiates MCP `2026-07-28`. It currently requests `2025-11-25`; the installer does not write `~/.grok/config.toml`.
 - Setup and README now treat `SECURE_MCP_ALLOWED_ROOTS` as a parent that can contain multiple Swift/web checkouts, with `install-agents add-root` to append another directory without repeating the bootstrap.
 - `secure_mcp_list_projects` now treats `*.xcodeproj` / `*.xcworkspace` bundles as project markers (parent of the bundle), so typical Xcode iOS/macOS apps are discoverable without `Package.swift`.
@@ -20,6 +23,11 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 
 ### Added
 
+- Authorization surface graph on `secure_mcp_analyze_architecture`: `authz_graph` classifies each `authz_sensitive` path as having an object/tenant identifier, an observed owner/tenant predicate, or a sampleable coverage gap (`authz_id`) when no object-level check was observed. `secure_mcp_check_authentication` emits a `needs_review` `core.authorization` candidate with the same `authz:<path>` identifier for identifier-bearing web handlers that lack an owner predicate. Architecture still does not emit findings.
+- Secret-safe first-scan fixture: `fixtures/tiny-app` plants a non-vendor API key; eval fails if `secrets.secret-patterns` stops recalling or if the raw token appears in JSON, markdown, or SARIF.
+- Caller-supplied `disposition_baseline` on `secure_mcp_produce_findings` and category tools: closed dispositions stay closed when `evidence_hash` is unchanged, and return to `needs_review` when the cited evidence changes. The agent holds the ledger; the server does not write a baseline file.
+- Documented the two-path install contract: clone + `setup.sh` is the full workflow; `npx -y @brdndon/secure-mcp@2` is the server-only 2.0.0 bin (no skill). package-e2e asserts the published bin recalls a redacted secrets finding over MCP `2026-07-28`.
+- Kept the host-side PR/`focus_paths` recipe in `examples/agents-md-snippet.md`; consumer CI orchestration is intentionally not shipped because it must be trusted and maintained by the consumer repository.
 - Apache `NOTICE` identifying the project authors; included in the published npm tarball.
 
 ## 2.0.0 — 2026-08-14

@@ -51,7 +51,8 @@ export const corePack: KnowledgePack = {
         "Users may read or modify other users' data if authorization is incomplete.",
       remediation:
         "Derive identity from the authenticated session and enforce ownership checks on every object operation.",
-      verification_suggestion: "Review each object fetch/update for session-derived ownership checks.",
+      verification_suggestion:
+        "Review each object fetch/update — especially dynamic [id] and tenant-scoped handlers — for a session-derived owner or tenant predicate next to the identifier.",
     },
     {
       id: "CMN-INJ-COMMAND",

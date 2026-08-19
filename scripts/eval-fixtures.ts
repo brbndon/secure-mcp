@@ -33,6 +33,13 @@ export interface EvalFixtureExpectation {
   forbidden_packs?: string[];
   /** Fixture-relative file paths that must not be cited as a finding location. */
   clean_files?: string[];
+  /** Architecture authz coverage-gap paths that must appear (recall floor). */
+  required_authz_gap_paths?: string[];
+  /**
+   * Planted credential strings that must never appear in any tool payload
+   * (structured JSON, markdown, SARIF, notes, or coverage paths).
+   */
+  forbidden_raw_secrets?: string[];
   /** When true, all category tools must return zero findings. */
   expect_zero_findings?: boolean;
   /** Human-readable note explaining the fixture and its expectations. */
@@ -46,12 +53,19 @@ export const EVAL_FIXTURES: Record<string, EvalFixtureExpectation> = {
       "secrets.secret-patterns",
       "core.injection",
       "web-next.authentication",
+      "core.authorization",
     ],
-    required_categories: ["secrets", "injection-risk", "authentication"],
+    required_categories: ["secrets", "injection-risk", "authentication", "authorization"],
+    required_authz_gap_paths: ["app/api/users/[id]/route.ts"],
+    forbidden_raw_secrets: [
+      "planted_secure_mcp_eval_api_key_value_123456",
+      "hardcoded_swift_api_key_value_123456",
+      "super-secret-hardcoded-jwt-key-12345",
+    ],
     forbidden_rule_families: ["expo-rn.profile-auth-storage"],
     forbidden_packs: ["expo-rn"],
     notes:
-      "Next.js app with planted weaknesses (hardcoded JWT/stripe secret, shell/SQL/redirect injection, incomplete middleware auth). Also contains ios/Secrets.swift, so swift families may legitimately appear under mixed detection — that is expected union behavior, not a regression.",
+      "Next.js app with planted weaknesses (hardcoded JWT, non-vendor planted API key, Swift apiKey, shell/SQL/redirect injection, incomplete middleware auth, dynamic [id] route without object-level authorization). Also contains ios/Secrets.swift, so swift families may legitimately appear under mixed detection — that is expected union behavior, not a regression.",
   },
   "tiny-expo": {
     stacks_include: ["expo"],

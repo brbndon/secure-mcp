@@ -6,6 +6,8 @@ sidebar:
   order: 2
 ---
 
+> **Platform support:** Linux and macOS only. Windows is not supported.
+
 ## Installation
 
 `secure-mcp` runs as a local subprocess over stdio and speaks MCP protocol revision `2026-07-28` only. The client launches the built entrypoint, passes a filesystem allowlist in the environment, and exchanges MCP messages over stdin/stdout.
@@ -15,7 +17,7 @@ sidebar:
 - Git
 - Node.js 20 or newer
 - pnpm 10
-- Bash and Python 3 for `scripts/install-agents.sh`; PowerShell 7 for `scripts/install-agents.ps1`
+- Bash and Python 3 for `scripts/install-agents.sh` on Linux or macOS
 - One or more existing absolute directories containing repositories you may review
 - An MCP client that supports protocol revision `2026-07-28`
 
@@ -29,7 +31,7 @@ cd secure-mcp
 ./scripts/setup.sh
 ```
 
-On Windows, run `.\scripts\setup.ps1` in PowerShell. To skip the prompt, pass the allowlist explicitly: `SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/Code ./scripts/setup.sh`. Prefer a parent directory that contains the Swift and web checkouts you review.
+To skip the prompt, pass the allowlist explicitly: `SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/Code ./scripts/setup.sh`. Prefer a parent directory that contains the Swift and web checkouts you review.
 
 ### What the bootstrap runs (the manual path)
 
@@ -41,7 +43,7 @@ export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
 ./scripts/install-agents.sh check
 ```
 
-Filesystem tools fail closed unless `SECURE_MCP_ALLOWED_ROOTS` names one or more roots that may contain a requested `project_root`. Use `:` between multiple roots on macOS/Linux and `;` on Windows. Prefer the parent that contains the repositories you review (for example `/Users/you/Code`) rather than a single app or your home directory. Canonical-path and symlink checks still apply within each authorized root.
+Filesystem tools fail closed unless `SECURE_MCP_ALLOWED_ROOTS` names one or more roots that may contain a requested `project_root`. Use `:` between multiple roots on Linux/macOS. Prefer the parent that contains the repositories you review (for example `/Users/you/Code`) rather than a single app or your home directory. Canonical-path and symlink checks still apply within each authorized root.
 
 `check` verifies installation. `add-root /absolute/path` appends another existing directory to an existing install. `uninstall` removes only entries owned by secure-mcp.
 
@@ -80,7 +82,7 @@ export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
 npx -y @brdndon/secure-mcp@2
 ```
 
-The npm tarball contains only the compiled server and public project documents. It does not include the agent skill, installer, fixtures, source, or `server.json` registry metadata.
+The npm tarball contains only the compiled server and public project documents (`dist/`, README, LICENSE, NOTICE, CHANGELOG). It does not include the agent skill, installer, fixtures, source, `examples/`, or `server.json` registry metadata. Copy the skill from a checkout (or `examples/agents-md-snippet.md`) yourself if you used `npx`.
 
 :::tip
 Run `pnpm smoke` after building to confirm the server starts, negotiates protocol `2026-07-28`, lists its tools, and can analyze the included fixture without executing it.

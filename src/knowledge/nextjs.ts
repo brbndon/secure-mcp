@@ -67,3 +67,21 @@ export const NEXTJS_AUTH_FILE_HINTS = [
   "app/api/auth",
   "pages/api/auth",
 ];
+
+/** Next.js dynamic object/tenant segment (`[id]`, `[orgId]`, …). */
+export const NEXT_DYNAMIC_OBJECT_SEGMENT_RE =
+  /\/\[(?:id|userId|user_id|orgId|org_id|tenantId|tenant_id|accountId|slug)[^\]]*\]/;
+
+/** Next.js handler reading `params.id` / `params.userId` / tenant params. */
+export const NEXT_PARAMS_OBJECT_ID_RE =
+  /\bparams\s*(?:\.|\[)\s*['"]?(?:id|userId|orgId|tenantId|accountId|slug)\b/;
+
+export function hasNextObjectOrTenantIdentifier(
+  relativePath: string,
+  content?: string,
+): boolean {
+  if (NEXT_DYNAMIC_OBJECT_SEGMENT_RE.test(relativePath)) return true;
+  if (!content) return false;
+  NEXT_PARAMS_OBJECT_ID_RE.lastIndex = 0;
+  return NEXT_PARAMS_OBJECT_ID_RE.test(content);
+}
