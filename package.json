@@ -33,7 +33,7 @@
     "docs:check": "BLUME_RUNTIME_DIR=.blume-verify pnpm exec blume check",
     "docs:validate": "BLUME_RUNTIME_DIR=.blume-verify pnpm exec blume validate",
     "docs:preview": "pnpm exec astro preview --root .blume-verify",
-    "audit:dependencies": "pnpm audit --audit-level low",
+    "audit:dependencies": "node scripts/audit-dependencies.mjs",
     "release:check": "pnpm verify && pnpm docs:build && pnpm docs:check && pnpm docs:validate && pnpm audit:dependencies && pnpm test:installer && pnpm test:package && node scripts/check-release-identity.mjs",
     "prepack": "pnpm build",
     "prepublishOnly": "pnpm release:check"
