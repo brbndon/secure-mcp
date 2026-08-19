@@ -28,8 +28,11 @@ import {
   type Severity,
 } from "../lib/types.js";
 import {
+  applyDispositionBaseline,
   boundFinding,
   boundText,
+  dispositionLedgerFromFindings,
+  DispositionBaselineEntrySchema,
   ensureFindingTraceability,
   FindingSchema,
   mergeFindings,
@@ -83,6 +86,13 @@ const InputSchema = z
       .describe("Merge findings with same title+file+category"),
     response_format: z.enum(["json", "markdown", "sarif"]).default("json"),
     report_title: z.string().max(MAX_REPORT_TITLE).optional(),
+    disposition_baseline: z
+      .array(DispositionBaselineEntrySchema)
+      .max(MAX_FINDINGS)
+      .optional()
+      .describe(
+        "Optional caller-held prior dispositions keyed by instance_id/rule_family/file plus evidence_hash. The server does not write a baseline file.",
+      ),
   })
   .strict();
 
@@ -340,7 +350,7 @@ export function findingsToMarkdown(
   });
 }
 
-const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, response_format (json | markdown | sarif).\nReturns: findings[] (each with a derived validation_status: static_only | needs_runtime), executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk), validation_counts.\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority.\n\nValidation: a finding is needs_runtime when it is an unconfirmed candidate or carries an unresolved proof_gap/counterevidence that only runtime or configuration observation can close; static_only otherwise. needs_runtime is a handoff signal to schedule owner-authorized retest, never an exploit step.\n\nSARIF: response_format: "sarif" returns a redacted SARIF 2.1.0 subset (severity→level, rule ids, file/line locations, remediation help text) for CI annotation adjacency. If the export would exceed the response budget, the lowest-priority findings are dropped first and the run is marked secure_mcp_truncated: "true" so the document stays valid SARIF.`;
+const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, disposition_baseline?, response_format (json | markdown | sarif).\nReturns: findings[] (each with a derived validation_status: static_only | needs_runtime), executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk), validation_counts, disposition_ledger (pass back as disposition_baseline on the next run).\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority. Pass disposition_baseline to preserve closed items whose evidence_hash is unchanged; a changed hash returns the item to needs_review.\n\nValidation: a finding is needs_runtime when it is an unconfirmed candidate or carries an unresolved proof_gap/counterevidence that only runtime or configuration observation can close; static_only otherwise. needs_runtime is a handoff signal to schedule owner-authorized retest, never an exploit step.\n\nSARIF: response_format: "sarif" returns a redacted SARIF 2.1.0 subset (severity→level, rule ids, file/line locations, remediation help text) for CI annotation adjacency. If the export would exceed the response budget, the lowest-priority findings are dropped first and the run is marked secure_mcp_truncated: "true" so the document stays valid SARIF.`;
 
 export function registerProduceFindings(server: McpServer): void {
   server.registerTool(
@@ -375,6 +385,8 @@ export function registerProduceFindings(server: McpServer): void {
           }
           list = [...map.values()];
         }
+
+        list = applyDispositionBaseline(list, params.disposition_baseline);
 
         list.sort((a, b) => {
           const open =
@@ -470,6 +482,7 @@ export function registerProduceFindings(server: McpServer): void {
           executive_summary,
           findings: exported,
           candidate_disposition_counts: dispositionCounts,
+          disposition_ledger: dispositionLedgerFromFindings(exported),
           review_checkpoint: {
             resumable: true as const,
             next_steps: [
@@ -477,11 +490,13 @@ export function registerProduceFindings(server: McpServer): void {
               "If coverage was truncated or partial, narrow project_root or raise max_files deliberately, then re-run the affected tool before claiming coverage.",
               "For findings with validation_status needs_runtime, schedule owner-authorized runtime/configuration verification (manual QA or existing DAST) before declaring the weakness closed.",
               "After remediation, re-run secure_mcp_produce_findings with disposition fixed and the verification evidence to update the ledger.",
+              "Persist disposition_ledger on the agent side and pass it back as disposition_baseline on the next produce_findings (or category) call. The server does not write a baseline file.",
             ],
           },
           notes: [
             "Each finding follows evidence → classify → impact → remediate → verify.",
             "Deferred and reportable are confirmed open work; needs_review is an unconfirmed candidate; fixed/suppressed/accepted_risk/not_applicable are excluded from open risk and remediation_priority.",
+            "Pass disposition_baseline to preserve closed items when evidence_hash is unchanged; a changed hash returns the item to needs_review.",
             "validation_status labels handoff needs: static_only means code review alone confirms and verifies; needs_runtime means schedule owner-authorized runtime/configuration verification (manual QA or existing DAST).",
             "Do not expand this report into exploit or PoC attack material.",
           ],

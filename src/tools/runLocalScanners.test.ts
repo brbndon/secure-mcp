@@ -188,6 +188,38 @@ describe("secure_mcp_run_local_scanners", () => {
     }
   });
 
+  it("rejects remote-rule requests so scanner runs remain offline-only", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-scanners-offline-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 20,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: "secure_mcp_run_local_scanners",
+        arguments: {
+          project_root: root,
+          enable: true,
+          allow_remote_rules: true,
+          response_format: "json",
+        },
+      });
+      assert.equal(result.isError, true);
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when project_root is outside the allowlist", async () => {
     const allowed = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-scanner-allowed-"));
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-scanner-outside-"));

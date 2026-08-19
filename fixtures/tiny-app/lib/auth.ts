@@ -6,4 +6,6 @@ export function getUser(token: string) {
   return { id: 1, token };
 }
 
-export const stripeKey = "sk_live_fixtureexamplekeynotreal000";
+// Non-vendor-shaped planted credential for the secret-safe first-scan demo.
+// Must not look like a live Stripe/GitHub/AWS token.
+export const apiKey = "planted_secure_mcp_eval_api_key_value_123456";

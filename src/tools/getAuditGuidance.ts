@@ -48,7 +48,7 @@ Call secure_mcp_get_audit_guidance with other sections for details. Prefer multi
 Phase 0: Confirm live secure_mcp_* tools and that project_root is under the allowlist.
          If the root is unknown: secure_mcp_list_authorized_roots, then secure_mcp_list_projects (use each project's absolute project_root).
 Phase 1: secure_mcp_list_project_structure (inventory)
-Phase 2: secure_mcp_analyze_architecture (stacks, typed surfaces, coverage_gaps, priority_paths, security_brief, threat_highlights, recommended_packs, pack_batches, trust boundaries)
+Phase 2: secure_mcp_analyze_architecture (stacks, typed surfaces, authz_graph, coverage_gaps, priority_paths, security_brief, threat_highlights, recommended_packs, pack_batches, trust boundaries)
          secure_mcp_get_knowledge_pack (start with pack_batches[0], detail=summary; max 6 ids/call; fair sample)
          (optional) secure_mcp_build_remediation_threat_model
 Phase 3: secure_mcp_check_authentication
@@ -56,8 +56,8 @@ Phase 3: secure_mcp_check_authentication
          secure_mcp_review_secrets   (parallel ok)
          then sample zero-hit high-value surfaces from architecture priority_paths/coverage_gaps
          (optional) secure_mcp_run_local_scanners only when enable=true AND SECURE_MCP_LOCAL_SCANNERS=1
-Phase 4: Open files for evidence, trace data flows (read-only); disposition = reportable|needs_review|suppressed|accepted_risk|not_applicable|deferred|fixed with reason/evidence.
-Phase 5: secure_mcp_produce_findings (reportable + deferred are open work; needs_review follows; fixed/suppressed/accepted_risk/not_applicable are ledger-only and excluded from open risk/remediation_priority)
+Phase 4: Open files for evidence, trace data flows (read-only); disposition = reportable|needs_review|suppressed|accepted_risk|not_applicable|deferred|fixed with reason/evidence. Persist the disposition ledger on the agent side.
+Phase 5: secure_mcp_produce_findings (reportable + deferred are open work; needs_review follows; fixed/suppressed/accepted_risk/not_applicable are ledger-only and excluded from open risk/remediation_priority). Pass disposition_baseline from the prior ledger; persist the returned disposition_ledger. The server does not write a baseline file.
 Phase 6: Human narrative from the report.
 
 PROGRESSIVE RULE: Do not load packs before architecture. Use focus_paths for scoped drill-down / PR diffs (host resolves git paths; server never runs git).
@@ -66,9 +66,9 @@ Sub-agents must stay defensive (mapper, specialist, reporter — no "exploit" ro
 `,
 
   authentication: `secure_mcp_check_authentication
-PURPOSE (defensive): locate incomplete session validation, hardcoded creds, weak TLS, middleware-only checks, insecure mobile storage.
-WORKFLOW: inventory first → run tool → read cited files + verify authz + secret handling → fill full Finding schema for confirmed.
-GUARDRAILS: read-only; confirm data flow; pair auth with explicit authz; no bypass recipes.`,
+PURPOSE (defensive): locate incomplete session validation, hardcoded creds, weak TLS, middleware-only checks, insecure mobile storage, and missing object-level (owner/tenant) checks on identifier-bearing handlers.
+WORKFLOW: inventory first → run tool → read cited files + verify authz + secret handling → fill full Finding schema for confirmed. Join architecture authz_graph / coverage_gaps.authz_id with core.authorization candidates (same authz:<path> source).
+GUARDRAILS: read-only; confirm data flow; pair auth with explicit object-level authz; no bypass recipes. A login check is not an ownership check.`,
 
   "injection-risks": `secure_mcp_analyze_injection_risks
 PURPOSE (defensive): find untrusted input to dangerous sinks (sql concat, eval, command, innerHTML, path, redirects).
@@ -86,14 +86,15 @@ WORKFLOW: after arch, call with optional focus_area/assets; use recommended_cont
 GUARDRAILS: only for owners strengthening their own system; no attack plans.`,
 
   architecture: `secure_mcp_analyze_architecture
-Returns stacks, legacy surface path buckets, typed surfaces (kind/exposure/auth_expectation/paths), coverage_gaps, priority_paths, security_brief, threat_highlights (advisory shortlist, not findings), trust boundaries, recommended_packs/pack_batches, checklist_seed.
-Retain architecture as the security brief. After category tools, sample zero-hit high-value surfaces from coverage_gaps/priority_paths.
+Returns stacks, legacy surface path buckets, typed surfaces (kind/exposure/auth_expectation/paths), authz_graph (object/tenant id + owner-predicate classification), coverage_gaps, priority_paths, security_brief, threat_highlights (advisory shortlist, not findings), trust boundaries, recommended_packs/pack_batches, checklist_seed.
+Retain architecture as the security brief. After category tools, sample zero-hit high-value surfaces from coverage_gaps/priority_paths. authz_graph and coverage_gaps.authz_id share identifiers with check_authentication core.authorization candidates. Gaps are inventory, not findings.
 Host agents may map PR diffs into focus_paths; the server does not run git.`,
 
   findings: `secure_mcp_produce_findings
 Every finding passed in must have: evidence, impact_if_unremediated, remediation, residual_risk, verification_suggestion + classification.
 Dispositions: reportable (open confirmed), deferred (open confirmed but postponed with owner/context), needs_review (unconfirmed), suppressed (false positive), accepted_risk (conscious residual), not_applicable, fixed (revalidated remediation with reason/evidence).
 Final rollup order is confirmed open work (reportable/deferred), then needs_review, then closed ledger states. Fixed/suppressed/accepted_risk/not_applicable are counted in candidate_disposition_counts but excluded from open risk and remediation_priority.
+Pass disposition_baseline (from a prior disposition_ledger) so closed items stay closed when evidence_hash is unchanged. A changed hash returns the item to needs_review. Persist the returned disposition_ledger; the server does not write a baseline file.
 Use dedupe, filters. Output is prioritised remediation report.
 Never rewrite into exploit content.`,
 

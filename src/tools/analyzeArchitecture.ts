@@ -24,6 +24,11 @@ import {
   recommendPackPlan,
 } from "../knowledge/packs/registry.js";
 import { threatHighlightsForStacks } from "../knowledge/threat-highlights.js";
+import {
+  classifyAuthzHandler,
+  isAuthzSensitivePath,
+  type AuthzHandlerClass,
+} from "../knowledge/authz-graph.js";
 
 const InputSchema = ProjectRootInput;
 type Input = z.infer<typeof InputSchema>;
@@ -79,6 +84,16 @@ export interface CoverageGap {
   paths: string[];
   reason: string;
   suggested_tools: string[];
+  /**
+   * Shared with checkAuthentication findings (`source`) when this gap is an
+   * object-level authorization inventory sample. Not a confirmed weakness.
+   */
+  authz_id?: string;
+}
+
+export interface AuthzGraphNode extends AuthzHandlerClass {
+  surface_id: string;
+  kind: SurfaceKind;
 }
 
 export interface SecurityBrief {
@@ -103,6 +118,9 @@ const SURFACE_PATH_CAP = 12;
 const SURFACE_KIND_CAP = 40;
 const PRIORITY_PATH_CAP = 24;
 const COVERAGE_GAP_CAP = 16;
+const AUTHZ_GRAPH_CAP = 32;
+
+export { isAuthzSensitivePath };
 
 const HIGH_VALUE_KINDS = new Set<SurfaceKind>([
   "http_route",
@@ -119,31 +137,6 @@ const HIGH_VALUE_KINDS = new Set<SurfaceKind>([
   "rpc",
   "queue",
 ]);
-
-/**
- * Authorization-sensitive path heuristic. Used only to rank sample/priority
- * ordering, never to emit findings. Targets object-level authz (BOLA/IDOR)
- * surfaces: Next dynamic route segments, admin/account/tenant paths, webhooks,
- * server actions, and mobile deep-link/AuthSession entry points.
- */
-const AUTHZ_DYNAMIC_SEGMENT_RE = /\/\[[^\]]+\]/;
-const AUTHZ_PATH_SEGMENT_RE =
-  /(^|\/)(admin|account|dashboard|settings|profile|billing|checkout|team|teams|org|organizations|users?|members|roles?|permissions?|tenants?)(\/|\.|$)/i;
-const AUTHZ_WEBHOOK_RE = /webhook|stripe-hook|svix|callback/i;
-const AUTHZ_SERVER_ACTION_RE = /(^|\/)actions?\//i;
-const AUTHZ_DEEP_LINK_RE = /authsession|deep.?link|universal.?link|onopenurl|linking/i;
-
-/** Exported for tests. */
-export function isAuthzSensitivePath(relativePath: string): boolean {
-  if (!relativePath) return false;
-  const lower = relativePath.toLowerCase();
-  if (AUTHZ_DYNAMIC_SEGMENT_RE.test(relativePath)) return true;
-  if (AUTHZ_PATH_SEGMENT_RE.test(relativePath)) return true;
-  if (AUTHZ_WEBHOOK_RE.test(lower)) return true;
-  if (AUTHZ_SERVER_ACTION_RE.test(lower)) return true;
-  if (AUTHZ_DEEP_LINK_RE.test(lower)) return true;
-  return false;
-}
 
 function baseName(relativePath: string): string {
   const lower = relativePath.toLowerCase();
@@ -674,10 +667,39 @@ function toolsForSurfaceKind(kind: SurfaceKind): string[] {
   }
 }
 
-function buildCoverageGaps(surfaces: TypedSurface[]): CoverageGap[] {
+const AUTHZ_NO_OBJECT_LEVEL_CHECK_REASON =
+  "Handler inventoried; no object-level owner/tenant check observed. Sample this path — this is not a confirmed vulnerability.";
+const AUTHZ_NO_ID_EVIDENCE_REASON =
+  "Handler inventoried; authz-sensitive path without observed authorization evidence. Sample this path — this is not a confirmed vulnerability.";
+/** Authz gaps are prioritized but must not starve the generic high-value-surface gaps. */
+const AUTHZ_GAP_CAP = 8;
+
+function buildCoverageGaps(
+  surfaces: TypedSurface[],
+  authzGraph: AuthzGraphNode[] = [],
+): CoverageGap[] {
   const gaps: CoverageGap[] = [];
+  const covered = new Set<string>();
+
+  for (const node of authzGraph) {
+    if (node.owner_predicate_observed) continue;
+    gaps.push({
+      surface_id: node.surface_id,
+      kind: node.kind,
+      paths: [node.path],
+      reason: node.object_or_tenant_id
+        ? AUTHZ_NO_OBJECT_LEVEL_CHECK_REASON
+        : AUTHZ_NO_ID_EVIDENCE_REASON,
+      suggested_tools: ["secure_mcp_check_authentication"],
+      authz_id: node.id,
+    });
+    covered.add(node.surface_id);
+    if (gaps.length >= AUTHZ_GAP_CAP) break;
+  }
+
   for (const surface of surfaces) {
     if (!HIGH_VALUE_KINDS.has(surface.kind)) continue;
+    if (covered.has(surface.id)) continue;
     gaps.push({
       surface_id: surface.id,
       kind: surface.kind,
@@ -755,11 +777,48 @@ function buildSecurityBrief(input: {
       "Reconcile coverage_gaps after category detectors: sample zero-hit high-value surfaces manually.",
       ...(input.surfaces.some((s) => s.authz_sensitive)
         ? [
-            "Authorization-sensitive surfaces detected (dynamic ids, admin/tenant, webhooks, server actions). Verify object-level authorization on every sensitive action before trusting empty auth findings.",
+            "Authorization-sensitive surfaces detected (dynamic ids, admin/tenant, webhooks, server actions). Reconcile authz_graph: object/tenant identifiers, observed owner predicates, or sampleable no-object-level-check gaps. This is inventory, not a confirmed vulnerability.",
           ]
         : []),
     ],
   };
+}
+
+/**
+ * Classify up to AUTHZ_GRAPH_CAP authz-sensitive handler files. This reads
+ * bounded handler contents (≤ maxFileBytes each) to observe owner predicates,
+ * but never calls recordReviewedFile, so architecture coverage stays
+ * inventory_only (`evidence_basis: "path_inventory"`) — the graph is
+ * classification inventory, not content review.
+ */
+async function classifyAuthzGraph(
+  root: string,
+  surfaces: TypedSurface[],
+  config: ServerConfig,
+): Promise<AuthzGraphNode[]> {
+  const nodes: AuthzGraphNode[] = [];
+  const seen = new Set<string>();
+  for (const surface of surfaces) {
+    if (!surface.authz_sensitive) continue;
+    for (const relativePath of surface.paths) {
+      if (!isAuthzSensitivePath(relativePath) || seen.has(relativePath)) continue;
+      seen.add(relativePath);
+      if (nodes.length >= AUTHZ_GRAPH_CAP) return nodes;
+      const file = await readProjectFileIfExists(
+        root,
+        relativePath,
+        config.maxFileBytes,
+        config.allowedRoots,
+      );
+      const classified = classifyAuthzHandler(relativePath, file?.content ?? "");
+      nodes.push({
+        ...classified,
+        surface_id: surface.id,
+        kind: surface.kind,
+      });
+    }
+  }
+  return nodes;
 }
 
 async function detectSurface(
@@ -774,6 +833,7 @@ async function detectSurface(
   surfaces_truncated: boolean;
   coverage_gaps: CoverageGap[];
   priority_paths: string[];
+  authz_graph: AuthzGraphNode[];
   coverage: CoverageReport;
 }> {
   const { files, coverageSession } = await walkProject(root, {
@@ -787,7 +847,8 @@ async function detectSurface(
   const relativePaths = files.map((f) => f.relativePath);
   const surface = classifyBuckets(relativePaths);
   const { surfaces, truncated: surfacesTruncated } = buildTypedSurfaces(relativePaths, stacks);
-  const coverage_gaps = buildCoverageGaps(surfaces);
+  const authz_graph = await classifyAuthzGraph(root, surfaces, config);
+  const coverage_gaps = buildCoverageGaps(surfaces, authz_graph);
   const priority_paths = buildPriorityPaths(surfaces, focusPaths);
   return {
     surface,
@@ -795,6 +856,7 @@ async function detectSurface(
     surfaces_truncated: surfacesTruncated,
     coverage_gaps,
     priority_paths,
+    authz_graph,
     coverage: coverageSession.finish(),
   };
 }
@@ -810,6 +872,13 @@ function redactCoverageGaps(gaps: CoverageGap[]): CoverageGap[] {
   return gaps.map((gap) => ({
     ...gap,
     paths: redactedSecretPaths(gap.paths),
+  }));
+}
+
+function redactAuthzGraph(nodes: AuthzGraphNode[]): AuthzGraphNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    path: redactedSecretPaths([node.path])[0] ?? node.path,
   }));
 }
 
@@ -835,7 +904,7 @@ export function registerAnalyzeArchitecture(
       description: `Defensive secure-code-review tool: high-level architecture map (stacks, typed surfaces, coverage gaps, trust boundaries) and recommended knowledge packs for progressive loading.
 
 Args: project_root, stack?, max_files?, focus_paths?, response_format.
-Returns: stacks, surface (legacy path buckets), surfaces (typed), surfaces_truncated, coverage_gaps, priority_paths, security_brief, threat_highlights (advisory stack-gated shortlist, not findings), trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
+Returns: stacks, surface (legacy path buckets), surfaces (typed), surfaces_truncated, authz_graph (object/tenant id + owner-predicate classification for authz-sensitive paths), coverage_gaps, priority_paths, security_brief, threat_highlights (advisory stack-gated shortlist, not findings), trust_boundaries, recommended_packs, pack_batches, checklist_seed, next_tools.
 
 Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrails.`,
       inputSchema: InputSchema,
@@ -868,7 +937,14 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           stacks,
           config,
         );
-        const { surface, surfaces, surfaces_truncated, coverage_gaps, priority_paths } = detected;
+        const {
+          surface,
+          surfaces,
+          surfaces_truncated,
+          coverage_gaps,
+          priority_paths,
+          authz_graph,
+        } = detected;
         const safeSurface = {
           entrypoints: redactedSecretPaths(surface.entrypoints),
           auth_related: redactedSecretPaths(surface.auth_related),
@@ -879,6 +955,7 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
         const safeSurfaces = redactTypedSurfaces(surfaces);
         const safeGaps = redactCoverageGaps(coverage_gaps);
         const safePriorityPaths = redactedSecretPaths(priority_paths);
+        const safeAuthzGraph = redactAuthzGraph(authz_graph);
 
         // Unsupported-stack honesty: flag recognizable-but-uncovered stacks so
         // agents degrade to a limited generic review instead of claiming coverage.
@@ -984,7 +1061,7 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
         const data = {
           ok: true as const,
           project_root: root,
-          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}${unsupported.length > 0 ? `; unsupported=${unsupported.map((s) => s.stack).join(",")}` : ""}.`,
+          summary: `Architecture profile for ${root}: stacks=${stacks.join(", ")}; recommended_packs=${recommended_packs.join(", ")}; surfaces=${safeSurfaces.length}${surfaces_truncated ? " (surface kinds truncated)" : ""}; coverage_gaps=${safeGaps.length}; authz_graph=${safeAuthzGraph.length}; auth paths=${surface.auth_related.length}; api routes=${surface.api_routes.length}${unsupported.length > 0 ? `; unsupported=${unsupported.map((s) => s.stack).join(",")}` : ""}.`,
           stacks,
           /** Recognizable-but-uncovered stacks (marker-file detected). Limited generic review only. */
           unsupported_signals: unsupported,
@@ -1002,6 +1079,13 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           surfaces: safeSurfaces,
           /** True when SURFACE_KIND_CAP dropped later surface kinds (mixed monorepos). */
           surfaces_truncated,
+          /**
+           * Per-path authorization classification for authz_sensitive surfaces.
+           * Each node has an object/tenant identifier, an observed owner predicate,
+           * or a matching coverage_gap (authz_id) when no object-level check was seen.
+           * Inventory only — not findings.
+           */
+          authz_graph: safeAuthzGraph,
           /**
            * High-value surfaces without category-detector evidence yet.
            * After auth/injection/secrets tools, sample zero-hit surface files and reconcile.
@@ -1044,7 +1128,8 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
           ],
           notes: [
             "Defensive architecture review for control placement and remediation planning.",
-            "Retain surfaces, coverage_gaps, priority_paths, security_brief, and threat_highlights as the architecture-as-brief artifact.",
+            "Retain surfaces, authz_graph, coverage_gaps, priority_paths, security_brief, and threat_highlights as the architecture-as-brief artifact.",
+            "authz_graph shares authz_id identifiers with secure_mcp_check_authentication object-level candidates. Gaps are sampleable inventory, not confirmed weaknesses.",
             "threat_highlights is an advisory shortlist gated by detected/forced stacks — not findings and not a noise tier.",
             ...(unsupported.length > 0
               ? [
@@ -1099,10 +1184,22 @@ Guidance: Call secure_mcp_get_audit_guidance for the full workflow and guardrail
                 ),
             },
             {
+              heading: `Authorization graph (${safeAuthzGraph.length})`,
+              bullets: safeAuthzGraph.slice(0, 12).map((node) => {
+                const flags = [
+                  node.object_or_tenant_id ? "object/tenant id" : "no object id",
+                  node.owner_predicate_observed
+                    ? "owner predicate observed"
+                    : "no owner predicate observed",
+                ].join(", ");
+                return `${node.path} — ${flags} (${node.id})`;
+              }),
+            },
+            {
               heading: `Coverage gaps (${safeGaps.length})`,
               bullets: safeGaps.slice(0, 12).map(
                 (g) =>
-                  `${g.kind}: ${g.paths.slice(0, 2).join(", ") || "(none)"} — sample after category tools (${g.suggested_tools.join(", ")})`,
+                  `${g.kind}: ${g.paths.slice(0, 2).join(", ") || "(none)"} — ${g.authz_id ? "sample object-level check" : "sample after category tools"} (${g.suggested_tools.join(", ")})`,
               ),
             },
             {

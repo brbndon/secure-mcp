@@ -1,8 +1,9 @@
 # secure-mcp
 
-[![CI](https://github.com/brbndon/secure-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/brbndon/secure-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@brdndon/secure-mcp.svg)](https://www.npmjs.com/package/@brdndon/secure-mcp)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+**Platform support:** Linux and macOS only. Windows is not supported.
 
 Local **Model Context Protocol (MCP)** server that helps coding agents run defensive, remediation-focused secure code review of source repositories.
 
@@ -40,7 +41,7 @@ Rule-based scanners are useful, but agents still need:
 | `secure_mcp_produce_findings` | Deduplicated, prioritized remediation report |
 | `secure_mcp_list_authorized_roots` | List allowlisted roots and whether each exists |
 | `secure_mcp_list_projects` | Depth-capped discovery of package-manifest project roots |
-| `secure_mcp_run_local_scanners` | Optional, default-off compose of local `semgrep`/`gitleaks` |
+| `secure_mcp_run_local_scanners` | Optional, default-off compose of local, offline `semgrep`/`gitleaks` |
 
 All tools are read-only, never execute project code, and respect ignore patterns and size caps. Bounded audit tools return structured `coverage` with reviewed and excluded paths, ignore reasons, caps, truncation, and candidate dispositions. An empty finding list is not a claim that the entire tree was scanned.
 
@@ -63,7 +64,7 @@ Findings can also include stable traceability fields such as `rule_family`, `roo
 - Git
 - Node.js 20 or newer
 - pnpm 10 for the clone + build + installer path
-- Bash and Python 3 for `scripts/install-agents.sh`; PowerShell 7 for `scripts/install-agents.ps1`
+- Bash and Python 3 for `scripts/install-agents.sh` on Linux or macOS
 - One or more existing absolute directories the server is allowed to inspect (`SECURE_MCP_ALLOWED_ROOTS`)
 - An MCP client that supports protocol revision `2026-07-28`
 
@@ -77,9 +78,9 @@ cd secure-mcp
 ./scripts/setup.sh
 ```
 
-`setup.sh` does everything for you: installs dependencies, builds the server, prompts for the filesystem allowlist (`SECURE_MCP_ALLOWED_ROOTS`) when it is unset, then installs the skill and MCP server wiring for pi, Cursor, and OpenAI Codex and verifies the result. On Windows, use the equivalent `.\scripts\setup.ps1` in PowerShell.
+`setup.sh` does everything for you: installs dependencies, builds the server, prompts for the filesystem allowlist (`SECURE_MCP_ALLOWED_ROOTS`) when it is unset, then installs the skill and MCP server wiring for pi, Cursor, and OpenAI Codex and verifies the result.
 
-The allowlist is required for filesystem tools (`:` on macOS/Linux, `;` on Windows). Prefer the parent directory that contains the Swift, web, and Expo checkouts you review (for example `/Users/you/Code`). That is narrower than your home directory and does not lock you to a single app. To skip the prompt, pass it explicitly, or export it in your shell profile so future runs stay non-interactive:
+The allowlist is required for filesystem tools and uses `:` between roots on Linux/macOS. Prefer the parent directory that contains the Swift, web, and Expo checkouts you review (for example `/Users/you/Code`). That is narrower than your home directory and does not lock you to a single app. To skip the prompt, pass it explicitly, or export it in your shell profile so future runs stay non-interactive:
 
 ```bash
 SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories ./scripts/setup.sh
@@ -114,17 +115,7 @@ The installer:
 
 `add-root` appends one or more existing absolute directories to an existing install and rewrites the client configs. Restart agent sessions afterward.
 
-On Windows, use the equivalent PowerShell installer:
-
-```powershell
-$env:SECURE_MCP_ALLOWED_ROOTS = "C:\absolute\path\to\repositories"
-.\scripts\install-agents.ps1 install
-.\scripts\install-agents.ps1 check
-.\scripts\install-agents.ps1 -Action add-root C:\absolute\path\to\another\parent
-.\scripts\install-agents.ps1 uninstall
-```
-
-The Bash script is Unix-only; the PowerShell script is the Windows equivalent with the same ownership and safety rules.
+Windows is unsupported. Use the Bash installer on Linux or macOS.
 
 | Harness | Skill location | MCP server config |
 | --- | --- | --- |
@@ -192,14 +183,15 @@ See the hosted [client compatibility page](https://mcp.branalytic.com/docs/clien
 
 ### First scan
 
-After install, ask your agent to run a defensive review of an allowlisted repo (or follow the skill at `.agents/skills/secure-mcp/SKILL.md`). A typical tool sequence:
+After install, ask your agent to run a defensive review of an allowlisted repo (or follow the skill at `.agents/skills/secure-mcp/SKILL.md` from a **checkout** — npm does not ship the skill). A typical tool sequence:
 
 1. `secure_mcp_list_project_structure` — inventory and coverage
-2. `secure_mcp_analyze_architecture` — stacks, trust boundaries, `pack_batches`
-3. `secure_mcp_get_knowledge_pack` — first batch at summary detail
-4. Auth, injection, secrets, and threat-model tools as applicable
-5. Confirm candidate flows in source; do not generate exploit content
-6. `secure_mcp_produce_findings` — remediation-focused report
+2. `secure_mcp_analyze_architecture` — stacks, trust boundaries, `authz_graph`, `pack_batches`
+3. `secure_mcp_review_secrets` — secret-safe first win: a committed credential surfaces as a `secrets.secret-patterns` candidate with redacted evidence (the bundled tiny-app fixture always yields one — use it to verify your install)
+4. `secure_mcp_get_knowledge_pack` — first batch at summary detail
+5. Auth, injection, and threat-model tools as applicable
+6. Confirm candidate flows in source; do not generate exploit content
+7. `secure_mcp_produce_findings` — pass `disposition_baseline` on later runs; remediation-focused report
 
 Long reviews intentionally carry small intermediate artifacts between phases. See the [agent workflow](docs/docs/agent-workflow.md) and [security auditor skill](skills/security-auditor.md).
 
@@ -219,11 +211,11 @@ export SECURE_MCP_ALLOWED_ROOTS=/Users/alice/Code
 
 ## Server-only via npm (last resort)
 
-Use the published package only when you need the **stdio server process** and will supply your own agent skill/workflow. It does **not** install the skill or run `install-agents.sh`. The checkout path above is the supported way to get the full workflow.
+Use the published package only when you need the **stdio server process** and will supply your own agent skill/workflow. It does **not** install the skill, installer, fixtures, or `examples/agents-md-snippet.md`. Copy the skill from a checkout (or the snippet in this repository) yourself. The checkout path above is the supported way to get the full workflow.
 
-The npm tarball intentionally contains only the compiled server and public project documents. It does not include the agent skill, installer, fixtures, source, or `server.json` registry metadata.
+The npm tarball intentionally contains only the compiled server and public project documents (`dist/`, README, LICENSE, NOTICE, CHANGELOG). It does not include `.agents/`, `scripts/`, `fixtures/`, source, or `server.json` registry metadata.
 
-After publication, install the v2 artifact explicitly:
+After publication, start the 2.0.0 bin with an explicit allowlist. The process speaks MCP `2026-07-28` only:
 
 ```bash
 export SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories
@@ -300,7 +292,7 @@ server.json         # MCP Registry metadata (repo-only, not published to npm)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SECURE_MCP_ALLOWED_ROOTS` | none (filesystem access denied) | OS-path-delimited canonical roots the tools may inspect |
+| `SECURE_MCP_ALLOWED_ROOTS` | none (filesystem access denied) | `:`-delimited canonical roots the tools may inspect on Linux/macOS |
 | `SECURE_MCP_MAX_FILES` | `400` | Default walk cap |
 | `SECURE_MCP_MAX_FILE_BYTES` | `262144` | Per-file read cap |
 | `SECURE_MCP_MAX_DEPTH` | `12` | Directory depth cap |

@@ -6,13 +6,21 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { describe, it } from "node:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { createServer } from "../server.js";
 import {
   AUTH_PATTERNS,
   appliedAuthPackIds,
+  authCandidatePriority,
+  authDetectorFamily,
   authPackIdsForProfile,
   authPatternAppliesToStack,
   isAuthCandidatePath,
   shouldEmitProfileAuthFinding,
+  shouldScanObjectLevelAuthz,
   shouldScanSwiftAuthFile,
 } from "./checkAuthentication.js";
 import type { StackFocus } from "../lib/types.js";
@@ -156,6 +164,31 @@ describe("isAuthCandidatePath", () => {
     assert.ok(!isAuthCandidatePath("src/lib/storage.ts"));
     assert.ok(!isAuthCandidatePath("src/utils/localStorageHelper.ts"));
     assert.ok(!isAuthCandidatePath("packages/ui/src/hooks/useLocalStorage.ts"));
+  });
+
+  it("includes identifier-bearing web handlers so object-level authz is scanned", () => {
+    assert.ok(isAuthCandidatePath("app/api/users/[id]/route.ts"));
+    assert.ok(!isAuthCandidatePath("app/user/[id].tsx"));
+  });
+});
+
+describe("authCandidatePriority", () => {
+  it("ranks auth-named files above authz-only web handlers in the scan budget", () => {
+    assert.equal(authCandidatePriority("lib/auth.ts"), 0);
+    assert.equal(authCandidatePriority("app/api/auth/session/route.ts"), 0);
+    assert.equal(authCandidatePriority("app/api/users/[id]/route.ts"), 2);
+    assert.equal(authCandidatePriority("app/api/account/route.ts"), 2);
+    assert.ok(authCandidatePriority("lib/auth.ts") < authCandidatePriority("app/api/users/[id]/route.ts"));
+  });
+});
+
+describe("shouldScanObjectLevelAuthz", () => {
+  it("runs on Next/TS and auto-with-web, not forced Expo or Swift", () => {
+    assert.equal(shouldScanObjectLevelAuthz("nextjs"), true);
+    assert.equal(shouldScanObjectLevelAuthz("typescript"), true);
+    assert.equal(shouldScanObjectLevelAuthz("auto", ["nextjs"]), true);
+    assert.equal(shouldScanObjectLevelAuthz("expo"), false);
+    assert.equal(shouldScanObjectLevelAuthz("swift"), false);
   });
 });
 
@@ -328,6 +361,118 @@ describe("Expo / React Native auth heuristics", () => {
   keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
 })`,
       ),
+    );
+  });
+});
+
+describe("object-level authorization candidates", () => {
+  async function withNextHandler(
+    source: string,
+    run: (client: Client, root: string) => Promise<void>,
+  ): Promise<void> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-authz-auth-"));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer({
+      name: "secure-mcp-test",
+      version: "test",
+      defaultMaxFiles: 40,
+      maxFileBytes: 8192,
+      maxDepth: 12,
+    });
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    try {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "authz-auth", dependencies: { next: "15.0.0" } }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "next.config.js"), "module.exports = {};\n", "utf8");
+      await fs.mkdir(path.join(root, "app", "api", "users", "[id]"), { recursive: true });
+      await fs.writeFile(path.join(root, "app", "api", "users", "[id]", "route.ts"), source, "utf8");
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      await run(client, root);
+    } finally {
+      await client.close();
+      await server.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("emits a needs_review core.authorization candidate when no owner predicate is present", async () => {
+    await withNextHandler(
+      `export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const { id } = params;
+  return Response.json({ id, owned: true });
+}
+`,
+      async (client, root) => {
+        const result = await client.callTool({
+          name: "secure_mcp_check_authentication",
+          arguments: { project_root: root, stack: "nextjs", response_format: "json" },
+        });
+        assert.equal(result.isError, undefined);
+        const data = result.structuredContent as {
+          findings: Array<{
+            rule_family?: string;
+            disposition?: string;
+            file?: string;
+            source?: string;
+            category?: string;
+          }>;
+        };
+        const idor = data.findings.find((finding) => finding.rule_family === "core.authorization");
+        assert.ok(idor, "expected core.authorization candidate");
+        assert.equal(idor.disposition, "needs_review");
+        assert.equal(idor.category, "authorization");
+        assert.equal(idor.file, "app/api/users/[id]/route.ts");
+        assert.equal(idor.source, "authz:app/api/users/[id]/route.ts");
+      },
+    );
+  });
+
+  it("does not emit an IDOR candidate when an owner predicate is present", async () => {
+    await withNextHandler(
+      `export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const session = await auth();
+  const user = await db.user.findFirst({ where: { id: params.id, userId: session.user.id } });
+  return Response.json(user);
+}
+`,
+      async (client, root) => {
+        const result = await client.callTool({
+          name: "secure_mcp_check_authentication",
+          arguments: { project_root: root, stack: "nextjs", response_format: "json" },
+        });
+        assert.equal(result.isError, undefined);
+        const data = result.structuredContent as {
+          findings: Array<{ rule_family?: string; file?: string }>;
+        };
+        assert.ok(
+          !data.findings.some((finding) => finding.rule_family === "core.authorization"),
+          "owner predicate must not produce an IDOR candidate",
+        );
+      },
+    );
+  });
+
+  it("does not emit web IDOR candidates for a forced Expo stack", async () => {
+    await withNextHandler(
+      `export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  return Response.json({ id: params.id });
+}
+`,
+      async (client, root) => {
+        const result = await client.callTool({
+          name: "secure_mcp_check_authentication",
+          arguments: { project_root: root, stack: "expo", response_format: "json" },
+        });
+        assert.equal(result.isError, undefined);
+        const data = result.structuredContent as {
+          findings: Array<{ rule_family?: string }>;
+        };
+        assert.ok(!data.findings.some((finding) => finding.rule_family === "core.authorization"));
+      },
     );
   });
 });

@@ -12,7 +12,7 @@
 #   ./scripts/install-agents.sh add-root /absolute/path   # append a root to an existing install
 #   ./scripts/install-agents.sh uninstall  # remove exactly what install added
 #
-# Windows users should use scripts/install-agents.ps1 instead.
+# Windows is unsupported; use Linux or macOS.
 #
 # Idempotent: install may be re-run safely. check exits non-zero on any failure.
 # The installer owns only the secure-mcp keys it writes; conflicting non-owned

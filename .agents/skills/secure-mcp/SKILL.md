@@ -93,7 +93,8 @@ Call `secure_mcp_analyze_architecture` with the same root and the stack forced b
 - `stacks`, `detection`, `trust_boundaries`, `coverage`, `recommended_packs`, `pack_batches`, `checklist_seed`, `next_tools`
 - legacy `surface` path buckets (compat)
 - typed `surfaces` (kind, exposure, auth_expectation, paths) and `surfaces_truncated` (true when the surface-kind cap dropped later stacks)
-- `coverage_gaps` (high-value surfaces without category-detector evidence yet)
+- `authz_graph` (per-path object/tenant identifier and owner-predicate classification for `authz_sensitive` surfaces; inventory only)
+- `coverage_gaps` (high-value surfaces without category-detector evidence yet, plus sampleable `authz_id` gaps when a handler was inventoried and no object-level check was observed)
 - `priority_paths` (follow-up focus order)
 - `unsupported_signals` (recognizable-but-uncovered stacks; when non-empty the review is a limited generic review)
 - `security_brief` (compact derived summary from those fields; no extra walk)
@@ -113,6 +114,8 @@ Start pack selection from the architecture response (`recommended_packs` / `pack
 
 ### Phase 3: category analysis
 
+First-scan (under 60s, secret-safe): after inventory and architecture, call `secure_mcp_review_secrets` on the same root before or with the other category tools. A committed credential surfaces as a high-severity `secrets.secret-patterns` candidate whose `evidence` is already redacted — the bundled `fixtures/tiny-app` always produces one, so use it to verify a fresh install before trusting real scans. Never copy raw secret material from the cited file into notes, prompts, SARIF, markdown, or a later `secure_mcp_produce_findings` payload.
+
 After architecture and initial pack loading, call these tools with the same root, stack scope, and `focus_paths`:
 
 - `secure_mcp_check_authentication` for authentication, authorization, session validation, ownership checks, mobile storage access, and trust controls.
@@ -126,10 +129,10 @@ After category tools return, reconcile architecture `coverage_gaps` and `priorit
 1. Build the set of high-value surface paths from architecture (`surfaces` / `priority_paths`).
 2. Compare against files that produced candidates in auth, injection, and secrets results.
 3. Sample high-value surface files with **zero detector hits** using local read-only tools (and optional focused re-runs with `focus_paths` on those prefixes). Do not only chase candidates.
-4. Before trusting an empty authorization result, sample zero-hit **authorization-sensitive** surfaces (`authz_sensitive` on typed surfaces; dynamic `[id]` routes, admin/account/tenant paths, webhooks, server actions, deep links) — object-level authorization (BOLA/IDOR) matters more than a generic auth check.
+4. Before trusting an empty authorization result, sample zero-hit **authorization-sensitive** surfaces (`authz_sensitive` on typed surfaces; `authz_graph` nodes; dynamic `[id]` routes, admin/account/tenant paths, webhooks, server actions, deep links). Join architecture `coverage_gaps.authz_id` with `secure_mcp_check_authentication` candidates whose `source` / `rule_family` is `authz:<path>` / `core.authorization`. Object-level authorization (BOLA/IDOR) matters more than a generic login check. A login-gated handler with no owner/tenant predicate is `needs_review`, not automatically `reportable`.
 5. Record zero-hit sampling outcomes in the coverage-qualified narrative (still present / needs_review / not_applicable), with reasons.
 
-`secure_mcp_run_local_scanners` composes locally-installed `semgrep`/`gitleaks` (optional, default off — requires `enable: true` AND server env `SECURE_MCP_LOCAL_SCANNERS=1`; offline-first, no ruleset download unless `allow_remote_rules: true`). Results are `needs_review` candidates — still confirm each in source manually.
+`secure_mcp_run_local_scanners` composes locally-installed `semgrep`/`gitleaks` (optional, default off — requires `enable: true` AND server env `SECURE_MCP_LOCAL_SCANNERS=1`; offline-only, with no ruleset downloads). Results are `needs_review` candidates — still confirm each in source manually.
 
 For a confirmed single-stack package, pass the explicit valid stack to architecture and category tools: `nextjs`, `expo`, `swift`, or `typescript` as applicable. `stack: "auto"` is useful for discovery and mixed detection, but it is not a substitute for package-scoped routing. In particular, `secure_mcp_check_authentication` uses path heuristics for Swift under auto; use `stack: "swift"` to scan all Swift files within the bounded budget. A `swift` result alone does not establish iOS or macOS. When preflight says library/dev-only Expo tooling, keep category tools on `typescript` or `common` even if inventory listed `expo`.
 
@@ -152,6 +155,7 @@ Read the cited files with local read-only tools and trace source → control →
 - Set `disposition: "fixed"` only after revalidation: open the cited location, confirm the control is in place, and record reason + evidence. Git “still present” / blame / history checks are **agent-side only** — the server does not run git on the target.
 - Set `validation_status` on every confirmed finding: `"static_only"` when code review alone confirms the weakness and verifies the fix, or `"needs_runtime"` when owner-authorized runtime/configuration verification (manual QA or an existing DAST) is still required before the weakness can be declared closed.
 - Treat `reportable` and `deferred` as confirmed open work; a deferred item must carry owner/context and stays ahead of unconfirmed `needs_review` candidates in the final rollup. Keep closed dispositions (`fixed`, `suppressed`, `accepted_risk`, `not_applicable`) out of the final findings-tool input unless the handoff explicitly needs a disposition ledger. When included, closed items remain counted but are excluded from open risk and `remediation_priority`. Use `accepted_risk` for a conscious residual and `suppressed` for false positives.
+- Persist the disposition ledger on the agent side (do not write a baseline file into the target repo). On the next run, pass it as `disposition_baseline` to `secure_mcp_produce_findings` and to category tools. If `evidence_hash` is unchanged, a closed disposition stays closed and out of open risk. If the cited evidence hash changed, the item returns to `needs_review` because the justifying code changed.
 - Also sample zero-hit high-value surfaces from architecture (see Phase 3 reconciliation), not only detector candidates.
 - Open every high or critical candidate at its cited line before prioritizing it.
 - For a suspected live secret, redact evidence, recommend immediate rotation and removal from source/history, and never test the credential.
@@ -160,7 +164,7 @@ Use sub-agents only for defensive roles such as mapper, auth specialist, mobile/
 
 ### Phase 5: findings and handoff
 
-Before calling `secure_mcp_produce_findings`, pass confirmed open findings with `disposition: "reportable"` or `disposition: "deferred"` (the latter only with explicit owner/context). Include closed dispositions only when the handoff requires a disposition ledger. Keep the live strict `Finding` shape: required remediation fields are `evidence`, `impact_if_unremediated`, `remediation`, `residual_risk`, and `verification_suggestion`, plus classification (`severity`, `confidence`, `category`, optional `cwe`/`owasp`); preserve traceability fields (`rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, `validation_status`, `disposition`) when available. Call `secure_mcp_produce_findings` with `dedupe: true`, appropriate severity/confidence filters, the project root, and `response_format: "markdown"`, `"json"`, or `"sarif"`. Use `"sarif"` when the user asks for CI annotations; the export is a redacted SARIF 2.1.0 subset and carries the same secret redaction as every other output boundary. The review is resumable: if a category scan was truncated or partial, re-run the affected `secure_mcp_*` tool with the same `project_root` plus `focus_paths` before claiming coverage; the report's `review_checkpoint` field lists concrete resume steps. Do not invent a server-side job store. When no confirmed open finding or requested ledger item exists, send a coverage-qualified narrative instead of an empty array.
+Before calling `secure_mcp_produce_findings`, pass confirmed open findings with `disposition: "reportable"` or `disposition: "deferred"` (the latter only with explicit owner/context). Include closed dispositions only when the handoff requires a disposition ledger. Pass the prior `disposition_baseline` and persist the returned `disposition_ledger` for the next run. The server is stateless and does not write a baseline file. Keep the live strict `Finding` shape: required remediation fields are `evidence`, `impact_if_unremediated`, `remediation`, `residual_risk`, and `verification_suggestion`, plus classification (`severity`, `confidence`, `category`, optional `cwe`/`owasp`); preserve traceability fields (`rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, `validation_status`, `disposition`) when available. Call `secure_mcp_produce_findings` with `dedupe: true`, appropriate severity/confidence filters, the project root, and `response_format: "markdown"`, `"json"`, or `"sarif"`. Use `"sarif"` when the user asks for CI annotations; the export is a redacted SARIF 2.1.0 subset and carries the same secret redaction as every other output boundary. The review is resumable: if a category scan was truncated or partial, re-run the affected `secure_mcp_*` tool with the same `project_root` plus `focus_paths` before claiming coverage; the report's `review_checkpoint` field lists concrete resume steps. Do not invent a server-side job store. When no confirmed open finding or requested ledger item exists, send a coverage-qualified narrative instead of an empty array.
 
 End with a human-readable report containing:
 
@@ -192,7 +196,9 @@ For a mixed repository, run inventory, architecture, and category reviews per de
 2. Filter noise before calling tools: drop untracked build junk, generated artifacts, lockfiles, vendored trees, and out-of-scope build output (`node_modules`, `dist`, `.next`, `Pods`, coverage reports, binary assets) unless the user explicitly put them in scope.
 3. Map remaining paths to relative prefixes under `project_root` and pass them as `focus_paths` (array, max 50). Prefer package roots for monorepos rather than stuffing unrelated packages into one call.
 4. Respect `max_files` and coverage truncation: if `coverage.scan_status` is `truncated` or `partial`, shrink prefixes or raise `max_files` deliberately, then re-run. Do not claim full-repo coverage from a focused diff pass.
-5. Still run architecture on the scoped root so `surfaces`, `coverage_gaps`, and `priority_paths` reflect the PR surface; sample zero-hit high-value paths inside the diff set.
+5. Still run architecture on the scoped root so `surfaces`, `authz_graph`, `coverage_gaps`, and `priority_paths` reflect the PR surface; sample zero-hit high-value paths inside the diff set.
+
+Copy-paste drop-in: `examples/agents-md-snippet.md`. Consumer CI orchestration is intentionally not shipped; if a consumer adds it, the host code must be trusted separately from the repository being reviewed. The server itself never runs git.
 
 ## Hardening mode
 

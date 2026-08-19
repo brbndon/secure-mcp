@@ -29,11 +29,20 @@ import {
 import { renderMarkdownDocument } from "../lib/markdown.js";
 import type { Finding, ProjectProfile, StackFocus } from "../lib/types.js";
 import {
+  applyDispositionBaseline,
   buildFinding,
   createFindingIdFactory,
   ProjectRootInput,
 } from "../knowledge/findings-schema.js";
 import { NEXTJS_AUTH_FILE_HINTS } from "../knowledge/nextjs.js";
+import {
+  AUTHZ_ROOT_CONTROL,
+  AUTHZ_RULE_FAMILY,
+  classifyAuthzHandler,
+  isAuthzSensitivePath,
+  isWebObjectHandlerPath,
+  shouldEmitObjectLevelAuthzCandidate,
+} from "../knowledge/authz-graph.js";
 import {
   recommendCategoryPackIds,
   type PackId,
@@ -52,9 +61,29 @@ const SWIFT_AUTH_PATH_RE =
 /** Exported for tests: path looks like auth / session / mobile secure-storage code. */
 export function isAuthCandidatePath(relativePath: string): boolean {
   if (AUTH_NAME_RE.test(relativePath)) return true;
+  if (isAuthzSensitivePath(relativePath) && isWebObjectHandlerPath(relativePath)) {
+    return true;
+  }
   return NEXTJS_AUTH_FILE_HINTS.some((h) =>
     relativePath.toLowerCase().includes(h.toLowerCase()),
   );
+}
+
+/**
+ * Scan-order priority inside the 80-file budget. Auth-named files carry the
+ * pattern detectors and must not be displaced by bare authz-sensitive handlers;
+ * within a priority tier the walk order is preserved (stable sort).
+ */
+export function authCandidatePriority(relativePath: string): number {
+  if (AUTH_NAME_RE.test(relativePath)) return 0;
+  if (
+    NEXTJS_AUTH_FILE_HINTS.some((h) =>
+      relativePath.toLowerCase().includes(h.toLowerCase()),
+    )
+  ) {
+    return 1;
+  }
+  return 2;
 }
 
 /**
@@ -89,6 +118,7 @@ interface AuthPattern {
 /** Stable traceability families this tool can configure. */
 export const AUTH_DETECTOR_FAMILIES = [
   "core.authentication",
+  "core.authorization",
   "web-next.authentication",
   "web-next.profile-auth-boundary",
   "expo-rn.authentication",
@@ -100,6 +130,7 @@ export type AuthDetectorFamily = (typeof AUTH_DETECTOR_FAMILIES)[number];
 
 const PACK_ID_BY_AUTH_FAMILY: Record<AuthDetectorFamily, PackId> = {
   "core.authentication": "core",
+  "core.authorization": "core",
   "web-next.authentication": "web-next",
   "web-next.profile-auth-boundary": "web-next",
   "expo-rn.authentication": "expo-rn",
@@ -142,6 +173,21 @@ const PATTERN_STACKS_BY_FOCUS: Record<StackFocus, StackFocus[]> = {
   expo: ["common", "typescript", "expo"],
   swift: ["common", "swift"],
 };
+
+/**
+ * Object-level (BOLA/IDOR) inventory runs on web handlers only.
+ * Forced Expo/Swift must not emit web route IDOR candidates.
+ */
+export function shouldScanObjectLevelAuthz(
+  focus?: StackFocus | "auto",
+  detectedStacks?: readonly StackFocus[],
+): boolean {
+  if (focus === "expo" || focus === "swift") return false;
+  return (
+    authPatternAppliesToStack("nextjs", focus, detectedStacks) ||
+    authPatternAppliesToStack("typescript", focus, detectedStacks)
+  );
+}
 
 /** Exported for tests: does a pattern apply under the requested stack focus? */
 export function authPatternAppliesToStack(
@@ -392,7 +438,13 @@ export function registerCheckAuthentication(
           focusPrefixes: params.focus_paths,
         });
 
-        const candidates = files.filter((f) => isAuthCandidatePath(f.relativePath));
+        const candidates = files
+          .filter((f) => isAuthCandidatePath(f.relativePath))
+          .sort(
+            (a, b) =>
+              authCandidatePriority(a.relativePath) -
+              authCandidatePriority(b.relativePath),
+          );
 
         const always = files.filter((f) =>
           /middleware\.(ts|js)$|auth\.(ts|js)$|Package\.swift$|Info\.plist$|\.entitlements$/i.test(
@@ -496,6 +548,54 @@ export function registerCheckAuthentication(
                     "Add automated tests for unauthenticated/unauthorized access; re-run this tool after remediation.",
                   cwe: pattern.cwe,
                   tags: ["authentication", pattern.id, "remediation"],
+                  }),
+                ),
+              );
+            }
+          }
+
+          if (shouldScanObjectLevelAuthz(params.stack, profile.likelyStacks)) {
+            detectorFamiliesRun.add(AUTHZ_RULE_FAMILY);
+            const classified = classifyAuthzHandler(file.relativePath, content);
+            if (shouldEmitObjectLevelAuthzCandidate(file.relativePath, classified)) {
+              const line = findLineNumber(content, 0) || 1;
+              findings.push(
+                redactFinding(
+                  buildFinding({
+                    id: nextId(),
+                    title: "No object-level authorization observed on identifier-bearing handler",
+                    description:
+                      "This handler takes an object or tenant identifier and no owner/tenant predicate was observed in the sampled source. Confirm whether callers can only reach their own objects. This is a needs_review candidate, not a confirmed vulnerability.",
+                    severity: "high",
+                    confidence: "low",
+                    category: "authorization",
+                    stack: profile.likelyStacks.includes("nextjs") ? "nextjs" : "typescript",
+                    rule_family: AUTHZ_RULE_FAMILY,
+                    root_control: AUTHZ_ROOT_CONTROL,
+                    file: file.relativePath,
+                    line,
+                    evidence: snippetAround(content, 0),
+                    source: classified.id,
+                    control:
+                      "Derive identity from the authenticated session and enforce an owner or tenant predicate before reading or writing the object.",
+                    sink: `${file.relativePath}:${line}`,
+                    disposition: "needs_review",
+                    proof_gap: [
+                      "Absence of a local predicate is not proof the handler is reachable without ownership checks elsewhere.",
+                    ],
+                    validation: [
+                      "Open the handler and confirm a session-derived owner/tenant comparison next to the identifier.",
+                    ],
+                    impact_if_unremediated:
+                      "Callers who can guess or enumerate identifiers may read or change another principal's objects.",
+                    remediation:
+                      "Compare the resource owner or tenant to the authenticated principal before the fetch or mutation; do not trust client-supplied ids alone.",
+                    residual_risk:
+                      "Shared helpers or middleware may still omit the same check on sibling handlers.",
+                    verification_suggestion:
+                      "Add a negative test that an authenticated caller cannot read another user's id on this route, then re-run check_authentication.",
+                    cwe: "CWE-639",
+                    tags: ["authorization", AUTHZ_ROOT_CONTROL, "idor", "remediation"],
                   }),
                 ),
               );
@@ -612,11 +712,15 @@ export function registerCheckAuthentication(
         if (shouldEmitProfileAuthFinding("swift", profile.hasSwiftFiles, params.stack)) {
           detectorFamiliesAvailable.add("swift-ios.profile-auth-storage");
         }
+        if (shouldScanObjectLevelAuthz(params.stack, profile.likelyStacks)) {
+          detectorFamiliesAvailable.add(AUTHZ_RULE_FAMILY);
+        }
 
         const consulted_pack_ids = authPackIdsForProfile(profile, params.stack);
         const applied_pack_ids = appliedAuthPackIds([...detectorFamiliesRun]);
-        const finalizedCoverage = coverageSession.finish(findings);
-        const safeFindings = redactFindings(findings);
+        const baselined = applyDispositionBaseline(findings, params.disposition_baseline);
+        const finalizedCoverage = coverageSession.finish(baselined);
+        const safeFindings = redactFindings(baselined);
 
         const data = {
           ok: true as const,

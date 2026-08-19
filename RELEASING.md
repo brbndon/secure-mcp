@@ -16,12 +16,12 @@ pnpm install --frozen-lockfile
 pnpm release:check
 ```
 
-`release:check` runs type checking, unit and protocol tests, the build and MCP smoke test, documentation build/check/validate, a dependency audit at every severity, temp-home installer integration tests (Bash and, when available, PowerShell), and a nonpublishing npm tarball E2E that installs the packed artifact in a temporary consumer directory. It also verifies that `package.json`, `server.json`, `SERVER_VERSION`, and the changelog all name `2.0.0`.
+`release:check` runs type checking, unit and protocol tests, the build and MCP smoke test, documentation build/check/validate, a dependency audit at every severity, Unix installer integration tests, and a nonpublishing npm tarball E2E that installs the packed artifact in a temporary consumer directory. It also verifies that `package.json`, `server.json`, `SERVER_VERSION`, and the changelog all name `2.0.0`.
 
 ## Publish after merge
 
 1. Merge the release PR into `main`.
-2. Confirm required CI is green on the exact merge commit.
+2. Confirm the intended release changes are present on the exact `main` commit.
 3. Manually dispatch the **Release** workflow (`.github/workflows/release.yml`) with input version `2.0.0`.
 4. The workflow:
    - refuses to run unless it is a `workflow_dispatch` from the canonical `brbndon/secure-mcp` repository on merged `main`;

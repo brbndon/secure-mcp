@@ -11,7 +11,7 @@
 #
 # Idempotent: re-run any time to refresh skill links and client configs.
 # Uninstall remains:  ./scripts/install-agents.sh uninstall
-# Windows users:      .\scripts\setup.ps1
+# Windows is unsupported; use Linux or macOS.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

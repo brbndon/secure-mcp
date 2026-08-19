@@ -5,10 +5,13 @@ import {
   candidateDispositionPolicy,
 } from "../lib/types.js";
 import {
+  applyDispositionBaseline,
   boundFinding,
   buildFinding,
   CandidateDispositionSchema,
+  createEvidenceHash,
   createFindingInstanceId,
+  dispositionLedgerFromFindings,
   ensureFindingTraceability,
   FindingSchema,
   mergeFindings,
@@ -127,6 +130,116 @@ describe("finding traceability", () => {
     assert.equal(FindingSchema.safeParse(bounded).success, true);
   });
 
+});
+
+describe("disposition baseline", () => {
+  it("keeps a suppressed finding closed when the evidence hash is unchanged", () => {
+    const finding = sampleFinding(12);
+    const hash = createEvidenceHash(finding.evidence);
+    const applied = applyDispositionBaseline([finding], [
+      {
+        instance_id: finding.instance_id,
+        rule_family: finding.rule_family,
+        file: finding.file,
+        evidence_hash: hash,
+        disposition: "suppressed",
+        disposition_reason: "Known false positive",
+      },
+    ]);
+    assert.equal(applied[0]?.disposition, "suppressed");
+    assert.equal(applied[0]?.disposition_reason, "Known false positive");
+    assert.equal(applied[0]?.evidence_hash, hash);
+    const ledger = dispositionLedgerFromFindings(applied);
+    assert.equal(ledger[0]?.disposition, "suppressed");
+  });
+
+  it("returns a closed item to needs_review when the evidence hash changes", () => {
+    const finding = sampleFinding(12);
+    const applied = applyDispositionBaseline([finding], [
+      {
+        instance_id: finding.instance_id,
+        rule_family: finding.rule_family,
+        file: finding.file,
+        evidence_hash: createEvidenceHash("old evidence that no longer matches"),
+        disposition: "suppressed",
+        disposition_reason: "Known false positive",
+      },
+    ]);
+    assert.equal(applied[0]?.disposition, "needs_review");
+    assert.match(applied[0]?.disposition_reason ?? "", /evidence or justifying code changed/i);
+  });
+
+  it("preserves a closed disposition when the persisted ledger carries a redacted instance_id", () => {
+    const finding = buildFinding({
+      id: "AUTH-001",
+      title: "No object-level authorization observed on identifier-bearing handler",
+      description: "Candidate for manual confirmation.",
+      severity: "high",
+      confidence: "low",
+      category: "authorization",
+      rule_family: "core.authorization",
+      root_control: "CMN-AUTHZ-IDOR",
+      file: "app/api/users/[id]/route.ts",
+      line: 6,
+      evidence: "const { id } = params;",
+      impact_if_unremediated: "Callers may read another principal's objects.",
+      remediation: "Enforce an owner or tenant predicate.",
+    });
+    const hash = finding.evidence_hash ?? createEvidenceHash(finding.evidence);
+    const applied = applyDispositionBaseline([finding], [
+      {
+        instance_id: "core.authorization:[REDACTED:****]",
+        rule_family: "core.authorization",
+        file: "app/api/users/[id]/route.ts",
+        evidence_hash: hash,
+        disposition: "suppressed",
+        disposition_reason: "Known false positive",
+      },
+    ]);
+    assert.equal(applied[0]?.disposition, "suppressed");
+    assert.equal(applied[0]?.disposition_reason, "Known false positive");
+  });
+
+  it("never demotes a finding the caller confirmed reportable this run", () => {
+    const finding = { ...sampleFinding(12), disposition: "reportable" as const };
+    const hash = createEvidenceHash(finding.evidence);
+    const applied = applyDispositionBaseline([finding], [
+      {
+        instance_id: finding.instance_id,
+        rule_family: finding.rule_family,
+        file: finding.file,
+        evidence_hash: hash,
+        disposition: "suppressed",
+        disposition_reason: "Old suppression",
+      },
+    ]);
+    assert.equal(applied[0]?.disposition, "reportable");
+    const deferred = applyDispositionBaseline([{ ...finding, disposition: "deferred" as const }], [
+      {
+        instance_id: finding.instance_id,
+        rule_family: finding.rule_family,
+        file: finding.file,
+        evidence_hash: hash,
+        disposition: "suppressed",
+        disposition_reason: "Old suppression",
+      },
+    ]);
+    assert.equal(deferred[0]?.disposition, "deferred");
+  });
+
+  it("accepts disposition_baseline on ProjectRootInput", () => {
+    const parsed = ProjectRootInput.safeParse({
+      project_root: "/tmp/app",
+      disposition_baseline: [
+        {
+          instance_id: "injection-risk:abc",
+          evidence_hash: "deadbeefdeadbeef",
+          disposition: "accepted_risk",
+        },
+      ],
+    });
+    assert.equal(parsed.success, true);
+  });
 });
 
 describe("bounded finding payloads", () => {

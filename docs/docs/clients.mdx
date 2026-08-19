@@ -8,9 +8,13 @@ sidebar:
 
 ## Protocol requirement
 
+**Platform support:** Linux and macOS only. Windows is not supported.
+
 secure-mcp 2.x is a strict MCP v2 server: it serves protocol revision `2026-07-28` over stdio and rejects legacy 2025-era `initialize` openings. Do not use this server with a client that cannot negotiate `2026-07-28`. The repository's protocol tests verify the server against the official MCP SDK v2 client; client-side support is controlled by each client's release.
 
 The config shapes below follow each client's current official documentation and use absolute paths. `SECURE_MCP_ALLOWED_ROOTS` is always required.
+
+Two install paths: clone + `./scripts/setup.sh` ships the skill and installer; `npx -y @brdndon/secure-mcp@2` starts the published 2.0.0 bin only and does **not** install the skill. This table does not claim every client can connect — only clients that negotiate `2026-07-28` will. Grok is listed as unsupported on purpose.
 
 | Client | Installer support | Config location | Notes |
 | --- | --- | --- | --- |
@@ -60,7 +64,7 @@ Reference: [Cursor MCP documentation](https://cursor.com/docs/context/mcp).
 
 ## Claude Desktop
 
-Claude Desktop reads `claude_desktop_config.json` (`~/Library/Application Support/Claude/` on macOS, `%APPDATA%\Claude\` on Windows):
+Claude Desktop reads `claude_desktop_config.json` from its macOS application-support directory:
 
 ```json
 {

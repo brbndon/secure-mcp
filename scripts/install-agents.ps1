@@ -2,6 +2,9 @@
 install-agents.ps1 - install, verify, or remove the secure-mcp skill and MCP
 server wiring for the user's coding agents (pi, Cursor, OpenAI Codex).
 
+UNSUPPORTED: Windows is not supported by secure-mcp. Use the Bash installer on
+Linux or macOS.
+
 secure-mcp 2.x speaks MCP revision 2026-07-28 only. Clients must support the
 modern `server/discover` opening; legacy 2025-era handshakes are rejected.
 

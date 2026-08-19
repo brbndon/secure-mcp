@@ -31,6 +31,23 @@ export const webApiPack: KnowledgePack = {
       verification_suggestion: "Open each handler method and confirm a session/role check.",
     },
     {
+      id: "API-OBJECT-LEVEL",
+      title: "Authorize the object, not only the session",
+      description:
+        "API methods that accept resource identifiers must enforce ownership or tenant membership in the handler. A shared router auth gate is not enough.",
+      category: "authorization",
+      severityHint: "high",
+      cwe: "CWE-639",
+      tags: ["idor", "authz", "object-level"],
+      stacks: ["typescript"],
+      impact_if_unremediated:
+        "Authenticated callers can operate on objects they do not own if the handler trusts client-supplied ids.",
+      remediation:
+        "Bind every object fetch or mutation to the session principal (ownerId, userId, orgId, or tenantId).",
+      verification_suggestion:
+        "For each handler that reads params.id (or equivalent), confirm a server-side owner or tenant predicate.",
+    },
+    {
       id: "API-INPUT-VALIDATE",
       title: "Schema-validate request bodies and query",
       description:

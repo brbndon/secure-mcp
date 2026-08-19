@@ -12,6 +12,8 @@ const packageJson = JSON.parse(
   name: string;
   version: string;
   mcpName?: string;
+  files?: string[];
+  bin?: Record<string, string>;
   repository?: { url?: string };
 };
 
@@ -58,4 +60,16 @@ test("MCP Registry metadata matches package identity", () => {
   assert.equal(roots.isRequired, true);
   assert.equal(roots.format, "string");
   assert.equal(roots.isSecret, false);
+});
+
+test("npm files list is server-only and matches the published bin", () => {
+  assert.deepEqual(packageJson.files?.slice().sort(), [
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "dist/",
+  ]);
+  assert.equal(packageJson.bin?.["secure-mcp"], "dist/index.js");
+  assert.ok(!(packageJson.files ?? []).some((entry) => entry.includes(".agents") || entry.includes("examples")));
 });

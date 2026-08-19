@@ -2,6 +2,8 @@
 
 > Local stdio MCP server and agent workflow for authorized, defensive, remediation-focused secure code review. It helps coding agents inventory repositories, route stack-aware guidance, identify candidate weaknesses, confirm evidence, and produce prioritized fixes. It is not an offensive toolkit, a penetration-testing service, or a certification that reviewed code is secure.
 
+**Platform support:** Linux and macOS only. Windows is not supported.
+
 Canonical agent briefing: https://mcp.branalytic.com/llms.txt
 Source repository: https://github.com/brbndon/secure-mcp
 
@@ -17,7 +19,7 @@ secure-mcp is a local, read-only MCP server plus an installable agent workflow f
 
 ## Recommended install: clone, then one setup command
 
-Requirements: Git, Node.js 20 or newer, pnpm 10, Bash and Python 3 for `setup.sh`/`install-agents.sh` (or PowerShell 7 for `setup.ps1`/`install-agents.ps1` on Windows), and one or more existing absolute directories containing repositories the server may inspect.
+Requirements: Linux or macOS, Git, Node.js 20 or newer, pnpm 10, Bash, Python 3, and one or more existing absolute directories containing repositories the server may inspect. Windows is not supported.
 
 ```bash
 git clone https://github.com/brbndon/secure-mcp.git
@@ -25,7 +27,7 @@ cd secure-mcp
 ./scripts/setup.sh
 ```
 
-On Windows, run `.\scripts\setup.ps1`. The bootstrap installs dependencies, builds the server, prompts for `SECURE_MCP_ALLOWED_ROOTS` when it is unset, then wires the skill and MCP server for pi, Cursor, and OpenAI Codex and verifies the result. Prefer an allowlist parent that contains the repositories you review. Equivalent manual steps:
+The bootstrap installs dependencies, builds the server, prompts for `SECURE_MCP_ALLOWED_ROOTS` when it is unset, then wires the skill and MCP server for pi, Cursor, and OpenAI Codex and verifies the result. Prefer an allowlist parent that contains the repositories you review. Equivalent manual steps:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -37,11 +39,11 @@ SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories \
 
 The installer points clients at this checkout's `dist/index.js`, installs the committed agent workflow, and configures pi, Cursor, and OpenAI Codex. Restart agent sessions after installation. `check` verifies installation; `add-root /absolute/path` appends another authorized parent; `uninstall` removes only entries owned by secure-mcp.
 
-The npm package `@brdndon/secure-mcp` is a last-resort, server-only fallback. It does not contain or install `.agents/skills/secure-mcp/SKILL.md` or `scripts/install-agents.sh`. Prefer the checkout path for the complete agent workflow. npm users should target the v2 artifact explicitly after publication, for example `npx -y @brdndon/secure-mcp@2`.
+Two install paths: (1) clone + `./scripts/setup.sh` is the full workflow (server, skill, installer, fixtures). (2) `SECURE_MCP_ALLOWED_ROOTS=/abs/path npx -y @brdndon/secure-mcp@2` starts the 2.0.0 stdio bin only — it does not install the skill. The npm tarball is server-only. Prefer the checkout path for the complete agent workflow.
 
 ## Filesystem allowlist
 
-`SECURE_MCP_ALLOWED_ROOTS` is required for filesystem tools. It is an OS-path-delimited list of existing absolute canonical roots: use `:` between roots on macOS/Linux and `;` on Windows.
+`SECURE_MCP_ALLOWED_ROOTS` is required for filesystem tools. On Linux/macOS, use `:` between existing absolute canonical roots.
 
 - A tool's absolute `project_root` must resolve beneath an allowed root.
 - Missing, empty, stale, or out-of-scope roots fail closed.
