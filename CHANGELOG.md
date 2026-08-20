@@ -6,6 +6,7 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 
 ### Changed
 
+- Added explicit five-minute public cache hints for the process-static MCP v2 discovery response and deterministic tool catalog. Raw stdio protocol coverage now pins final `2026-07-28` behavior: optional client identity, `resultType`, response-side server identity metadata, required cache fields, stable tool ordering, and JSON Schema 2020-12.
 - Documented Linux/macOS-only support; Windows is not supported.
 - Removed automatic CI, docs-build, and Dependabot automation; releases remain maintainer-triggered through the manual release workflow.
 - Made optional local scanner integration offline-only; Semgrep now requires a repository-local configuration.

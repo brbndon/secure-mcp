@@ -47,7 +47,7 @@ sidebar:
 
 ## Transport
 
-The server speaks the stateless MCP protocol revision `2026-07-28` over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained. The entry runs with `legacy: "reject"`, so 2025-era `initialize` openings are answered with the unsupported-protocol-version error and never served.
+The server speaks the stateless MCP protocol revision `2026-07-28` over **stdio** via `serveStdio` from `@modelcontextprotocol/server/stdio` (which owns a `StdioServerTransport` under the hood): no `initialize` handshake or session ID — each request is self-contained. The entry runs with `legacy: "reject"`, so 2025-era `initialize` openings are answered with the unsupported-protocol-version error and never served. Discovery and the deterministic tool catalog advertise a five-minute public cache hint; the SDK supplies v2 `resultType`, cache fields, response-side server identity metadata, and JSON Schema 2020-12 serialization at the wire boundary.
 
 - Do **not** log to stdout (corrupts the protocol).
 - Use `console.error` for startup and failure messages.

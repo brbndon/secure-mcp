@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { MCP_CATALOG_CACHE_TTL_MS } from "../src/server.js";
 import { LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, PROJECT_VERSION, REQUIRED_TOOLS } from "./test-constants.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -20,15 +21,43 @@ type JsonRpcMessage = {
   error?: { code: number; message: string };
 };
 
-function modernMeta(): Record<string, unknown> {
-  return {
+function modernMeta(options: { includeClientInfo?: boolean } = {}): Record<string, unknown> {
+  const meta: Record<string, unknown> = {
     "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
-    "io.modelcontextprotocol/clientInfo": {
-      name: "secure-mcp-wire-test",
-      version: PROJECT_VERSION,
-    },
     "io.modelcontextprotocol/clientCapabilities": {},
   };
+  if (options.includeClientInfo !== false) {
+    meta["io.modelcontextprotocol/clientInfo"] = {
+      name: "secure-mcp-wire-test",
+      version: PROJECT_VERSION,
+    };
+  }
+  return meta;
+}
+
+function assertModernResult(
+  response: JsonRpcMessage,
+  options: { cacheable?: boolean } = {},
+): Record<string, unknown> {
+  const result = response.result;
+  assert.ok(result, `Expected a result: ${JSON.stringify(response)}`);
+  assert.equal(result.resultType, "complete");
+  assert.deepEqual(result._meta, {
+    "io.modelcontextprotocol/serverInfo": {
+      name: "secure-mcp",
+      version: PROJECT_VERSION,
+    },
+  });
+
+  if (options.cacheable) {
+    assert.equal(result.ttlMs, MCP_CATALOG_CACHE_TTL_MS);
+    assert.equal(result.cacheScope, "public");
+  } else {
+    assert.ok(!("ttlMs" in result));
+    assert.ok(!("cacheScope" in result));
+  }
+
+  return result;
 }
 
 async function closeChild(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -85,11 +114,14 @@ test("modern stdio serves discovery and tools without the legacy handshake", { t
       jsonrpc: "2.0",
       id: 1,
       method: "server/discover",
-      params: { _meta: modernMeta() },
+      // clientInfo is a SHOULD, not a MUST, in the final 2026-07-28 revision.
+      params: { _meta: modernMeta({ includeClientInfo: false }) },
     });
-    const supportedVersions = discover.result?.supportedVersions;
+    const discoverResult = assertModernResult(discover, { cacheable: true });
+    assert.ok(!("serverInfo" in discoverResult), "Server identity belongs in result _meta");
+    const supportedVersions = discoverResult.supportedVersions;
     assert.ok(Array.isArray(supportedVersions));
-    assert.ok(supportedVersions.includes(MODERN_PROTOCOL_VERSION));
+    assert.deepEqual(supportedVersions, [MODERN_PROTOCOL_VERSION]);
     assert.ok(
       !supportedVersions.some((version) => String(version).startsWith("2025-")),
       `Strict v2 server offered a 2025-era protocol: ${supportedVersions.join(", ")}`,
@@ -105,17 +137,27 @@ test("modern stdio serves discovery and tools without the legacy handshake", { t
       method: "tools/list",
       params: { _meta: modernMeta() },
     });
-    const tools = listed.result?.tools;
+    const listResult = assertModernResult(listed, { cacheable: true });
+    const tools = listResult.tools;
     assert.ok(Array.isArray(tools));
     assert.equal(tools.length, REQUIRED_TOOLS.length);
     for (const tool of tools) {
       assert.equal(typeof tool.name, "string");
+      assert.equal(typeof tool.title, "string");
+      assert.equal(typeof tool.description, "string");
       assert.equal(tool.inputSchema?.type, "object");
+      assert.equal(
+        tool.inputSchema?.$schema,
+        "https://json-schema.org/draft/2020-12/schema",
+      );
+      assert.deepEqual(tool.annotations, {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
     }
-    assert.deepEqual(
-      new Set(tools.map((tool) => tool.name)),
-      new Set(REQUIRED_TOOLS),
-    );
+    assert.deepEqual(tools.map((tool) => tool.name), REQUIRED_TOOLS);
 
     const called = await request({
       jsonrpc: "2.0",
@@ -127,8 +169,9 @@ test("modern stdio serves discovery and tools without the legacy handshake", { t
         _meta: modernMeta(),
       },
     });
-    assert.notEqual(called.result?.isError, true);
-    const content = called.result?.content;
+    const callResult = assertModernResult(called);
+    assert.notEqual(callResult.isError, true);
+    const content = callResult.content;
     assert.ok(Array.isArray(content));
     assert.ok(content.length > 0);
     assert.equal(content[0]?.type, "text");

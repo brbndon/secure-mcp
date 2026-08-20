@@ -250,6 +250,8 @@ Alternatives: `"command": "secure-mcp"` after a global install, or `"command": "
 
 secure-mcp 2.x uses `@modelcontextprotocol/server` v2 and serves only MCP protocol revision `2026-07-28` over stdio through `serveStdio` with `legacy: "reject"`. Modern clients negotiate via `server/discover`; no `initialize` handshake or session state is used, and legacy 2025-era `initialize` openings are rejected with the SDK's unsupported-protocol-version error. There is no fallback to MCP SDK v1.
 
+The server's discovery response and deterministic tool catalog use the v2 cache fields (`ttlMs`, `cacheScope`) with a five-minute public hint. The SDK adds the required `resultType` discriminator and `io.modelcontextprotocol/serverInfo` result metadata on the wire, while registered Zod schemas are advertised as JSON Schema 2020-12. `pnpm test:protocol` verifies these final-spec behaviors against raw stdio messages.
+
 ## Develop from a checkout
 
 After clone and `pnpm install --frozen-lockfile`:
