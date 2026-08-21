@@ -279,24 +279,6 @@ export const SWIFT_CRYPTO_PATTERNS: SwiftPattern[] = [
   },
 ];
 
-/**
- * Flat union for backwards compatibility / tests (deduped by id).
- * Prefer the category-scoped arrays in new call sites.
- */
-export const SWIFT_PATTERNS: SwiftPattern[] = (() => {
-  const byId = new Map<string, SwiftPattern>();
-  for (const p of [
-    ...SWIFT_AUTH_PATTERNS,
-    ...SWIFT_INJECTION_PATTERNS,
-    ...SWIFT_SECRETS_PATTERNS,
-    ...SWIFT_CONFIG_PATTERNS,
-    ...SWIFT_CRYPTO_PATTERNS,
-  ]) {
-    if (!byId.has(p.id)) byId.set(p.id, p);
-  }
-  return [...byId.values()];
-})();
-
 /** Paths agents and tools should prioritize when reviewing Swift projects. */
 export const SWIFT_SENSITIVE_FILES = [
   "Info.plist",

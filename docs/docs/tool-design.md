@@ -35,7 +35,7 @@ secure_mcp_<action>_<resource>
 | `secure_mcp_list_projects` | Depth-capped discovery of package-manifest and Xcode project roots |
 | `secure_mcp_run_local_scanners` | Optional, default-off compose of local `semgrep`/`gitleaks` |
 
-The canonical list lives in `TOOL_NAMES` (`src/tools/index.ts`). When a tool is added, extend this table in the same change.
+The canonical list lives in `REQUIRED_TOOLS` (`scripts/test-constants.ts`) and is enforced against live registrations by `scripts/modern-protocol.test.ts`. When a tool is added, extend this table in the same change.
 
 ### Renames from initial bootstrap
 
@@ -54,7 +54,7 @@ releases.
 
 | Surface | Stable contract |
 |---------|-----------------|
-| Tool names | Every id in `TOOL_NAMES` (`src/tools/index.ts`) |
+| Tool names | Every id in `REQUIRED_TOOLS` (`scripts/test-constants.ts`) |
 | Finding required fields | `evidence`, `severity`, `confidence`, `category`, `impact_if_unremediated`, `remediation`, `residual_risk`, `verification_suggestion`; optional `cwe`/`owasp` |
 | Envelope keys | Success `ok: true`; errors `ok: false` with `error` and optional `hint`, plus `isError: true` |
 | Enum values | Dispositions (`reportable`, `deferred`, `needs_review`, `suppressed`, `accepted_risk`, `not_applicable`, `fixed`); `coverage.not_observed_means`; `stack`; `response_format`; pack `detail` |
@@ -165,5 +165,5 @@ Heuristics over-flag by design. Response:
 1. Implement `registerMyTool` in `src/tools/myTool.ts`
 2. Defensive, multi-phase description; Zod `.strict()` inputs
 3. Emit full Finding schema when producing findings
-4. Register in `src/tools/index.ts` and `TOOL_NAMES`
+4. Register in `src/tools/index.ts` and add the name to `REQUIRED_TOOLS` (`scripts/test-constants.ts`)
 5. Extend smoke test + README + this doc

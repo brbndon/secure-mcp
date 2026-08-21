@@ -129,32 +129,6 @@ export const SEVERITY_ORDER = Object.fromEntries(
   ]),
 ) as Record<Severity, number>;
 
-/** Response format for tool outputs. */
-export type ResponseFormat = "json" | "markdown";
-
-/**
- * Standard tool success envelope.
- * Tools should return this shape (or a compatible superset) as structuredContent.
- */
-export interface ToolResultBase {
-  ok: true;
-  project_root: string;
-  summary: string;
-  truncated?: boolean;
-  notes?: string[];
-}
-
-export interface ToolErrorResult {
-  ok: false;
-  error: string;
-  code?: string;
-  hint?: string;
-  output_trust?: "untrusted";
-  output_notice?: string;
-}
-
-export type ToolResult<T extends object = object> = (ToolResultBase & T) | ToolErrorResult;
-
 /** Detected project characteristics used by multiple tools. */
 export interface ProjectProfile {
   root: string;

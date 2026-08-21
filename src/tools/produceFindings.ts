@@ -327,29 +327,6 @@ export function buildSarifWithinBudget(
   return { log, truncated };
 }
 
-/** Exported for tests: markdown includes additive proof/traceability fields. */
-export function findingsToMarkdown(
-  title: string,
-  projectRoot: string | undefined,
-  findings: Finding[],
-  counts: Record<string, number>,
-): string {
-  const openCounts = emptySeverityCounts();
-  for (const finding of findings) {
-    if (candidateDispositionPolicy(finding.disposition).openWork) {
-      openCounts[finding.severity]++;
-    }
-  }
-  return renderFindingsReportMarkdown({
-    title,
-    projectRoot,
-    findings,
-    counts,
-    openCounts,
-    dispositionCounts: countDispositions(findings),
-  });
-}
-
 const TOOL_DESCRIPTION = `Defensive tool: normalize, filter, dedupe and prioritise a list of Finding objects into a final remediation report.\n\nArgs: findings (Finding[]), project_root?, min_severity?, min_confidence?, dedupe?, report_title?, disposition_baseline?, response_format (json | markdown | sarif).\nReturns: findings[] (each with a derived validation_status: static_only | needs_runtime), executive_summary, counts, candidate_disposition_counts (includes fixed and accepted_risk), validation_counts, disposition_ledger (pass back as disposition_baseline on the next run).\n\nDisposition: reportable and deferred are confirmed open work; needs_review is an unconfirmed candidate; fixed is a revalidated remediation; accepted_risk is a conscious residual. Fixed/suppressed/accepted_risk/not_applicable are counted in the ledger but excluded from open risk and remediation_priority. Pass disposition_baseline to preserve closed items whose evidence_hash is unchanged; a changed hash returns the item to needs_review.\n\nValidation: a finding is needs_runtime when it is an unconfirmed candidate or carries an unresolved proof_gap/counterevidence that only runtime or configuration observation can close; static_only otherwise. needs_runtime is a handoff signal to schedule owner-authorized retest, never an exploit step.\n\nSARIF: response_format: "sarif" returns a redacted SARIF 2.1.0 subset (severity→level, rule ids, file/line locations, remediation help text) for CI annotation adjacency. If the export would exceed the response budget, the lowest-priority findings are dropped first and the run is marked secure_mcp_truncated: "true" so the document stays valid SARIF.`;
 
 export function registerProduceFindings(server: McpServer): void {

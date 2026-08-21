@@ -91,7 +91,7 @@ Aim ~10–13 checklist items per pack (a full five-pack recommendation must fit 
 3. Write a long, agent-oriented **defensive** `description` (purpose, multi-phase workflow, args, returns, guardrails).
 4. Set annotations (`readOnlyHint: true` for reviewers).
 5. Return `toolSuccess` / `toolError` helpers; use `buildFinding` for full schema.
-6. Register in `src/tools/index.ts` and `TOOL_NAMES`.
+6. Register in `src/tools/index.ts` and add the name to `REQUIRED_TOOLS` (`scripts/test-constants.ts`).
 7. Add a smoke-test invocation if practical.
 8. Document in README + `docs/docs/tool-design.md`.
 

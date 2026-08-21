@@ -14,7 +14,6 @@ import {
   SWIFT_CONFIG_PATTERNS,
   SWIFT_CRYPTO_PATTERNS,
   SWIFT_INJECTION_PATTERNS,
-  SWIFT_PATTERNS,
   SWIFT_SECRETS_PATTERNS,
 } from "../knowledge/swift.js";
 import { profileProject } from "../lib/filesystem.js";
@@ -43,13 +42,21 @@ function matchIds(patterns: { id: string; regex: RegExp; filter?: (m: string, c:
 
 describe("Swift pattern categories", () => {
   it("keeps stable pattern ids across category arrays", () => {
-    const ids = SWIFT_PATTERNS.map((p) => p.id);
+    // Raw concatenation, no dedupe in between: the Set assertion below is a
+    // real cross-category invariant, not a tautology over a pre-deduped list.
+    const ids = [
+      ...SWIFT_AUTH_PATTERNS,
+      ...SWIFT_INJECTION_PATTERNS,
+      ...SWIFT_SECRETS_PATTERNS,
+      ...SWIFT_CONFIG_PATTERNS,
+      ...SWIFT_CRYPTO_PATTERNS,
+    ].map((p) => p.id);
     assert.ok(ids.includes("SWIFT-USERDEFAULTS-TOKEN"));
     assert.ok(ids.includes("SWIFT-ATS-ARBITRARY"));
     assert.ok(ids.includes("SWIFT-WEBVIEW-HANDLER"));
     assert.ok(ids.includes("SWIFT-KEYCHAIN-ALWAYS"));
     assert.ok(ids.includes("SWIFT-TRUST-DISABLE"));
-    assert.equal(new Set(ids).size, ids.length, "SWIFT_PATTERNS must be unique by id");
+    assert.equal(new Set(ids).size, ids.length, "pattern ids must be unique across categories");
   });
 
   it("does not put secrets-only patterns into the injection array", () => {

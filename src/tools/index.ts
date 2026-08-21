@@ -1,7 +1,9 @@
 /**
  * Register all secure-mcp tools on the given McpServer instance.
  *
- * Tool names are a stable public API for defensive secure-code-review.
+ * Tool names are a stable public API for defensive secure-code-review; the
+ * enforced enumeration lives in `REQUIRED_TOOLS` (scripts/test-constants.ts),
+ * checked against live registrations by scripts/modern-protocol.test.ts.
  */
 
 import type { McpServer } from "@modelcontextprotocol/server";
@@ -18,24 +20,6 @@ import { registerGetAuditGuidance } from "./getAuditGuidance.js";
 import { registerListAuthorizedRoots } from "./listAuthorizedRoots.js";
 import { registerListProjects } from "./listProjects.js";
 import { registerRunLocalScanners } from "./runLocalScanners.js";
-
-/** Canonical tool names — treat as stable public API (defensive framing). */
-export const TOOL_NAMES = [
-  "secure_mcp_list_project_structure",
-  "secure_mcp_analyze_architecture",
-  "secure_mcp_get_knowledge_pack",
-  "secure_mcp_get_audit_guidance",
-  "secure_mcp_check_authentication",
-  "secure_mcp_analyze_injection_risks",
-  "secure_mcp_review_secrets",
-  "secure_mcp_build_remediation_threat_model",
-  "secure_mcp_produce_findings",
-  "secure_mcp_list_authorized_roots",
-  "secure_mcp_list_projects",
-  "secure_mcp_run_local_scanners",
-] as const;
-
-export type ToolName = (typeof TOOL_NAMES)[number];
 
 export function registerAllTools(server: McpServer, config: ServerConfig = loadConfig()): void {
   registerListProjectStructure(server, config);

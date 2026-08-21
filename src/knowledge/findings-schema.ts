@@ -433,8 +433,6 @@ export const ProjectRootInput = z
   })
   .strict();
 
-export type ProjectRootInputType = z.infer<typeof ProjectRootInput>;
-
 /** Helper to create sequential finding IDs. */
 export function createFindingIdFactory(prefix: string): () => string {
   let n = 0;
