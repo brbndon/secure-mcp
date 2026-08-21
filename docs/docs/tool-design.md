@@ -30,6 +30,12 @@ secure_mcp_<action>_<resource>
 | `secure_mcp_review_secrets` | Secret hygiene → rotate & remediate |
 | `secure_mcp_build_remediation_threat_model` | STRIDE fragments for hardening priority |
 | `secure_mcp_produce_findings` | Final remediation report rollup |
+| `secure_mcp_get_audit_guidance` | Agent workflow and guardrails on demand |
+| `secure_mcp_list_authorized_roots` | Allowlisted roots and whether each exists |
+| `secure_mcp_list_projects` | Depth-capped discovery of package-manifest and Xcode project roots |
+| `secure_mcp_run_local_scanners` | Optional, default-off compose of local `semgrep`/`gitleaks` |
+
+The canonical list lives in `TOOL_NAMES` (`src/tools/index.ts`). When a tool is added, extend this table in the same change.
 
 ### Renames from initial bootstrap
 
@@ -39,6 +45,30 @@ secure_mcp_<action>_<resource>
 | `secure_mcp_threat_model` | `secure_mcp_build_remediation_threat_model` | Explicit defensive purpose |
 
 **Do not rename** published tool names without a migration plan.
+
+## Compatibility and deprecation policy
+
+Cross-agent consumers hard-code against this server's contracts. The following
+surfaces are **stable**: agents and repositories may rely on them across minor
+releases.
+
+| Surface | Stable contract |
+|---------|-----------------|
+| Tool names | Every id in `TOOL_NAMES` (`src/tools/index.ts`) |
+| Finding required fields | `evidence`, `severity`, `confidence`, `category`, `impact_if_unremediated`, `remediation`, `residual_risk`, `verification_suggestion`; optional `cwe`/`owasp` |
+| Envelope keys | Success `ok: true`; errors `ok: false` with `error` and optional `hint`, plus `isError: true` |
+| Enum values | Dispositions (`reportable`, `deferred`, `needs_review`, `suppressed`, `accepted_risk`, `not_applicable`, `fixed`); `coverage.not_observed_means`; `stack`; `response_format`; pack `detail` |
+| Annotations | `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false` on every tool |
+| Pack ids | The ids listed in `PACK_IDS` (`src/knowledge/packs/registry.ts`) |
+
+**Additive evolution (non-breaking):** new tools, new optional input fields,
+new response or traceability fields, new categories, and new packs may appear
+in minor releases. Consumers must tolerate unknown fields in responses.
+
+**Breaking changes:** input schemas are `.strict()`, so any *required* new
+input field, a removed or renamed stable surface, or an enum value removal is
+a breaking change. Breaking changes require a planned major/minor release with
+migration notes in `CHANGELOG.md` — never an incidental edit.
 
 ## Registration pattern
 
@@ -83,6 +113,12 @@ Every finding must support:
 6. **verification_suggestion**
 
 The additive traceability fields are `rule_family`, `root_control`, `instance_id`, `source`, `control`, `sink`, `counterevidence`, `proof_gap`, `validation`, and `disposition`. `instance_id` is deterministic for the same detector/control/source location and is independent of session/report numbering.
+
+A standalone machine-readable contract is generated from the Zod source of
+truth: `schemas/finding.schema.json` (JSON Schema draft 2020-12, producer/input
+semantics). Non-TypeScript consumers can validate findings against it directly.
+Regenerate with `pnpm gen:schemas` after any Finding schema change;
+`scripts/finding-schema-artifact.test.ts` fails on drift.
 
 See `src/knowledge/findings-schema.ts` and `src/lib/types.ts`.
 

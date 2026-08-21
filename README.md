@@ -306,6 +306,7 @@ The server clamps configurable values to fixed hard limits.
 ## Documentation
 
 - [Client compatibility](docs/docs/clients.mdx)
+- [Troubleshooting](docs/docs/troubleshooting.mdx)
 - [Architecture](docs/docs/architecture.md)
 - [Tool design](docs/docs/tool-design.md)
 - [Agent workflow](docs/docs/agent-workflow.md)

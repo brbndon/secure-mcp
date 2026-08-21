@@ -4,6 +4,19 @@ Notable changes to secure-mcp are documented here. The project follows [Semantic
 
 ## Unreleased
 
+### Added
+
+- Compatibility and deprecation policy in the tool-design documentation: stable surfaces (tool names, required Finding fields, envelope keys, enums, annotations, pack ids), additive evolution rules, and what counts as a breaking change.
+- `schemas/finding.schema.json`, a standalone JSON Schema (draft 2020-12) for the Finding contract, generated from the Zod source of truth with `pnpm gen:schemas`. A drift test regenerates it so the committed artifact can never silently diverge from what `secure_mcp_produce_findings` enforces.
+- Server instructions advertised on every discovery response: a compact defensive-review workflow orientation pointing agents at the canonical tool sequence and guardrails.
+- Troubleshooting documentation covering unsupported-protocol-version rejections (`-32022`), allowlist wiring failures, restart-after-install, and runtime/platform requirements.
+
+### Changed
+
+- `normalizeProjectRoot` emits a stderr warning when a non-absolute `project_root` is resolved against the MCP server process cwd. Relative roots remain accepted; the warning recommends absolute paths because cwd differs per client launch context.
+- Completed the stable tool-name table in the tool-design documentation (it previously listed 8 of 12 tools) and documented that the PowerShell installer scripts are maintained for installer-test parity only; Linux and macOS remain the only supported platforms.
+- Contributing guide now requires pasting local verification output (`pnpm verify` or targeted tests) into pull request descriptions, since pull-request CI is intentionally not run.
+
 ### Changed
 
 - Added explicit five-minute public cache hints for the process-static MCP v2 discovery response and deterministic tool catalog. Raw stdio protocol coverage now pins final `2026-07-28` behavior: optional client identity, `resultType`, response-side server identity metadata, required cache fields, stable tool ordering, and JSON Schema 2020-12.

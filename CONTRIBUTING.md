@@ -75,6 +75,8 @@ pnpm release:check
 
 ## Pull requests
 
-A pull request should explain what changed, why it changed, security or compatibility impact, and how it was verified. Keep commits reviewable and respond to review feedback with follow-up commits when practical.
+This repository does not run automated CI on pull requests; releases are gated separately. Therefore every pull request **must** include the relevant local verification output — at minimum `pnpm verify` for code changes (or the targeted test command for focused changes), and `pnpm docs:build && pnpm docs:check && pnpm docs:validate` for documentation changes. Paste the passing output into the PR description.
+
+A pull request should also explain what changed, why it changed, security or compatibility impact, and how it was verified. Keep commits reviewable and respond to review feedback with follow-up commits when practical.
 
 By contributing, you agree that your contribution is licensed under the [Apache License 2.0](LICENSE).

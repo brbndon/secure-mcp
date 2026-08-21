@@ -551,7 +551,7 @@ test("installed server starts and negotiates strict MCP v2", { timeout: 60_000 }
 
 test("setup.sh bootstraps a fresh home end-to-end", {
   timeout: 300_000,
-  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks, and Windows uses setup.ps1 instead" : false,
+  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks (Windows is unsupported; setup.ps1 exists for installer-test parity only)" : false,
 }, () => {
   ensureBuilt();
   const tempDirs: string[] = [];
@@ -605,7 +605,7 @@ test("setup.ps1 bootstraps a fresh home end-to-end", {
 
 test("setup.sh prompts for the allowlist when unset and records piped input", {
   timeout: 300_000,
-  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks, and Windows uses setup.ps1 instead" : false,
+  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks (Windows is unsupported; setup.ps1 exists for installer-test parity only)" : false,
 }, () => {
   ensureBuilt();
   const tempDirs: string[] = [];
@@ -632,7 +632,7 @@ test("setup.sh prompts for the allowlist when unset and records piped input", {
 
 test("setup.sh fails closed on empty or whitespace-only prompt input", {
   timeout: 300_000,
-  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks, and Windows uses setup.ps1 instead" : false,
+  skip: isWindows ? "setup.sh is Unix-only by contract; Git Bash cannot create real symlinks (Windows is unsupported; setup.ps1 exists for installer-test parity only)" : false,
 }, () => {
   ensureBuilt();
   const tempDirs: string[] = [];

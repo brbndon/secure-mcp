@@ -1,0 +1,68 @@
+---
+title: Troubleshooting
+description: Diagnose secure-mcp 2.x startup and connection problems — protocol rejections, allowlist failures, runtime versions, and unsupported platforms.
+sidebar:
+  label: Troubleshooting
+  order: 11
+---
+
+## The client fails to connect with an unsupported-protocol-version error
+
+secure-mcp 2.x speaks MCP protocol revision `2026-07-28` **only** and opens
+with `server/discover`. A client that still opens a session with the legacy
+2025-era `initialize` handshake is answered with the SDK's
+unsupported-protocol-version error (`-32022`) and never served. There is no
+compatibility fallback by design.
+
+1. Check whether your client's installed version negotiates `2026-07-28`
+   (see [Client compatibility](/docs/clients) for per-client status).
+2. Update or switch clients; do not downgrade the server.
+3. Grok Build TUI currently requests `2025-11-25` and is unsupported until it
+   negotiates v2 — do not add it to client config.
+
+## Filesystem tools reject every `project_root`
+
+Filesystem access fails closed unless the process was started with a non-empty,
+existing `SECURE_MCP_ALLOWED_ROOTS`.
+
+1. Confirm the env var reaches the **server process**: it must be set in the
+   client's `mcpServers.env` block (or exported before the client launches the
+   subprocess), not only in your shell.
+2. Use `:` between multiple roots on Linux/macOS, and existing **absolute**
+   directories. Stale entries (deleted directories) stop granting access.
+3. Pass an absolute `project_root` that resolves under one of those roots;
+   symlink and path-traversal escapes are rejected.
+4. A warning like `SECURE_MCP_ALLOWED_ROOTS is not configured` at startup means
+   the process started without any roots — fix the env wiring above.
+5. Append another parent later with
+   `./scripts/install-agents.sh add-root /absolute/path`, then restart agent
+   sessions.
+
+## Nothing appears to happen after installing
+
+- Restart agent sessions after running the installer so clients reload skills
+  and MCP configuration.
+- The server logs to **stderr only**; stdout is reserved for MCP JSON-RPC. A
+  quiet terminal while connected is expected.
+- Verify an install with `./scripts/install-agents.sh check`, or run
+  `pnpm smoke` from a checkout to exercise the full tool sequence against the
+  bundled fixtures.
+
+## Runtime and platform requirements
+
+| Requirement | Detail |
+| --- | --- |
+| Node.js | 20 or newer (`node --version`) |
+| Platform | Linux or macOS. Windows is not supported; the PowerShell installer scripts exist for installer-test parity only. |
+| Allowlist | `SECURE_MCP_ALLOWED_ROOTS` must name at least one existing absolute directory |
+| Client | Must negotiate MCP protocol revision `2026-07-28` |
+
+If the server exits immediately, run it directly to see the stderr diagnostic:
+
+```bash
+SECURE_MCP_ALLOWED_ROOTS=/absolute/path/to/repositories node dist/index.js
+```
+
+Still stuck? [Open an issue](https://github.com/brbndon/secure-mcp/issues)
+with your client, OS, Node version, and stderr output — never live
+credentials or private source.

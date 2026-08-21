@@ -36,8 +36,10 @@ Install the master skill and MCP client wiring for pi / Cursor / Codex:
 ./scripts/install-agents.sh uninstall
 ```
 
-Windows uses the equivalent `scripts/install-agents.ps1`. The installer never
-overwrites conflicting non-owned entries or skills.
+secure-mcp supports Linux and macOS only; Windows is not a supported platform.
+The PowerShell scripts (`install-agents.ps1`, `setup.ps1`) are maintained for
+installer-test parity only and are not a supported install path. The installer
+never overwrites conflicting non-owned entries or skills.
 
 ## Code map
 
