@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   looksLikeExpoOrReactNativeApp,
+  normalizeProjectRoot,
   profileProject,
   readProjectFile,
   type ExpoSignalInput,
@@ -274,5 +275,60 @@ describe("profileProject fixtures", () => {
       await fs.rm(root, { recursive: true, force: true });
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("normalizeProjectRoot cwd-relative warning", () => {
+  function captureStderr(): { errors: string[]; restore: () => void } {
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    };
+    return {
+      errors,
+      restore: () => {
+        console.error = original;
+      },
+    };
+  }
+
+  it("warns on stderr when project_root resolves against the process cwd", async () => {
+    const relativeFixtures = path.relative(process.cwd(), fixturesDir);
+    const capture = captureStderr();
+    try {
+      const resolved = await normalizeProjectRoot(relativeFixtures);
+      assert.equal(resolved, fixturesDir);
+    } finally {
+      capture.restore();
+    }
+    assert.equal(capture.errors.length, 1);
+    assert.match(capture.errors[0] ?? "", /not absolute/);
+    assert.match(capture.errors[0] ?? "", /process cwd/);
+    assert.match(capture.errors[0] ?? "", /absolute path/);
+  });
+
+  it("does not warn for absolute paths", async () => {
+    const capture = captureStderr();
+    try {
+      const resolved = await normalizeProjectRoot(fixturesDir);
+      assert.equal(resolved, fixturesDir);
+    } finally {
+      capture.restore();
+    }
+    assert.deepEqual(capture.errors, []);
+  });
+
+  it("still rejects missing directories after warning", async () => {
+    const capture = captureStderr();
+    try {
+      await assert.rejects(
+        () => normalizeProjectRoot("fixtures/definitely-missing-dir-xyz"),
+        /does not exist/,
+      );
+    } finally {
+      capture.restore();
+    }
+    assert.equal(capture.errors.length, 1);
   });
 });

@@ -227,7 +227,18 @@ export async function normalizeProjectRoot(projectRoot: string): Promise<string>
       'Missing project_root. Pass an absolute path (or path relative to the MCP process cwd).',
     );
   }
-  const absolute = path.resolve(projectRoot.trim());
+  const trimmedInput = projectRoot.trim();
+  const absolute = path.resolve(trimmedInput);
+  if (!path.isAbsolute(trimmedInput)) {
+    // A relative project_root resolves against the MCP server process cwd,
+    // which differs per client launch context. Diagnostics only: the
+    // documented relative form stays accepted, but callers are steered to
+    // absolute paths so results do not depend on how the client launched
+    // this server. Redacted because caller-controlled text reaches stderr.
+    console.error(
+      `[secure-mcp] project_root "${redactedEvidence(trimmedInput)}" is not absolute and was resolved against the process cwd (${process.cwd()}). Pass an absolute path so behavior does not depend on how the client launched this server.`,
+    );
+  }
   let handle: FileHandle | undefined;
   try {
     const initialRealPath = await fs.realpath(absolute);
