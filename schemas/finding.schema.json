@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Stable finding id within the audit session (e.g. AUTH-001, F-003)"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Short name of the potential weakness to remediate"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "Evidence-oriented description of what was observed; no exploit or attack steps"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ],
+      "description": "Classification: remediation urgency (critical|high|medium|low|info)"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "description": "Classification: strength of evidence for this weakness (high|medium|low)"
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Classification family, e.g. authentication, authorization, injection-risk, secrets, configuration"
+    },
+    "stack": {
+      "description": "Optional stack focus for filtering",
+      "type": "string",
+      "enum": [
+        "common",
+        "typescript",
+        "nextjs",
+        "swift",
+        "expo"
+      ]
+    },
+    "file": {
+      "description": "Path relative to project root when known",
+      "type": "string",
+      "maxLength": 500
+    },
+    "line": {
+      "description": "1-based line when known",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "Observable evidence: code snippet, config key, or path supporting the finding"
+    },
+    "impact_if_unremediated": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "High-level impact on confidentiality, integrity, or availability if not fixed — not exploit instructions"
+    },
+    "remediation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "Concrete steps the development team should take to harden the code"
+    },
+    "residual_risk": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "Risk that may remain after the recommended remediation"
+    },
+    "verification_suggestion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "How to verify the fix (unit/integration tests, code review checklist, config audit)"
+    },
+    "cwe": {
+      "description": "Optional CWE id, e.g. \"CWE-89\"",
+      "type": "string",
+      "maxLength": 200
+    },
+    "owasp": {
+      "description": "Optional OWASP category label",
+      "type": "string",
+      "maxLength": 200
+    },
+    "tags": {
+      "description": "Free-form tags for filtering",
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "rule_family": {
+      "description": "Stable detector family, independent of report ordering",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "root_control": {
+      "description": "Stable control/rule identity that produced the candidate",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "instance_id": {
+      "description": "Stable identity for the same source instance across audit runs",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "disposition": {
+      "description": "Candidate disposition: reportable or deferred for confirmed open work; fixed after revalidation proves remediation; accepted_risk for a conscious residual; needs_review/suppressed/not_applicable otherwise",
+      "type": "string",
+      "enum": [
+        "reportable",
+        "needs_review",
+        "suppressed",
+        "accepted_risk",
+        "not_applicable",
+        "deferred",
+        "fixed"
+      ]
+    },
+    "disposition_reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "source": {
+      "description": "Evidence-backed input/source context",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "control": {
+      "description": "Expected or observed security control",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "sink": {
+      "description": "Evidence-backed sink or boundary",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "counterevidence": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "proof_gap": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "validation": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "validation_status": {
+      "description": "Validation label: static_only when code review alone confirms and verifies the finding; needs_runtime when owner-authorized runtime/configuration verification (manual QA or existing DAST) is still required. Defensive only; never exploit steps.",
+      "type": "string",
+      "enum": [
+        "static_only",
+        "needs_runtime"
+      ]
+    },
+    "evidence_hash": {
+      "description": "Stable hash of the finding evidence used to decide whether a prior closed disposition still applies",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "description",
+    "severity",
+    "confidence",
+    "category",
+    "evidence",
+    "impact_if_unremediated",
+    "remediation",
+    "residual_risk",
+    "verification_suggestion"
+  ],
+  "additionalProperties": false
+}
