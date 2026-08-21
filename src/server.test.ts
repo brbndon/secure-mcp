@@ -5,10 +5,31 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/client";
-import { createServer } from "./server.js";
+import { createServer, SERVER_INSTRUCTIONS } from "./server.js";
 import { shouldRunNextjsInjectionDetectors } from "./tools/analyzeInjectionRisks.js";
 
 describe("server configuration and stack scoping", () => {
+  it("advertises defensive-review instructions on discovery", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer();
+    const client = new Client({ name: "secure-mcp-test-client", version: "test" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      assert.equal(client.getInstructions(), SERVER_INSTRUCTIONS);
+      // The instructions orient agents toward the multi-phase workflow.
+      assert.match(SERVER_INSTRUCTIONS, /secure_mcp_list_project_structure/);
+      assert.match(SERVER_INSTRUCTIONS, /secure_mcp_analyze_architecture/);
+      assert.match(SERVER_INSTRUCTIONS, /secure_mcp_get_knowledge_pack/);
+      assert.match(SERVER_INSTRUCTIONS, /secure_mcp_produce_findings/);
+      assert.match(SERVER_INSTRUCTIONS, /defensive/i);
+      assert.ok(SERVER_INSTRUCTIONS.length <= 1_200);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("passes configured scan limits through the MCP tool boundary", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "secure-mcp-config-"));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
